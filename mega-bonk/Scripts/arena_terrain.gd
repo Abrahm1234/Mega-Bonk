@@ -31,6 +31,7 @@ class_name BlockyTerrain
 @export var ring_width: float = 28.0
 @export var bowl_drop: float = 120.0
 @export var bowl_start: float = 140.0
+@export var debug_disable_culling: bool = false
 
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
@@ -44,6 +45,15 @@ func _ready() -> void:
 func generate() -> void:
 	_generate_heights_blocky()
 	_build_blocky_mesh_and_collision()
+	_apply_debug_material()
+
+func _apply_debug_material() -> void:
+	if debug_disable_culling:
+		var mat := StandardMaterial3D.new()
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mesh_instance.material_override = mat
+	else:
+		mesh_instance.material_override = null
 
 func _generate_heights_blocky() -> void:
 	var noise: FastNoiseLite = FastNoiseLite.new()
