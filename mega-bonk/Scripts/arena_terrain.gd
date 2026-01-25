@@ -52,6 +52,7 @@ class_name BlockyTerrain
 @export var auto_ramp_grade_per_cell: float = 1.0   # rise per grid cell along ramp (meters)
 @export var auto_ramp_min_peak_height: float = 12.0 # only build ramps for hills above this
 @export var auto_ramp_debug: bool = false           # optional: prints some info
+@export var enable_step_wedges: bool = true
 
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
@@ -163,7 +164,7 @@ func _generate_heights_arenas() -> void:
 			if flat_r_cells > 0.0:
 				var t: float = clampf(d / flat_r_cells, 0.0, 1.0)
 				var flatten: float = lerpf(center_flat_strength, 0.0, t)
-				h = lerpf(h, 0.0, flatten)
+				h = lerpf(h, floor_y, flatten)
 
 			var nxw: float = absf(dx) / maxf(1.0, cx_cells)
 			var nzw: float = absf(dz) / maxf(1.0, cz_cells)
@@ -177,7 +178,9 @@ func _generate_heights_arenas() -> void:
 	for _p in range(step_clamp_passes):
 		_apply_step_limit(max_step_per_cell)
 
-	_stamp_auto_ramps()
+	_build_step_wedges()
+	if not enable_step_wedges:
+		_stamp_auto_ramps()
 
 func _apply_step_limit(max_step: float) -> void:
 	if max_step <= 0.0:
@@ -391,6 +394,31 @@ func _reconstruct_path(came_from: Dictionary, current: Vector2i) -> Array[Vector
 		ck = current.y * size_x + current.x
 	path.reverse()
 	return path
+
+func _build_step_wedges() -> void:
+	if not enable_step_wedges:
+		return
+
+	for i in range(size_x * size_z):
+		ramp_dir[i] = RAMP_NONE
+
+	var step: float = height_step
+
+	for z in range(size_z - 1):
+		for x in range(size_x - 1):
+			var h00: float = _h(x, z)
+
+			var hx: float = _h(x + 1, z)
+			if is_equal_approx(hx - h00, step):
+				_set_rd(x, z, RAMP_PX)
+			elif is_equal_approx(h00 - hx, step):
+				_set_rd(x + 1, z, RAMP_NX)
+
+			var hz: float = _h(x, z + 1)
+			if is_equal_approx(hz - h00, step):
+				_set_rd(x, z, RAMP_PZ)
+			elif is_equal_approx(h00 - hz, step):
+				_set_rd(x, z + 1, RAMP_NZ)
 
 func _stamp_ramp_along_path(path: Array[Vector2i]) -> void:
 	var width: int = max(1, auto_ramp_width_cells)
@@ -607,6 +635,15 @@ func _edge_is_ramp_z(x: int, z: int, south: bool) -> bool:
 		return false
 	return _rd(x, z) == RAMP_NZ or _rd(x, z - 1) == RAMP_PZ
 
+func _add_tri_double_sided(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+	st.set_uv(ua); st.add_vertex(a)
+	st.set_uv(ub); st.add_vertex(b)
+	st.set_uv(uc); st.add_vertex(c)
+	st.set_uv(uc); st.add_vertex(c)
+	st.set_uv(ub); st.add_vertex(b)
+	st.set_uv(ua); st.add_vertex(a)
+
 func _pos(x: int, z: int, y: float) -> Vector3:
 	return Vector3(_ox + float(x) * cell_size, y, _oz + float(z) * cell_size)
 
@@ -660,6 +697,28 @@ func _build_blocky_mesh_and_collision() -> void:
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top
 			)
+
+			if rd != RAMP_NONE:
+				var A: Vector3 = _pos(x,     z,     a_y)
+				var B: Vector3 = _pos(x + 1, z,     b_y)
+				var C: Vector3 = _pos(x + 1, z + 1, c_y)
+				var D: Vector3 = _pos(x,     z + 1, d_y)
+				var uv_a: Vector2 = Vector2(0, 0)
+				var uv_b: Vector2 = Vector2(1, 0)
+				var uv_c: Vector2 = Vector2(1, 1)
+
+				if rd == RAMP_PX:
+					_add_tri_double_sided(st, D, C, A, uv_a, uv_b, uv_c)
+					_add_tri_double_sided(st, A, B, D, uv_a, uv_b, uv_c)
+				elif rd == RAMP_NX:
+					_add_tri_double_sided(st, C, D, B, uv_a, uv_b, uv_c)
+					_add_tri_double_sided(st, B, A, C, uv_a, uv_b, uv_c)
+				elif rd == RAMP_PZ:
+					_add_tri_double_sided(st, B, C, A, uv_a, uv_b, uv_c)
+					_add_tri_double_sided(st, A, D, B, uv_a, uv_b, uv_c)
+				elif rd == RAMP_NZ:
+					_add_tri_double_sided(st, C, B, D, uv_a, uv_b, uv_c)
+					_add_tri_double_sided(st, D, A, C, uv_a, uv_b, uv_c)
 
 			var hn: float = _h(x, z - 1) if z > 0 else h00
 			var hs: float = _h(x, z + 1)
