@@ -25,6 +25,22 @@ class_name BlockyTerrain
 @export var ramp_run_m: float = 40.0            # typical ramp run (controls steepness)
 @export var blend_edge_m: float = 10.0          # soft blend between arenas
 
+# Low-res arena noise (macro shapes)
+@export var arena_lr_cells: int = 32            # low-res grid size (e.g. 16, 24, 32, 48)
+@export var arena_noise_seed: int = 1234
+@export var arena_noise_frequency: float = 0.08 # frequency in LOW-RES space (0.03..0.15)
+@export var arena_noise_octaves: int = 3
+@export var arena_noise_lacunarity: float = 2.0
+@export var arena_noise_gain: float = 0.5
+@export var arena_height_scale: float = 26.0    # meters of vertical variation (macro)
+
+# Arena shaping / readability
+@export var center_flat_radius_m: float = 55.0  # central flat-ish area
+@export var center_flat_strength: float = 0.75  # 0..1, stronger = flatter center
+@export var outer_ramp_strength: float = 0.35   # 0..1, pushes height up toward walls (creates run-up ramps)
+@export var max_step_per_cell: float = 4.0      # clamp adjacent height deltas (voxel slope control)
+@export var step_clamp_passes: int = 2
+
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
@@ -58,37 +74,101 @@ func generate() -> void:
 func _generate_heights_arenas() -> void:
 	heights = PackedFloat32Array()
 	heights.resize(size_x * size_z)
+	var lr: int = max(2, arena_lr_cells)
+	var lr_grid: PackedFloat32Array = PackedFloat32Array()
+	lr_grid.resize(lr * lr)
 
-	var floor_y: float = minf(outer_floor_height, min_height)
-	for i in range(size_x * size_z):
-		heights[i] = floor_y
+	var noise: FastNoiseLite = FastNoiseLite.new()
+	noise.seed = arena_noise_seed
+	noise.frequency = arena_noise_frequency
+	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	noise.fractal_octaves = arena_noise_octaves
+	noise.fractal_lacunarity = arena_noise_lacunarity
+	noise.fractal_gain = arena_noise_gain
 
-	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-	rng.seed = arena_seed
+	for gz in range(lr):
+		for gx in range(lr):
+			var n: float = noise.get_noise_2d(float(gx), float(gz))
+			n = signf(n) * pow(absf(n), 1.35)
+			lr_grid[gz * lr + gx] = n
 
-	var stamps: Array[ArenaStamp] = _create_arena_stamps(rng)
+	var cx_cells: float = (float(size_x) - 1.0) * 0.5
+	var cz_cells: float = (float(size_z) - 1.0) * 0.5
+	var flat_r_cells: float = maxf(0.0, center_flat_radius_m / cell_size)
 
-	# For each cell: combine stamps with soft edge blending.
 	for z in range(size_z):
 		for x in range(size_x):
-			var h: float = floor_y
-			var wsum: float = 0.0
+			var u: float = float(x) / maxf(1.0, float(size_x - 1)) * float(lr - 1)
+			var v: float = float(z) / maxf(1.0, float(size_z - 1)) * float(lr - 1)
 
-			for s: ArenaStamp in stamps:
-				var w: float = _stamp_weight(s, x, z)
-				if w <= 0.0:
-					continue
+			var x0: int = int(floor(u))
+			var z0: int = int(floor(v))
+			var x1: int = min(x0 + 1, lr - 1)
+			var z1: int = min(z0 + 1, lr - 1)
 
-				var sh: float = _stamp_height(s, x, z)
-				h += sh * w
-				wsum += w
+			var fu: float = u - float(x0)
+			var fv: float = v - float(z0)
 
-			if wsum > 0.0:
-				h /= wsum
+			var n00: float = lr_grid[z0 * lr + x0]
+			var n10: float = lr_grid[z0 * lr + x1]
+			var n01: float = lr_grid[z1 * lr + x0]
+			var n11: float = lr_grid[z1 * lr + x1]
+
+			var nx0: float = lerpf(n00, n10, fu)
+			var nx1: float = lerpf(n01, n11, fu)
+			var nxy: float = lerpf(nx0, nx1, fv)
+
+			var h: float = nxy * arena_height_scale
+
+			var dx: float = float(x) - cx_cells
+			var dz: float = float(z) - cz_cells
+			var d: float = sqrt(dx * dx + dz * dz)
+
+			if flat_r_cells > 0.0:
+				var t: float = clampf(d / flat_r_cells, 0.0, 1.0)
+				var flatten: float = lerpf(center_flat_strength, 0.0, t)
+				h = lerpf(h, 0.0, flatten)
+
+			var nxw: float = absf(dx) / maxf(1.0, cx_cells)
+			var nzw: float = absf(dz) / maxf(1.0, cz_cells)
+			var edge_t: float = clampf(maxf(nxw, nzw), 0.0, 1.0)
+			h += edge_t * edge_t * arena_height_scale * outer_ramp_strength
 
 			h = maxf(h, min_height)
 			h = _quantize(h, height_step)
 			heights[z * size_x + x] = h
+
+	for _p in range(step_clamp_passes):
+		_apply_step_limit(max_step_per_cell)
+
+func _apply_step_limit(max_step: float) -> void:
+	if max_step <= 0.0:
+		return
+
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx: int = z * size_x + x
+			var h0: float = heights[idx]
+
+			if x + 1 < size_x:
+				var j: int = z * size_x + (x + 1)
+				var h1: float = heights[j]
+				var d: float = h0 - h1
+				if d > max_step:
+					h0 = h1 + max_step
+				elif d < -max_step:
+					h0 = h1 - max_step
+
+			if z + 1 < size_z:
+				var j2: int = (z + 1) * size_x + x
+				var h2: float = heights[j2]
+				var d2: float = h0 - h2
+				if d2 > max_step:
+					h0 = h2 + max_step
+				elif d2 < -max_step:
+					h0 = h2 - max_step
+
+			heights[idx] = _quantize(h0, height_step)
 
 func _create_arena_stamps(rng: RandomNumberGenerator) -> Array[ArenaStamp]:
 	var stamps: Array[ArenaStamp] = []
