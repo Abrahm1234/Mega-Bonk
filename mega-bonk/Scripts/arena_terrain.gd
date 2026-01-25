@@ -217,7 +217,7 @@ func _build_access_ramps() -> void:
 		if candidates.is_empty():
 			break
 
-		candidates.sort_custom(self, "_sort_access_candidates")
+		candidates.sort_custom(Callable(self, "_sort_access_candidates"))
 		var chosen: Array = []
 		var min_dist: int = max(2, access_ramp_width_cells * 2)
 		for candidate in candidates:
@@ -383,7 +383,7 @@ func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -
 	var length: int = steps_needed * run_per_step
 	var dir_x: int = end_x - start_x
 	var dir_z: int = end_z - start_z
-	var sign: float = 1.0 if diff >= 0.0 else -1.0
+	var dir_sign: float = 1.0 if diff >= 0.0 else -1.0
 
 	var width: int = max(1, access_ramp_width_cells)
 	var half: int = width / 2
@@ -396,7 +396,7 @@ func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -
 
 	for i in range(length + 1):
 		var step_index: int = int(floor(float(i) / float(run_per_step)))
-		var target_height: float = start_height + sign * step * float(step_index)
+		var target_height: float = start_height + dir_sign * step * float(step_index)
 		for w in range(-half, width - half):
 			var rx: int = start_x + dir_x * i + perp_x * w
 			var rz: int = start_z + dir_z * i + perp_z * w
