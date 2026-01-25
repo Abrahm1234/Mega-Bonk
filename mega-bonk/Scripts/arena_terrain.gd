@@ -3,18 +3,20 @@ class_name BlockyTerrain
 
 @export var size_x: int = 256
 @export var size_z: int = 256
-@export var cell_size: float = 2.0
+@export var cell_size: float = 4.0
 
 # Height controls
-@export var height_scale: float = 80.0          # overall mountain height
-@export var height_step: float = 2.0            # TERRACE size (blockiness)
+@export var height_scale: float = 140.0         # overall mountain height
+@export var height_step: float = 6.0            # TERRACE size (blockiness)
 @export var min_height: float = -10.0           # optional bowl / valleys
-@export var smooth_passes: int = 3
-@export var smooth_strength: float = 0.55
+@export var smooth_passes: int = 2
+@export var smooth_strength: float = 0.45
+@export var plateau_passes: int = 2
+@export var plateau_min_neighbors: int = 5
 
 # Noise controls
 @export var noise_seed: int = 1234
-@export var noise_frequency: float = 0.005
+@export var noise_frequency: float = 0.002
 @export var noise_octaves: int = 5
 @export var noise_lacunarity: float = 2.0
 @export var noise_gain: float = 0.5
@@ -22,7 +24,12 @@ class_name BlockyTerrain
 # Arena shaping (optional)
 @export var center_flat_radius: float = 60.0    # flat-ish play area in center (meters)
 @export var center_flat_strength: float = 0.75  # 0..1
-@export var bowl_strength: float = 1.0          # pushes edges down
+@export var arena_radius: float = 220.0
+@export var center_raise: float = 30.0
+@export var ring_height: float = 45.0
+@export var ring_width: float = 28.0
+@export var bowl_drop: float = 120.0
+@export var bowl_start: float = 140.0
 
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
@@ -59,23 +66,35 @@ func _generate_heights_blocky() -> void:
 
 			# Base height from noise
 			var h_base: float = noise.get_noise_2d(nx, nz) # ~[-1..1]
-			var h_detail: float = noise.get_noise_2d(nx * 3.0, nz * 3.0) * 0.25
+			var h_detail: float = noise.get_noise_2d(nx * 4.0, nz * 4.0) * 0.18
 			var h: float = h_base + h_detail
 			h = _shape_height(h) * height_scale
+
+			var dxm: float = (nx - cx) * cell_size
+			var dzm: float = (nz - cz) * cell_size
+			var d: float = sqrt(dxm * dxm + dzm * dzm)
 
 			# Optional: flatten center a bit (combat readability)
 			if flat_r_cells > 0.0:
 				var dx: float = nx - cx
 				var dz: float = nz - cz
-				var d: float = sqrt(dx * dx + dz * dz)
-				var t: float = clampf(d / flat_r_cells, 0.0, 1.0)
+				var d_cells: float = sqrt(dx * dx + dz * dz)
+				var t: float = clampf(d_cells / flat_r_cells, 0.0, 1.0)
 				var blend: float = 1.0 - (1.0 - t) * center_flat_strength
 				h *= blend
 
-				# Optional bowl: push edges down so you stay “in the world”
-				if bowl_strength > 0.0 and d > flat_r_cells:
-					var out: float = (d - flat_r_cells) / maxf(1.0, flat_r_cells)
-					h -= (out * out) * height_scale * 0.6 * bowl_strength
+			if d < center_flat_radius * 0.6:
+				h = maxf(h, center_raise)
+
+			if ring_height > 0.0 and ring_width > 0.0:
+				var ring_dist: float = absf(d - arena_radius)
+				if ring_dist < ring_width:
+					var ring_t: float = 1.0 - (ring_dist / ring_width)
+					h += ring_height * (ring_t * ring_t)
+
+			if bowl_drop > 0.0 and d > bowl_start:
+				var out: float = (d - bowl_start) / maxf(1.0, arena_radius - bowl_start)
+				h -= (out * out) * bowl_drop
 
 			# Clamp before smoothing + terracing
 			h = maxf(h, min_height)
@@ -84,6 +103,9 @@ func _generate_heights_blocky() -> void:
 
 	if smooth_passes > 0:
 		_smooth_heights(smooth_passes, smooth_strength)
+
+	for _i in range(plateau_passes):
+		_enforce_plateaus(plateau_min_neighbors)
 
 	for i in range(heights.size()):
 		heights[i] = _quantize(heights[i], height_step)
@@ -110,6 +132,30 @@ func _smooth_heights(passes: int, strength: float) -> void:
 
 				var avg := (n + s + w + e) * 0.25
 				heights[i] = lerpf(h, avg, strength)
+
+func _enforce_plateaus(min_neighbors: int) -> void:
+	var clamped_min: int = clampi(min_neighbors, 0, 9)
+	var copy := heights.duplicate()
+	for z in range(1, size_z - 1):
+		for x in range(1, size_x - 1):
+			var i := z * size_x + x
+			var h := copy[i]
+
+			var same := 0
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					var nh := copy[(z + dz) * size_x + (x + dx)]
+					if absf(nh - h) <= height_step * 0.5:
+						same += 1
+
+			if same < clamped_min:
+				var avg := (
+					copy[(z - 1) * size_x + x] +
+					copy[(z + 1) * size_x + x] +
+					copy[z * size_x + (x - 1)] +
+					copy[z * size_x + (x + 1)]
+				) * 0.25
+				heights[i] = lerpf(h, avg, 0.75)
 
 func _quantize(h: float, step: float) -> float:
 	if step <= 0.0:
