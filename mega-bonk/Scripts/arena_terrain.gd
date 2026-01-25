@@ -93,6 +93,9 @@ func generate() -> void:
 func _generate_heights_arenas() -> void:
 	heights = PackedFloat32Array()
 	heights.resize(size_x * size_z)
+	var floor_y: float = minf(outer_floor_height, min_height)
+	for i in range(size_x * size_z):
+		heights[i] = floor_y
 	ramp_dir = PackedInt32Array()
 	ramp_dir.resize(size_x * size_z)
 	for i in range(size_x * size_z):
@@ -118,12 +121,12 @@ func _generate_heights_arenas() -> void:
 	var cx_cells: float = (float(size_x) - 1.0) * 0.5
 	var cz_cells: float = (float(size_z) - 1.0) * 0.5
 	var flat_r_cells: float = maxf(0.0, center_flat_radius_m / cell_size)
+	var block_cells: int = max(1, int(round(macro_block_size_m / cell_size)))
 
 	for z in range(size_z):
 		for x in range(size_x):
-			var block_cells: int = max(1, int(round(macro_block_size_m / cell_size)))
-			var sx: int = (x / block_cells) * block_cells
-			var sz: int = (z / block_cells) * block_cells
+			var sx: int = int(floor(float(x) / float(block_cells))) * block_cells
+			var sz: int = int(floor(float(z) / float(block_cells))) * block_cells
 
 			var u: float = float(sx) / maxf(1.0, float(size_x - 1)) * float(lr - 1)
 			var v: float = float(sz) / maxf(1.0, float(size_z - 1)) * float(lr - 1)
@@ -151,7 +154,7 @@ func _generate_heights_arenas() -> void:
 				var nx1: float = lerpf(n01, n11, fu)
 				nxy = lerpf(nx0, nx1, fv)
 
-			var h: float = nxy * arena_height_scale
+			var h: float = floor_y + (nxy * arena_height_scale)
 
 			var dx: float = float(x) - cx_cells
 			var dz: float = float(z) - cz_cells
