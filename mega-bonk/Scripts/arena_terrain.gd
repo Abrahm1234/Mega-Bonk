@@ -45,6 +45,14 @@ class_name BlockyTerrain
 @export var macro_block_size_m: float = 8.0   # bigger = larger blocks/plateaus (try 8, 12, 16)
 @export var use_nearest_upsample: bool = true # true = chunky, false = smoother bilinear
 
+# Walkability + auto-ramps
+@export var walk_max_step: float = 2.0              # max vertical delta per move (meters)
+@export var auto_ramp_count: int = 6                # how many ramps to stamp
+@export var auto_ramp_width_cells: int = 4          # ramp half-width in cells (4 => ~8m with cell_size=2)
+@export var auto_ramp_grade_per_cell: float = 1.0   # rise per grid cell along ramp (meters)
+@export var auto_ramp_min_peak_height: float = 12.0 # only build ramps for hills above this
+@export var auto_ramp_debug: bool = false           # optional: prints some info
+
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
@@ -155,6 +163,8 @@ func _generate_heights_arenas() -> void:
 	for _p in range(step_clamp_passes):
 		_apply_step_limit(max_step_per_cell)
 
+	_stamp_auto_ramps()
+
 func _apply_step_limit(max_step: float) -> void:
 	if max_step <= 0.0:
 		return
@@ -183,6 +193,227 @@ func _apply_step_limit(max_step: float) -> void:
 					h0 = h2 - max_step
 
 			heights[idx] = _quantize(h0, height_step)
+
+func _stamp_auto_ramps() -> void:
+	if auto_ramp_count <= 0:
+		return
+
+	var peaks: Array[Vector2i] = _find_peak_candidates(auto_ramp_count * 6)
+	if peaks.is_empty():
+		return
+
+	var starts: Array[Vector2i] = _collect_border_starts()
+	if starts.is_empty():
+		return
+
+	var built: int = 0
+	for p: Vector2i in peaks:
+		if built >= auto_ramp_count:
+			break
+
+		var peak_h: float = _h(p.x, p.y)
+		if peak_h < auto_ramp_min_peak_height:
+			continue
+
+		var start: Vector2i = _best_start_for_peak(starts, p)
+		var path: Array[Vector2i] = _astar_walkable_path(start, p, walk_max_step)
+
+		if path.size() < 2:
+			continue
+
+		_stamp_ramp_along_path(path)
+		built += 1
+
+		if auto_ramp_debug:
+			print("Ramp ", built, " path len=", path.size(), " peak_h=", peak_h)
+
+func _find_peak_candidates(max_count: int) -> Array[Vector2i]:
+	var candidates: Array[Vector2i] = []
+	var stride: int = max(2, int(round(6.0 / cell_size)))
+	for z in range(stride, size_z - stride, stride):
+		for x in range(stride, size_x - stride, stride):
+			var h0: float = _h(x, z)
+			if h0 < auto_ramp_min_peak_height:
+				continue
+
+			var higher: bool = true
+			for dz in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dz == 0:
+						continue
+					var hx: float = _h(x + dx * stride, z + dz * stride)
+					if hx > h0:
+						higher = false
+						break
+				if not higher:
+					break
+			if higher:
+				candidates.append(Vector2i(x, z))
+
+	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return _h(a.x, a.y) > _h(b.x, b.y)
+	)
+
+	var picked: Array[Vector2i] = []
+	var min_sep_cells: int = max(6, int(round(30.0 / cell_size)))
+	for c: Vector2i in candidates:
+		var ok: bool = true
+		for p: Vector2i in picked:
+			if abs(c.x - p.x) + abs(c.y - p.y) < min_sep_cells:
+				ok = false
+				break
+		if ok:
+			picked.append(c)
+			if picked.size() >= max_count:
+				break
+
+	return picked
+
+func _collect_border_starts() -> Array[Vector2i]:
+	var starts: Array[Vector2i] = []
+	var ring: int = max(2, int(round(10.0 / cell_size)))
+	for x in range(ring, size_x - ring):
+		starts.append(Vector2i(x, ring))
+		starts.append(Vector2i(x, size_z - 1 - ring))
+	for z in range(ring, size_z - ring):
+		starts.append(Vector2i(ring, z))
+		starts.append(Vector2i(size_x - 1 - ring, z))
+
+	starts.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return _h(a.x, a.y) < _h(b.x, b.y)
+	)
+	var keep: int = max(16, starts.size() / 2)
+	starts.resize(keep)
+	return starts
+
+func _best_start_for_peak(starts: Array[Vector2i], peak: Vector2i) -> Vector2i:
+	var best: Vector2i = starts[0]
+	var best_d: int = 1 << 30
+	for s: Vector2i in starts:
+		var d: int = abs(s.x - peak.x) + abs(s.y - peak.y)
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+func _astar_walkable_path(start: Vector2i, goal: Vector2i, max_step: float) -> Array[Vector2i]:
+	var open: Array[Vector2i] = []
+	open.append(start)
+
+	var came_from: Dictionary = {}
+	var g: Dictionary = {}
+	var f: Dictionary = {}
+
+	var start_key: int = start.y * size_x + start.x
+	g[start_key] = 0.0
+	f[start_key] = float(_manhattan(start, goal))
+
+	var in_open: Dictionary = {}
+	in_open[start_key] = true
+
+	while not open.is_empty():
+		var best_i: int = 0
+		var best_f: float = 1e30
+		for i in range(open.size()):
+			var v: Vector2i = open[i]
+			var k: int = v.y * size_x + v.x
+			var fv: float = f.get(k, 1e30)
+			if fv < best_f:
+				best_f = fv
+				best_i = i
+
+		var current: Vector2i = open[best_i]
+		open.remove_at(best_i)
+		var ck: int = current.y * size_x + current.x
+		in_open.erase(ck)
+
+		if current == goal:
+			return _reconstruct_path(came_from, current)
+
+		var ch: float = _h(current.x, current.y)
+
+		for n in _neighbors4(current):
+			if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
+				continue
+
+			var nh: float = _h(n.x, n.y)
+			if absf(nh - ch) > max_step:
+				continue
+
+			var nk: int = n.y * size_x + n.x
+
+			var slope_pen: float = absf(nh - ch) * 2.0
+			var tentative: float = float(g.get(ck, 1e30)) + 1.0 + slope_pen
+
+			if tentative < float(g.get(nk, 1e30)):
+				came_from[nk] = current
+				g[nk] = tentative
+				f[nk] = tentative + float(_manhattan(n, goal))
+
+				if not in_open.has(nk):
+					open.append(n)
+					in_open[nk] = true
+
+	return []
+
+func _neighbors4(p: Vector2i) -> Array[Vector2i]:
+	return [
+		Vector2i(p.x + 1, p.y),
+		Vector2i(p.x - 1, p.y),
+		Vector2i(p.x, p.y + 1),
+		Vector2i(p.x, p.y - 1),
+	]
+
+func _manhattan(a: Vector2i, b: Vector2i) -> int:
+	return abs(a.x - b.x) + abs(a.y - b.y)
+
+func _reconstruct_path(came_from: Dictionary, current: Vector2i) -> Array[Vector2i]:
+	var path: Array[Vector2i] = []
+	path.append(current)
+	var ck: int = current.y * size_x + current.x
+	while came_from.has(ck):
+		current = came_from[ck]
+		path.append(current)
+		ck = current.y * size_x + current.x
+	path.reverse()
+	return path
+
+func _stamp_ramp_along_path(path: Array[Vector2i]) -> void:
+	var width: int = max(1, auto_ramp_width_cells)
+	var grade: float = maxf(0.1, auto_ramp_grade_per_cell)
+
+	var start: Vector2i = path[0]
+	var target_h: float = _h(start.x, start.y)
+
+	for i in range(path.size()):
+		var p: Vector2i = path[i]
+
+		if i > 0:
+			target_h += grade
+
+		var cur_h: float = _h(p.x, p.y)
+		var desired: float = minf(cur_h, target_h)
+		desired = _quantize(desired, height_step)
+
+		for dz in range(-width, width + 1):
+			var zz: int = p.y + dz
+			if zz < 0 or zz >= size_z:
+				continue
+			for dx in range(-width, width + 1):
+				var xx: int = p.x + dx
+				if xx < 0 or xx >= size_x:
+					continue
+
+				var dist: float = float(abs(dx) + abs(dz))
+				var wgt: float = clampf(1.0 - (dist / float(width + 1)), 0.0, 1.0)
+				if wgt <= 0.0:
+					continue
+
+				var idx: int = zz * size_x + xx
+				var h0: float = heights[idx]
+				var new_h: float = lerpf(h0, desired, wgt)
+
+				heights[idx] = _quantize(new_h, height_step)
 
 func _create_arena_stamps(rng: RandomNumberGenerator) -> Array[ArenaStamp]:
 	var stamps: Array[ArenaStamp] = []
