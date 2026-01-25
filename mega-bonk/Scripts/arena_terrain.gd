@@ -276,19 +276,19 @@ func _add_box_walls(st: SurfaceTool, uv_scale_wall: float) -> void:
 
 	# North wall: z = 0, inward faces +Z
 	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, 0, floor_y, top_y, false, uv_scale_wall)
+		_add_wall_z_one_sided(st, x, 0, floor_y, top_y, true, uv_scale_wall)
 
 	# South wall: z = size_z-1, inward faces -Z
 	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, size_z - 1, floor_y, top_y, true, uv_scale_wall)
+		_add_wall_z_one_sided(st, x, size_z - 1, floor_y, top_y, false, uv_scale_wall)
 
 	# West wall: x = 0, inward faces +X
 	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, 0, z, floor_y, top_y, false, uv_scale_wall)
+		_add_wall_x_one_sided(st, 0, z, floor_y, top_y, true, uv_scale_wall)
 
 	# East wall: x = size_x-1, inward faces -X
 	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, size_x - 1, z, floor_y, top_y, true, uv_scale_wall)
+		_add_wall_x_one_sided(st, size_x - 1, z, floor_y, top_y, false, uv_scale_wall)
 
 func _add_ceiling(st: SurfaceTool) -> void:
 	var y: float = box_height
