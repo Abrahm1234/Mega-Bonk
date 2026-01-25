@@ -39,6 +39,14 @@ class_name BlockyTerrain
 # 1-step ramp rule
 @export var enable_step_ramps: bool = true
 
+# Access ramp pass (multi-step grading)
+@export var ensure_access: bool = true
+@export var access_ramp_count: int = 12
+@export var access_ramp_width_cells: int = 3
+@export var access_run_per_step: int = 3
+@export var access_max_iterations: int = 4
+@export var access_min_cliff_steps: int = 2
+
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
@@ -53,6 +61,8 @@ func generate() -> void:
 	_ox = -float(size_x) * cell_size * 0.5
 	_oz = -float(size_z) * cell_size * 0.5
 	_generate_heights()
+	if ensure_access:
+		_build_access_ramps()
 	_build_blocky_mesh_and_collision()
 
 # -----------------------------
@@ -181,6 +191,219 @@ func _h(x: int, z: int) -> float:
 
 func _pos(x: int, z: int, y: float) -> Vector3:
 	return Vector3(_ox + float(x) * cell_size, y, _oz + float(z) * cell_size)
+
+# -----------------------------
+# ACCESS RAMPS
+# -----------------------------
+func _build_access_ramps() -> void:
+	var step: float = maxf(0.001, height_step)
+	var min_cliff_steps: int = max(1, access_min_cliff_steps)
+	var run_per_step: int = max(1, access_run_per_step)
+	var remaining: int = max(0, access_ramp_count)
+	if remaining == 0 or access_max_iterations <= 0:
+		return
+
+	var start_cells: PackedInt32Array = _access_start_cells()
+	if start_cells.is_empty():
+		return
+
+	var reachable: PackedByteArray = _flood_reachable(start_cells, step)
+
+	for _iter in range(access_max_iterations):
+		if remaining <= 0:
+			break
+
+		var candidates: Array = _collect_access_candidates(reachable, step, min_cliff_steps)
+		if candidates.is_empty():
+			break
+
+		candidates.sort_custom(self, "_sort_access_candidates")
+		var chosen: Array = []
+		var min_dist: int = max(2, access_ramp_width_cells * 2)
+		for candidate in candidates:
+			if remaining <= 0:
+				break
+			if _candidate_too_close(candidate, chosen, min_dist):
+				continue
+			_carve_access_ramp(candidate, step, run_per_step)
+			chosen.append(candidate)
+			remaining -= 1
+
+		if chosen.is_empty():
+			break
+
+		reachable = _flood_reachable(start_cells, step)
+
+func _access_start_cells() -> PackedInt32Array:
+	var cells := PackedInt32Array()
+	if size_x <= 0 or size_z <= 0:
+		return cells
+
+	var cx: int = size_x / 2
+	var cz: int = size_z / 2
+	cells.append(cz * size_x + cx)
+
+	for x in range(size_x):
+		cells.append(0 * size_x + x)
+		cells.append((size_z - 1) * size_x + x)
+	for z in range(1, size_z - 1):
+		cells.append(z * size_x + 0)
+		cells.append(z * size_x + (size_x - 1))
+
+	return cells
+
+func _flood_reachable(start_cells: PackedInt32Array, step: float) -> PackedByteArray:
+	var reachable := PackedByteArray()
+	reachable.resize(size_x * size_z)
+
+	var queue: Array[int] = []
+	queue.resize(start_cells.size())
+	for i in range(start_cells.size()):
+		queue[i] = start_cells[i]
+
+	var head: int = 0
+	while head < queue.size():
+		var idx: int = queue[head]
+		head += 1
+		if idx < 0 or idx >= reachable.size():
+			continue
+		if reachable[idx] == 1:
+			continue
+		reachable[idx] = 1
+		var x: int = idx % size_x
+		var z: int = idx / size_x
+		var h0: float = heights[idx]
+
+		if x > 0:
+			_try_reach(queue, reachable, x - 1, z, h0, step)
+		if x + 1 < size_x:
+			_try_reach(queue, reachable, x + 1, z, h0, step)
+		if z > 0:
+			_try_reach(queue, reachable, x, z - 1, h0, step)
+		if z + 1 < size_z:
+			_try_reach(queue, reachable, x, z + 1, h0, step)
+
+	return reachable
+
+func _try_reach(queue: Array[int], reachable: PackedByteArray, x: int, z: int, h0: float, step: float) -> void:
+	var idx: int = z * size_x + x
+	if reachable[idx] == 1:
+		return
+	if absf(heights[idx] - h0) <= step + 0.0001:
+		queue.append(idx)
+
+func _collect_access_candidates(reachable: PackedByteArray, step: float, min_cliff_steps: int) -> Array:
+	var candidates: Array = []
+	var threshold: float = float(min_cliff_steps) * step
+
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx: int = z * size_x + x
+			if reachable[idx] == 0:
+				continue
+			var h0: float = heights[idx]
+
+			_add_access_candidate(candidates, reachable, x, z, x + 1, z, h0, step, threshold)
+			_add_access_candidate(candidates, reachable, x, z, x - 1, z, h0, step, threshold)
+			_add_access_candidate(candidates, reachable, x, z, x, z + 1, h0, step, threshold)
+			_add_access_candidate(candidates, reachable, x, z, x, z - 1, h0, step, threshold)
+
+	return candidates
+
+func _add_access_candidate(candidates: Array, reachable: PackedByteArray, x: int, z: int, nx: int, nz: int,
+		h0: float, step: float, threshold: float) -> void:
+	if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
+		return
+	var nidx: int = nz * size_x + nx
+	if reachable[nidx] == 1:
+		return
+	var h1: float = heights[nidx]
+	var diff: float = h1 - h0
+	if absf(diff) < threshold - 0.0001:
+		return
+	var diff_steps: int = int(absf(diff) / step)
+	var flat_score: int = _flat_area_score(x, z, step)
+
+	candidates.append({
+		"x": x,
+		"z": z,
+		"nx": nx,
+		"nz": nz,
+		"diff_steps": diff_steps,
+		"flat_score": flat_score,
+		"start_height": h0,
+		"end_height": h1
+	})
+
+func _flat_area_score(x: int, z: int, step: float) -> int:
+	var score: int = 0
+	var h0: float = _h(x, z)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var nx: int = x + dx
+			var nz: int = z + dz
+			if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
+				continue
+			if absf(_h(nx, nz) - h0) <= step + 0.0001:
+				score += 1
+	return score
+
+func _sort_access_candidates(a: Dictionary, b: Dictionary) -> bool:
+	if a["diff_steps"] == b["diff_steps"]:
+		if a["flat_score"] == b["flat_score"]:
+			return a["start_height"] < b["start_height"]
+		return a["flat_score"] > b["flat_score"]
+	return a["diff_steps"] < b["diff_steps"]
+
+func _candidate_too_close(candidate: Dictionary, chosen: Array, min_dist: int) -> bool:
+	var x: int = candidate["x"]
+	var z: int = candidate["z"]
+	var min_dist_sq: int = min_dist * min_dist
+	for other in chosen:
+		var ox: int = other["x"]
+		var oz: int = other["z"]
+		var dx: int = x - ox
+		var dz: int = z - oz
+		if dx * dx + dz * dz <= min_dist_sq:
+			return true
+	return false
+
+func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -> void:
+	var start_x: int = candidate["x"]
+	var start_z: int = candidate["z"]
+	var end_x: int = candidate["nx"]
+	var end_z: int = candidate["nz"]
+	var start_height: float = candidate["start_height"]
+	var end_height: float = candidate["end_height"]
+	var diff: float = end_height - start_height
+
+	var steps_needed: int = int(absf(diff) / step)
+	if steps_needed <= 0:
+		return
+	var length: int = steps_needed * run_per_step
+	var dir_x: int = end_x - start_x
+	var dir_z: int = end_z - start_z
+	var sign: float = 1.0 if diff >= 0.0 else -1.0
+
+	var width: int = max(1, access_ramp_width_cells)
+	var half: int = width / 2
+	var perp_x: int = 0
+	var perp_z: int = 0
+	if dir_x != 0:
+		perp_z = 1
+	else:
+		perp_x = 1
+
+	for i in range(length + 1):
+		var step_index: int = int(floor(float(i) / float(run_per_step)))
+		var target_height: float = start_height + sign * step * float(step_index)
+		for w in range(-half, width - half):
+			var rx: int = start_x + dir_x * i + perp_x * w
+			var rz: int = start_z + dir_z * i + perp_z * w
+			if rx < 0 or rx >= size_x or rz < 0 or rz >= size_z:
+				continue
+			var idx: int = rz * size_x + rx
+			heights[idx] = _quantize(target_height, height_step)
 
 # -----------------------------
 # MESH
