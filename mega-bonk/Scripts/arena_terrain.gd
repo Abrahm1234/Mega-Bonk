@@ -41,6 +41,10 @@ class_name BlockyTerrain
 @export var max_step_per_cell: float = 4.0      # clamp adjacent height deltas (voxel slope control)
 @export var step_clamp_passes: int = 2
 
+# Make hills chunkier (horizontal block size)
+@export var macro_block_size_m: float = 8.0   # bigger = larger blocks/plateaus (try 8, 12, 16)
+@export var use_nearest_upsample: bool = true # true = chunky, false = smoother bilinear
+
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
@@ -98,25 +102,35 @@ func _generate_heights_arenas() -> void:
 
 	for z in range(size_z):
 		for x in range(size_x):
-			var u: float = float(x) / maxf(1.0, float(size_x - 1)) * float(lr - 1)
-			var v: float = float(z) / maxf(1.0, float(size_z - 1)) * float(lr - 1)
+			var block_cells: int = max(1, int(round(macro_block_size_m / cell_size)))
+			var sx: int = (x / block_cells) * block_cells
+			var sz: int = (z / block_cells) * block_cells
 
-			var x0: int = int(floor(u))
-			var z0: int = int(floor(v))
-			var x1: int = min(x0 + 1, lr - 1)
-			var z1: int = min(z0 + 1, lr - 1)
+			var u: float = float(sx) / maxf(1.0, float(size_x - 1)) * float(lr - 1)
+			var v: float = float(sz) / maxf(1.0, float(size_z - 1)) * float(lr - 1)
 
-			var fu: float = u - float(x0)
-			var fv: float = v - float(z0)
+			var nxy: float
+			if use_nearest_upsample:
+				var gx: int = clampi(int(round(u)), 0, lr - 1)
+				var gz: int = clampi(int(round(v)), 0, lr - 1)
+				nxy = lr_grid[gz * lr + gx]
+			else:
+				var x0: int = int(floor(u))
+				var z0: int = int(floor(v))
+				var x1: int = min(x0 + 1, lr - 1)
+				var z1: int = min(z0 + 1, lr - 1)
 
-			var n00: float = lr_grid[z0 * lr + x0]
-			var n10: float = lr_grid[z0 * lr + x1]
-			var n01: float = lr_grid[z1 * lr + x0]
-			var n11: float = lr_grid[z1 * lr + x1]
+				var fu: float = u - float(x0)
+				var fv: float = v - float(z0)
 
-			var nx0: float = lerpf(n00, n10, fu)
-			var nx1: float = lerpf(n01, n11, fu)
-			var nxy: float = lerpf(nx0, nx1, fv)
+				var n00: float = lr_grid[z0 * lr + x0]
+				var n10: float = lr_grid[z0 * lr + x1]
+				var n01: float = lr_grid[z1 * lr + x0]
+				var n11: float = lr_grid[z1 * lr + x1]
+
+				var nx0: float = lerpf(n00, n10, fu)
+				var nx1: float = lerpf(n01, n11, fu)
+				nxy = lerpf(nx0, nx1, fv)
 
 			var h: float = nxy * arena_height_scale
 
