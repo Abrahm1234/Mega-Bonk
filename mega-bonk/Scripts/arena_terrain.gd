@@ -150,14 +150,14 @@ func _build_blocky_mesh_and_collision() -> void:
 
 func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2) -> void:
-	# triangle 1: a d c
+	# triangle 1: a b c
 	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(ud); st.add_vertex(d)
-	st.set_uv(uc); st.add_vertex(c)
-	# triangle 2: a c b
-	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(uc); st.add_vertex(c)
 	st.set_uv(ub); st.add_vertex(b)
+	st.set_uv(uc); st.add_vertex(c)
+	# triangle 2: a c d
+	st.set_uv(ua); st.add_vertex(a)
+	st.set_uv(uc); st.add_vertex(c)
+	st.set_uv(ud); st.add_vertex(d)
 
 func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
 	# wall along a Z edge at z_edge, spanning one cell in X
