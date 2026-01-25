@@ -161,37 +161,37 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 
 func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
 	# wall along a Z edge at z_edge, spanning one cell in X
-	var x0 := x
-	var x1 := x + 1
-	var z := z_edge
+	var x0: int = x
+	var x1: int = x + 1
+	var z: int = z_edge
 
-	var a := _pos(x0, z, h_low)
-	var b := _pos(x1, z, h_low)
-	var c := _pos(x1, z, h_high)
-	var d := _pos(x0, z, h_high)
+	var p0: Vector3 = _pos(x0, z, h_low)
+	var p1: Vector3 = _pos(x1, z, h_low)
+	var p2: Vector3 = _pos(x1, z, h_high)
+	var p3: Vector3 = _pos(x0, z, h_high)
 
 	# Flip winding depending on which side we want outward normals
 	if north:
-		_add_quad(st, a, b, c, d,
+		_add_quad(st, p1, p0, p3, p2,
 			Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
 	else:
-		_add_quad(st, b, a, d, c,
+		_add_quad(st, p0, p1, p2, p3,
 			Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
 
 func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
 	# wall along an X edge at x_edge, spanning one cell in Z
-	var x := x_edge
-	var z0 := z
-	var z1 := z + 1
+	var x: int = x_edge
+	var z0: int = z
+	var z1: int = z + 1
 
-	var a := _pos(x, z0, h_low)
-	var b := _pos(x, z1, h_low)
-	var c := _pos(x, z1, h_high)
-	var d := _pos(x, z0, h_high)
+	var p0: Vector3 = _pos(x, z0, h_low)
+	var p1: Vector3 = _pos(x, z1, h_low)
+	var p2: Vector3 = _pos(x, z1, h_high)
+	var p3: Vector3 = _pos(x, z0, h_high)
 
 	if west:
-		_add_quad(st, b, a, d, c,
+		_add_quad(st, p1, p0, p3, p2,
 			Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
 	else:
-		_add_quad(st, a, b, c, d,
+		_add_quad(st, p0, p1, p2, p3,
 			Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
