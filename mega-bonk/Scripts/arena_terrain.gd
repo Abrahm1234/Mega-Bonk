@@ -9,6 +9,8 @@ class_name BlockyTerrain
 @export var height_scale: float = 80.0          # overall mountain height
 @export var height_step: float = 2.0            # TERRACE size (blockiness)
 @export var min_height: float = -10.0           # optional bowl / valleys
+@export var smooth_passes: int = 3
+@export var smooth_strength: float = 0.55
 
 # Noise controls
 @export var noise_seed: int = 1234
@@ -56,7 +58,9 @@ func _generate_heights_blocky() -> void:
 			var nz: float = float(z)
 
 			# Base height from noise
-			var h: float = noise.get_noise_2d(nx, nz) # ~[-1..1]
+			var h_base: float = noise.get_noise_2d(nx, nz) # ~[-1..1]
+			var h_detail: float = noise.get_noise_2d(nx * 3.0, nz * 3.0) * 0.25
+			var h: float = h_base + h_detail
 			h = _shape_height(h) * height_scale
 
 			# Optional: flatten center a bit (combat readability)
@@ -73,16 +77,39 @@ func _generate_heights_blocky() -> void:
 					var out: float = (d - flat_r_cells) / maxf(1.0, flat_r_cells)
 					h -= (out * out) * height_scale * 0.6 * bowl_strength
 
-			# Clamp and TERRACE (blocky)
+			# Clamp before smoothing + terracing
 			h = maxf(h, min_height)
-			h = _quantize(h, height_step)
 
 			heights[z * size_x + x] = h
+
+	if smooth_passes > 0:
+		_smooth_heights(smooth_passes, smooth_strength)
+
+	for i in range(heights.size()):
+		heights[i] = _quantize(heights[i], height_step)
 
 func _shape_height(v: float) -> float:
 	# makes more “mountainy” distribution than raw noise
 	var s: float = clampf(v, -1.0, 1.0)
 	return signf(s) * pow(absf(s), 1.25)
+
+func _smooth_heights(passes: int, strength: float) -> void:
+	strength = clampf(strength, 0.0, 1.0)
+
+	for _p in range(passes):
+		var copy := heights.duplicate()
+		for z in range(1, size_z - 1):
+			for x in range(1, size_x - 1):
+				var i := z * size_x + x
+				var h := copy[i]
+
+				var n := copy[(z - 1) * size_x + x]
+				var s := copy[(z + 1) * size_x + x]
+				var w := copy[z * size_x + (x - 1)]
+				var e := copy[z * size_x + (x + 1)]
+
+				var avg := (n + s + w + e) * 0.25
+				heights[i] = lerpf(h, avg, strength)
 
 func _quantize(h: float, step: float) -> float:
 	if step <= 0.0:
