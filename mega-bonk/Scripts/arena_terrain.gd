@@ -159,6 +159,11 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	st.set_uv(uc); st.add_vertex(c)
 	st.set_uv(ud); st.add_vertex(d)
 
+func _add_quad_double_sided(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2) -> void:
+	_add_quad(st, a, b, c, d, ua, ub, uc, ud)
+	_add_quad(st, d, c, b, a, ud, uc, ub, ua)
+
 func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
 	# wall along a Z edge at z_edge, spanning one cell in X
 	var step: float = maxf(0.001, height_step)
@@ -176,13 +181,16 @@ func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: flo
 		var p2: Vector3 = _pos(x1, z, y1)
 		var p3: Vector3 = _pos(x0, z, y1)
 
+		var uv0: Vector2 = Vector2(0, 0) * uv_scale
+		var uv1: Vector2 = Vector2(1, 0) * uv_scale
+		var uv2: Vector2 = Vector2(1, 1) * uv_scale
+		var uv3: Vector2 = Vector2(0, 1) * uv_scale
+
 		# Flip winding depending on which side we want outward normals
 		if north:
-			_add_quad(st, p1, p0, p3, p2,
-				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
+			_add_quad_double_sided(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
 		else:
-			_add_quad(st, p0, p1, p2, p3,
-				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
+			_add_quad_double_sided(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
 
 		y0 = y1
 
@@ -203,11 +211,14 @@ func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: flo
 		var p2: Vector3 = _pos(x, z1, y1)
 		var p3: Vector3 = _pos(x, z0, y1)
 
+		var uv0: Vector2 = Vector2(0, 0) * uv_scale
+		var uv1: Vector2 = Vector2(1, 0) * uv_scale
+		var uv2: Vector2 = Vector2(1, 1) * uv_scale
+		var uv3: Vector2 = Vector2(0, 1) * uv_scale
+
 		if west:
-			_add_quad(st, p1, p0, p3, p2,
-				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
+			_add_quad_double_sided(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
 		else:
-			_add_quad(st, p0, p1, p2, p3,
-				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale)
+			_add_quad_double_sided(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
 
 		y0 = y1
