@@ -270,7 +270,7 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	st.set_uv(uc); st.add_vertex(c)
 	st.set_uv(ud); st.add_vertex(d)
 
-func _add_quad_double_sided(
+func _add_quad_ccw(
 	st: SurfaceTool,
 	a: Vector3,
 	b: Vector3,
@@ -281,10 +281,34 @@ func _add_quad_double_sided(
 	uc: Vector2,
 	ud: Vector2
 ) -> void:
-	_add_quad(st, a, b, c, d, ua, ub, uc, ud)
-	_add_quad(st, d, c, b, a, ud, uc, ub, ua)
+	st.set_uv(ua); st.add_vertex(a)
+	st.set_uv(ub); st.add_vertex(b)
+	st.set_uv(uc); st.add_vertex(c)
+
+	st.set_uv(ua); st.add_vertex(a)
+	st.set_uv(uc); st.add_vertex(c)
+	st.set_uv(ud); st.add_vertex(d)
+
+func _add_quad_facing(
+	st: SurfaceTool,
+	a: Vector3,
+	b: Vector3,
+	c: Vector3,
+	d: Vector3,
+	ua: Vector2,
+	ub: Vector2,
+	uc: Vector2,
+	ud: Vector2,
+	desired_normal: Vector3
+) -> void:
+	var n: Vector3 = (b - a).cross(c - a)
+	if n.dot(desired_normal) < 0.0:
+		_add_quad_ccw(st, a, d, c, b, ua, ud, uc, ub)
+	else:
+		_add_quad_ccw(st, a, b, c, d, ua, ub, uc, ud)
 
 func _emit_wall_z(st: SurfaceTool, x: int, z_edge: int, low_lvl: int, high_lvl: int, _north: bool, uv_scale: float) -> void:
+	var desired: Vector3 = Vector3(0, 0, -1) if _north else Vector3(0, 0, 1)
 	var uv0: Vector2 = Vector2(0, 0) * uv_scale
 	var uv1: Vector2 = Vector2(1, 0) * uv_scale
 	var uv2: Vector2 = Vector2(1, 1) * uv_scale
@@ -298,9 +322,10 @@ func _emit_wall_z(st: SurfaceTool, x: int, z_edge: int, low_lvl: int, high_lvl: 
 		var p2: Vector3 = _pos(x + 1, z_edge, y1)
 		var p3: Vector3 = _pos(x, z_edge, y1)
 
-		_add_quad_double_sided(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
+		_add_quad_facing(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, desired)
 
 func _emit_wall_x(st: SurfaceTool, x_edge: int, z: int, low_lvl: int, high_lvl: int, _west: bool, uv_scale: float) -> void:
+	var desired: Vector3 = Vector3(-1, 0, 0) if _west else Vector3(1, 0, 0)
 	var uv0: Vector2 = Vector2(0, 0) * uv_scale
 	var uv1: Vector2 = Vector2(1, 0) * uv_scale
 	var uv2: Vector2 = Vector2(1, 1) * uv_scale
@@ -314,7 +339,7 @@ func _emit_wall_x(st: SurfaceTool, x_edge: int, z: int, low_lvl: int, high_lvl: 
 		var p2: Vector3 = _pos(x_edge, z + 1, y1)
 		var p3: Vector3 = _pos(x_edge, z, y1)
 
-		_add_quad_double_sided(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
+		_add_quad_facing(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, desired)
 
 func _base_lvl() -> int:
 	return int(floor(min_height / height_step)) - 1
@@ -358,7 +383,7 @@ func _emit_bottom_cap(st: SurfaceTool, uv_scale: float) -> void:
 	var c := _pos(size_x, size_z, yb)
 	var d := _pos(0, size_z, yb)
 
-	_add_quad_double_sided(
+	_add_quad_facing(
 		st,
 		a,
 		b,
@@ -367,7 +392,8 @@ func _emit_bottom_cap(st: SurfaceTool, uv_scale: float) -> void:
 		Vector2(0, 0) * uv_scale,
 		Vector2(1, 0) * uv_scale,
 		Vector2(1, 1) * uv_scale,
-		Vector2(0, 1) * uv_scale
+		Vector2(0, 1) * uv_scale,
+		Vector3(0, -1, 0)
 	)
 
 func _rebuild_flat_shaded(src: ArrayMesh) -> ArrayMesh:
