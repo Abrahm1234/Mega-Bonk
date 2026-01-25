@@ -227,17 +227,17 @@ func _build_blocky_mesh_and_collision() -> void:
 			var le: int = _lvl(x + 1, z)
 
 			# North (toward -Z)
-			if z > 0 and ln != l0:
-				_emit_wall_z(st, x, z, l0, ln, true, uv_scale)
+			if z > 0 and ln < l0:
+				_emit_wall_z(st, x, z, ln, l0, true, uv_scale)
 			# West (toward -X)
-			if x > 0 and lw != l0:
-				_emit_wall_x(st, x, z, l0, lw, true, uv_scale)
+			if x > 0 and lw < l0:
+				_emit_wall_x(st, x, z, lw, l0, true, uv_scale)
 			# South (toward +Z) uses neighbor of the cell below, so check current cell vs next row
-			if ls != l0:
-				_emit_wall_z(st, x, z + 1, l0, ls, false, uv_scale)
+			if ls < l0:
+				_emit_wall_z(st, x, z + 1, ls, l0, false, uv_scale)
 			# East (toward +X)
-			if le != l0:
-				_emit_wall_x(st, x + 1, z, l0, le, false, uv_scale)
+			if le < l0:
+				_emit_wall_x(st, x + 1, z, le, l0, false, uv_scale)
 
 	var mesh: ArrayMesh = st.commit()
 	mesh = _rebuild_flat_shaded(mesh)
@@ -257,15 +257,13 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	st.set_uv(uc); st.add_vertex(c)
 	st.set_uv(ud); st.add_vertex(d)
 
-func _emit_wall_z(st: SurfaceTool, x: int, z_edge: int, from_lvl: int, to_lvl: int, north: bool, uv_scale: float) -> void:
-	var lo: int = mini(from_lvl, to_lvl)
-	var hi: int = maxi(from_lvl, to_lvl)
+func _emit_wall_z(st: SurfaceTool, x: int, z_edge: int, low_lvl: int, high_lvl: int, north: bool, uv_scale: float) -> void:
 	var uv0: Vector2 = Vector2(0, 0) * uv_scale
 	var uv1: Vector2 = Vector2(1, 0) * uv_scale
 	var uv2: Vector2 = Vector2(1, 1) * uv_scale
 	var uv3: Vector2 = Vector2(0, 1) * uv_scale
 
-	for lvl: int in range(lo, hi):
+	for lvl: int in range(low_lvl, high_lvl):
 		var y0: float = _y_from_lvl(lvl)
 		var y1: float = _y_from_lvl(lvl + 1)
 		var p0: Vector3 = _pos(x, z_edge, y0)
@@ -278,15 +276,13 @@ func _emit_wall_z(st: SurfaceTool, x: int, z_edge: int, from_lvl: int, to_lvl: i
 		else:
 			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
 
-func _emit_wall_x(st: SurfaceTool, x_edge: int, z: int, from_lvl: int, to_lvl: int, west: bool, uv_scale: float) -> void:
-	var lo: int = mini(from_lvl, to_lvl)
-	var hi: int = maxi(from_lvl, to_lvl)
+func _emit_wall_x(st: SurfaceTool, x_edge: int, z: int, low_lvl: int, high_lvl: int, west: bool, uv_scale: float) -> void:
 	var uv0: Vector2 = Vector2(0, 0) * uv_scale
 	var uv1: Vector2 = Vector2(1, 0) * uv_scale
 	var uv2: Vector2 = Vector2(1, 1) * uv_scale
 	var uv3: Vector2 = Vector2(0, 1) * uv_scale
 
-	for lvl: int in range(lo, hi):
+	for lvl: int in range(low_lvl, high_lvl):
 		var y0: float = _y_from_lvl(lvl)
 		var y1: float = _y_from_lvl(lvl + 1)
 		var p0: Vector3 = _pos(x_edge, z, y0)
