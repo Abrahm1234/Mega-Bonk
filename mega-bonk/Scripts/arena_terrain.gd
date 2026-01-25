@@ -168,8 +168,8 @@ func _build_blocky_mesh_and_collision() -> void:
 			if he < h0:
 				_add_wall_x(st, x + 1, z, he, h0, false, uv_scale)
 
-	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
+	mesh = _rebuild_flat_shaded(mesh)
 	mesh_instance.mesh = mesh
 
 	# Collision: matches the blocky mesh
@@ -249,3 +249,33 @@ func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: flo
 			_add_quad_double_sided(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
 
 		y0 = y1
+
+func _rebuild_flat_shaded(src: ArrayMesh) -> ArrayMesh:
+	var out := ArrayMesh.new()
+
+	for s in range(src.get_surface_count()):
+		var arr := src.surface_get_arrays(s)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+
+		var normals := PackedVector3Array()
+		normals.resize(verts.size())
+
+		for i in range(0, verts.size(), 3):
+			var a := verts[i]
+			var b := verts[i + 1]
+			var c := verts[i + 2]
+			var n := (b - a).cross(c - a).normalized()
+			normals[i] = n
+			normals[i + 1] = n
+			normals[i + 2] = n
+
+		var new_arr := []
+		new_arr.resize(Mesh.ARRAY_MAX)
+		new_arr[Mesh.ARRAY_VERTEX] = verts
+		new_arr[Mesh.ARRAY_NORMAL] = normals
+		new_arr[Mesh.ARRAY_TEX_UV] = uvs
+
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, new_arr)
+
+	return out
