@@ -352,7 +352,15 @@ func _add_wall_z_one_sided(st: SurfaceTool, x: int, z_edge: int, h_low: float, h
 
 		y0 = y1
 
-func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
+func _add_wall_x_one_sided(
+	st: SurfaceTool,
+	x_edge: int,
+	z: int,
+	h_low: float,
+	h_high: float,
+	west: bool,
+	uv_scale: float
+) -> void:
 	var step: float = maxf(0.001, height_step)
 	var y0: float = h_low
 
@@ -379,8 +387,8 @@ func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h
 		var uv3: Vector2 = Vector2(u0, v1)
 
 		if west:
-			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
-		else:
 			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
+		else:
+			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
 
 		y0 = y1
