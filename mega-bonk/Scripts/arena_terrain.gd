@@ -57,10 +57,17 @@ class_name BlockyTerrain
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
 var heights: PackedFloat32Array
+var ramp_dir: PackedInt32Array
 var _ox: float
 var _oz: float
 
 enum ArenaType { PLAIN, RAMP_X, RAMP_Z, PYRAMID, BOWL }
+
+const RAMP_NONE := 0
+const RAMP_PX := 1
+const RAMP_NX := 2
+const RAMP_PZ := 3
+const RAMP_NZ := 4
 
 class ArenaStamp:
 	var x0: int
@@ -86,6 +93,10 @@ func generate() -> void:
 func _generate_heights_arenas() -> void:
 	heights = PackedFloat32Array()
 	heights.resize(size_x * size_z)
+	ramp_dir = PackedInt32Array()
+	ramp_dir.resize(size_x * size_z)
+	for i in range(size_x * size_z):
+		ramp_dir[i] = RAMP_NONE
 	var lr: int = max(2, arena_lr_cells)
 	var lr_grid: PackedFloat32Array = PackedFloat32Array()
 	lr_grid.resize(lr * lr)
@@ -385,35 +396,65 @@ func _stamp_ramp_along_path(path: Array[Vector2i]) -> void:
 	var start: Vector2i = path[0]
 	var target_h: float = _h(start.x, start.y)
 
-	for i in range(path.size()):
-		var p: Vector2i = path[i]
+	for i in range(1, path.size()):
+		var a: Vector2i = path[i - 1]
+		var b: Vector2i = path[i]
 
-		if i > 0:
-			target_h += grade
+		target_h += grade
 
-		var cur_h: float = _h(p.x, p.y)
-		var desired: float = minf(cur_h, target_h)
-		desired = _quantize(desired, height_step)
+		var dx: int = b.x - a.x
+		var dz: int = b.y - a.y
 
-		for dz in range(-width, width + 1):
-			var zz: int = p.y + dz
-			if zz < 0 or zz >= size_z:
-				continue
-			for dx in range(-width, width + 1):
-				var xx: int = p.x + dx
-				if xx < 0 or xx >= size_x:
+		var dir_a: int = RAMP_NONE
+		var dir_b: int = RAMP_NONE
+		if dx == 1 and dz == 0:
+			dir_a = RAMP_PX; dir_b = RAMP_NX
+		elif dx == -1 and dz == 0:
+			dir_a = RAMP_NX; dir_b = RAMP_PX
+		elif dz == 1 and dx == 0:
+			dir_a = RAMP_PZ; dir_b = RAMP_NZ
+		elif dz == -1 and dx == 0:
+			dir_a = RAMP_NZ; dir_b = RAMP_PZ
+		else:
+			continue
+
+		var ha: float = _h(a.x, a.y)
+		var hb: float = _h(b.x, b.y)
+
+		var desired_b: float = minf(hb, target_h)
+		desired_b = _quantize(desired_b, height_step)
+
+		if desired_b < ha:
+			ha = desired_b
+			heights[a.y * size_x + a.x] = ha
+
+		heights[b.y * size_x + b.x] = desired_b
+
+		_set_rd(a.x, a.y, dir_a)
+		_set_rd(b.x, b.y, dir_b)
+
+		for oz in range(-width, width + 1):
+			for ox in range(-width, width + 1):
+				var ax: int = a.x + ox
+				var az: int = a.y + oz
+				var bx: int = b.x + ox
+				var bz: int = b.y + oz
+				if ax < 0 or ax >= size_x or az < 0 or az >= size_z:
+					continue
+				if bx < 0 or bx >= size_x or bz < 0 or bz >= size_z:
 					continue
 
-				var dist: float = float(abs(dx) + abs(dz))
-				var wgt: float = clampf(1.0 - (dist / float(width + 1)), 0.0, 1.0)
+				_set_rd(ax, az, dir_a)
+				_set_rd(bx, bz, dir_b)
+
+				var wgt: float = clampf(1.0 - (float(abs(ox) + abs(oz)) / float(width + 1)), 0.0, 1.0)
 				if wgt <= 0.0:
 					continue
 
-				var idx: int = zz * size_x + xx
-				var h0: float = heights[idx]
-				var new_h: float = lerpf(h0, desired, wgt)
-
-				heights[idx] = _quantize(new_h, height_step)
+				var ia: int = az * size_x + ax
+				var ib: int = bz * size_x + bx
+				heights[ia] = _quantize(lerpf(heights[ia], ha, wgt), height_step)
+				heights[ib] = _quantize(lerpf(heights[ib], desired_b, wgt), height_step)
 
 func _create_arena_stamps(rng: RandomNumberGenerator) -> Array[ArenaStamp]:
 	var stamps: Array[ArenaStamp] = []
@@ -539,6 +580,30 @@ func _quantize(h: float, step: float) -> float:
 func _h(x: int, z: int) -> float:
 	return heights[z * size_x + x]
 
+func _rd(x: int, z: int) -> int:
+	return ramp_dir[z * size_x + x]
+
+func _set_rd(x: int, z: int, d: int) -> void:
+	ramp_dir[z * size_x + x] = d
+
+func _edge_is_ramp_x(x: int, z: int, east: bool) -> bool:
+	if east:
+		if x + 1 >= size_x:
+			return false
+		return _rd(x, z) == RAMP_PX or _rd(x + 1, z) == RAMP_NX
+	if x - 1 < 0:
+		return false
+	return _rd(x, z) == RAMP_NX or _rd(x - 1, z) == RAMP_PX
+
+func _edge_is_ramp_z(x: int, z: int, south: bool) -> bool:
+	if south:
+		if z + 1 >= size_z:
+			return false
+		return _rd(x, z) == RAMP_PZ or _rd(x, z + 1) == RAMP_NZ
+	if z - 1 < 0:
+		return false
+	return _rd(x, z) == RAMP_NZ or _rd(x, z - 1) == RAMP_PZ
+
 func _pos(x: int, z: int, y: float) -> Vector3:
 	return Vector3(_ox + float(x) * cell_size, y, _oz + float(z) * cell_size)
 
@@ -555,33 +620,57 @@ func _build_blocky_mesh_and_collision() -> void:
 	# Terrain top + voxel cliffs between cells
 	for z in range(size_z - 1):
 		for x in range(size_x - 1):
-			var h0: float = _h(x, z)
+			var rd: int = _rd(x, z)
+
+			var h00: float = _h(x, z)
+			var h10: float = _h(x + 1, z)
+			var h01: float = _h(x, z + 1)
+
+			var a_y: float = h00
+			var b_y: float = h00
+			var c_y: float = h00
+			var d_y: float = h00
+
+			if rd == RAMP_PX:
+				a_y = h00; d_y = h00
+				b_y = h10; c_y = h10
+			elif rd == RAMP_NX:
+				var hw0: float = _h(x - 1, z) if x > 0 else h00
+				a_y = hw0; d_y = hw0
+				b_y = h00; c_y = h00
+			elif rd == RAMP_PZ:
+				a_y = h00; b_y = h00
+				c_y = h01; d_y = h01
+			elif rd == RAMP_NZ:
+				var hn0: float = _h(x, z - 1) if z > 0 else h00
+				a_y = hn0; b_y = hn0
+				c_y = h00; d_y = h00
 
 			_add_quad(
 				st,
-				_pos(x,     z,     h0),
-				_pos(x + 1, z,     h0),
-				_pos(x + 1, z + 1, h0),
-				_pos(x,     z + 1, h0),
+				_pos(x,     z,     a_y),
+				_pos(x + 1, z,     b_y),
+				_pos(x + 1, z + 1, c_y),
+				_pos(x,     z + 1, d_y),
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top
 			)
 
-			var hn: float = _h(x, z - 1) if z > 0 else h0
+			var hn: float = _h(x, z - 1) if z > 0 else h00
 			var hs: float = _h(x, z + 1)
-			var hw: float = _h(x - 1, z) if x > 0 else h0
+			var hw: float = _h(x - 1, z) if x > 0 else h00
 			var he: float = _h(x + 1, z)
 
-			if z > 0 and hn < h0:
-				_add_wall_z(st, x, z, hn, h0, true, uv_scale_wall)
-			if x > 0 and hw < h0:
-				_add_wall_x(st, x, z, hw, h0, true, uv_scale_wall)
-			if hs < h0:
-				_add_wall_z(st, x, z + 1, hs, h0, false, uv_scale_wall)
-			if he < h0:
-				_add_wall_x(st, x + 1, z, he, h0, false, uv_scale_wall)
+			if z > 0 and hn < h00 and not _edge_is_ramp_z(x, z, false):
+				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall)
+			if x > 0 and hw < h00 and not _edge_is_ramp_x(x, z, false):
+				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall)
+			if hs < h00 and not _edge_is_ramp_z(x, z, true):
+				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall)
+			if he < h00 and not _edge_is_ramp_x(x, z, true):
+				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall)
 
 	# Box walls (inward-facing)
 	_add_box_walls(st, uv_scale_wall)
