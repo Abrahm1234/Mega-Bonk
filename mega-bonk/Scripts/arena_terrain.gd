@@ -695,26 +695,26 @@ func _stamp_road_path(path: Array[Vector2i]) -> void:
 			_set_ramp_from_to(b, a)
 
 func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
-	var cut_max := float(road_cut_max_steps) * height_step
-	var width := max(1, road_width)
+	var cut_max: float = float(road_cut_max_steps) * height_step
+	var width: int = maxi(1, road_width)
 
-	for dz in range(-width, width + 1):
-		for dx in range(-width, width + 1):
-			var md := abs(dx) + abs(dz)
+	for dz: int in range(-width, width + 1):
+		for dx: int in range(-width, width + 1):
+			var md: int = absi(dx) + absi(dz)
 			if md > width:
 				continue
 
-			var x := p.x + dx
-			var z := p.y + dz
+			var x: int = p.x + dx
+			var z: int = p.y + dz
 			if x < 0 or x >= size_x or z < 0 or z >= size_z:
 				continue
 
-			var idx := z * size_x + x
+			var idx: int = z * size_x + x
 			road_mask[idx] = 1
 
-			var t := 1.0 - float(md) / float(width + 1)
-			var h0 := heights[idx]
-			var h1 := lerpf(h0, target_h, t)
+			var t: float = 1.0 - float(md) / float(width + 1)
+			var h0: float = heights[idx]
+			var h1: float = lerpf(h0, target_h, t)
 			h1 = clampf(h1, h0 - cut_max, 1e30)
 
 			heights[idx] = _quantize(h1, height_step)
@@ -738,7 +738,7 @@ func _derive_road_ramps() -> void:
 			var idx := z * size_x + x
 			if road_mask[idx] == 0:
 				continue
-			var d := ramp_dir[idx]
+			var d: int = int(ramp_dir[idx])
 			if d == RAMP_NONE:
 				continue
 
