@@ -91,8 +91,10 @@ func generate() -> void:
 	road_mask.resize(size_x * size_z)
 	for i in range(road_mask.size()):
 		road_mask[i] = 0
+	# 1) Ensure access first so later roads carve on reachable terrain.
 	if ensure_access:
 		_build_access_ramps()
+	# 2) Build roads on top of the access-adjusted heights.
 	if build_roads:
 		_build_roads()
 	_build_blocky_mesh_and_collision()
