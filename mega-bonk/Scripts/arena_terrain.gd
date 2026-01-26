@@ -474,6 +474,26 @@ func _build_roads() -> void:
 			other_regions.append(r)
 
 		if other_regions.is_empty():
+			var anchors: Array[Vector2i] = []
+			anchors.append(_pick_region_anchor(labels, main_region, step))
+			var peak_anchors: Array[Vector2i] = _collect_top_peaks(10, 12.0)
+			for p in peak_anchors:
+				anchors.append(p)
+
+			var edges: Array = _mst_edges(anchors)
+			if road_extra_loops > 0:
+				_add_loop_edges(anchors, edges, road_extra_loops)
+
+			for e in edges:
+				if carved_budget <= 0:
+					return
+				var a: Vector2i = e["a"]
+				var b: Vector2i = e["b"]
+				var path: Array[Vector2i] = _astar_2d(a, b, step)
+				if path.size() < 2:
+					continue
+				_carve_road_path(path, step, run_per_step, width)
+				carved_budget -= 1
 			break
 
 		var anchors: Array[Vector2i] = []
@@ -770,17 +790,15 @@ func _reconstruct_astar(came: Dictionary, cur: Vector2i) -> Array[Vector2i]:
 	path.reverse()
 	return path
 
-func _carve_road_path(path: Array[Vector2i], step: float, run_per_step: int, width: int) -> void:
+func _carve_road_path(path: Array[Vector2i], _step: float, _run_per_step: int, width: int) -> void:
 	if path.size() < 2:
 		return
 
-	var _unused_step := step
-	var _unused_run_per_step := run_per_step
 	var w: int = max(1, width)
 	var max_step_allowed: float = maxf(0.001, road_carve_max_step)
 
 	var cur_h: float = _h(path[0].x, path[0].y)
-	_mark_road_disk(path[0], cur_h, w)
+	_stamp_road_corridor(path[0], cur_h, w)
 
 	for i in range(1, path.size()):
 		var p: Vector2i = path[i]
@@ -792,19 +810,20 @@ func _carve_road_path(path: Array[Vector2i], step: float, run_per_step: int, wid
 		else:
 			cur_h = target_h
 
-		_mark_road_disk(p, cur_h, w)
+		_stamp_road_corridor(p, cur_h, w)
 
-func _mark_road_disk(p: Vector2i, h: float, w: int) -> void:
+func _stamp_road_corridor(p: Vector2i, h: float, w: int) -> void:
 	for dz in range(-w, w + 1):
 		for dx in range(-w, w + 1):
+			var man: int = abs(dx) + abs(dz)
+			if man > w:
+				continue
 			var x: int = p.x + dx
 			var z: int = p.y + dz
 			if x < 0 or x >= size_x or z < 0 or z >= size_z:
 				continue
 			var idx: int = z * size_x + x
-			var man: int = abs(dx) + abs(dz)
-			var t: float = clampf(1.0 - float(man) / float(w + 1), 0.0, 1.0)
-			heights[idx] = _quantize(lerpf(heights[idx], h, t), height_step)
+			heights[idx] = _quantize(h, height_step)
 			road_mask[idx] = 1
 
 # -----------------------------
