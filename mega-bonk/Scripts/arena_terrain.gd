@@ -47,18 +47,16 @@ class_name BlockyTerrain
 @export var access_max_iterations: int = 4
 @export var access_min_cliff_steps: int = 2
 
-# Roads (connect unreachable regions)
-@export var build_roads: bool = true
-@export var road_count_budget: int = 32
-@export var road_width_cells: int = 4
-@export var road_run_per_step: int = 3
-@export var road_max_iters: int = 6
-@export var road_min_region_size: int = 64
-@export var road_extra_loops: int = 2
-@export var road_carve_max_step: float = 2.0
-@export var road_expand_multistep: bool = true
-@export var road_debug_print: bool = false
-@export var road_max_edge_cliff_steps: int = 6
+# Roads (connect peaks + valleys)
+@export var enable_roads: bool = true
+@export var road_peak_count: int = 6
+@export var road_valley_count: int = 6
+@export var road_min_anchor_spacing: int = 18
+@export var road_width: int = 2
+@export var road_budget_extra_links: int = 8
+@export var road_cliff_penalty: float = 30.0
+@export var road_allow_diagonals: bool = false
+@export var road_cut_max_steps: int = 0
 
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var road_color: Color = Color(0.85, 0.12, 0.12, 1.0)
@@ -68,11 +66,18 @@ class_name BlockyTerrain
 
 var heights: PackedFloat32Array
 var road_mask: PackedByteArray
+var ramp_dir: PackedByteArray
 var _ox: float
 var _oz: float
 
+const RAMP_NONE: int = 0
+const RAMP_PX: int = 1
+const RAMP_NX: int = 2
+const RAMP_PZ: int = 3
+const RAMP_NZ: int = 4
+
 func _ready() -> void:
-	print("BlockyTerrain ACTIVE: ", get_path(), " build_roads=", build_roads, " ensure_access=", ensure_access)
+	print("BlockyTerrain ACTIVE: ", get_path(), " enable_roads=", enable_roads, " ensure_access=", ensure_access)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.vertex_color_use_as_albedo = true
@@ -91,12 +96,16 @@ func generate() -> void:
 	road_mask.resize(size_x * size_z)
 	for i in range(road_mask.size()):
 		road_mask[i] = 0
+	ramp_dir = PackedByteArray()
+	ramp_dir.resize(size_x * size_z)
+	for i in range(ramp_dir.size()):
+		ramp_dir[i] = RAMP_NONE
 	# 1) Ensure access first so later roads carve on reachable terrain.
 	if ensure_access:
 		_build_access_ramps()
 	# 2) Build roads on top of the access-adjusted heights.
-	if build_roads:
-		_build_roads()
+	if enable_roads:
+		_build_road_network()
 	_build_blocky_mesh_and_collision()
 
 # -----------------------------
@@ -442,389 +451,432 @@ func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -
 # -----------------------------
 # ROADS
 # -----------------------------
-func _build_roads() -> void:
-	var step: float = maxf(0.001, height_step)
-	var run_per_step: int = max(1, road_run_per_step)
-	var width: int = max(1, road_width_cells)
+func _build_road_network() -> void:
+	road_mask.fill(0)
+	ramp_dir.fill(RAMP_NONE)
 
-	var carved_budget: int = max(0, road_count_budget)
-	if carved_budget <= 0:
+	var peaks: Array[Vector2i] = _pick_peaks(road_peak_count, road_min_anchor_spacing)
+	var valleys: Array[Vector2i] = _pick_valleys(road_valley_count, road_min_anchor_spacing)
+	var anchors: Array[Vector2i] = []
+	anchors.append_array(peaks)
+	anchors.append_array(valleys)
+	if anchors.size() < 2:
 		return
 
-	var start_cells: PackedInt32Array = _access_start_cells()
-	if start_cells.is_empty():
-		return
+	var mst_edges: Array = _mst_edges(anchors)
+	for e in mst_edges:
+		var a: Vector2i = anchors[e[0]]
+		var b: Vector2i = anchors[e[1]]
+		var path: Array[Vector2i] = _astar_road_path(a, b)
+		if path.is_empty():
+			continue
+		_stamp_road_path(path)
 
-	for _iter in range(road_max_iters):
-		var region_info: Dictionary = _label_regions(step)
-		var labels: PackedInt32Array = region_info["labels"]
-		var region_sizes: PackedInt32Array = region_info["sizes"]
-		var region_count: int = region_info["count"]
+	_derive_road_ramps()
 
-		var main_region: int = _find_main_region(labels, start_cells)
-		if main_region < 0:
-			return
-
-		var other_regions: Array[int] = []
-		for r in range(region_count):
-			if r == main_region:
-				continue
-			if region_sizes[r] < road_min_region_size:
-				continue
-			other_regions.append(r)
-
-		if other_regions.is_empty():
-			var anchors: Array[Vector2i] = []
-			anchors.append(_pick_region_anchor(labels, main_region, step))
-			var peak_anchors: Array[Vector2i] = _collect_top_peaks(10, 12.0)
-			for p in peak_anchors:
-				anchors.append(p)
-
-			var edges: Array = _mst_edges(anchors)
-			if road_extra_loops > 0:
-				_add_loop_edges(anchors, edges, road_extra_loops)
-
-			for e in edges:
-				if carved_budget <= 0:
-					return
-				var a: Vector2i = e["a"]
-				var b: Vector2i = e["b"]
-				var path: Array[Vector2i] = _astar_2d(a, b, step)
-				if path.size() < 2:
-					continue
-				_carve_road_path(path, step, run_per_step, width)
-				carved_budget -= 1
+	for _i in range(road_budget_extra_links):
+		if _connect_one_unroaded_region():
+			_derive_road_ramps()
+		else:
 			break
 
-		var anchors: Array[Vector2i] = []
-		anchors.append(_pick_region_anchor(labels, main_region, step))
-		var peak_anchors: Array[Vector2i] = _collect_top_peaks(8, 12.0)
-		for p in peak_anchors:
-			anchors.append(p)
-		for r in other_regions:
-			anchors.append(_pick_region_anchor(labels, r, step))
-
-		var edges: Array = _mst_edges(anchors)
-		if road_extra_loops > 0:
-			_add_loop_edges(anchors, edges, road_extra_loops)
-
-		for e in edges:
-			if carved_budget <= 0:
-				return
-			var a: Vector2i = e["a"]
-			var b: Vector2i = e["b"]
-			var path: Array[Vector2i] = _astar_2d(a, b, step)
-			if path.size() < 2:
-				continue
-			_carve_road_path(path, step, run_per_step, width)
-			carved_budget -= 1
-
-	for i in range(size_x * size_z):
-		heights[i] = _quantize(heights[i], height_step)
-
-func _label_regions(step: float) -> Dictionary:
-	var labels := PackedInt32Array()
-	labels.resize(size_x * size_z)
-	for i in range(labels.size()):
-		labels[i] = -1
-
-	var sizes: Array[int] = []
-	var region_id: int = 0
-
-	var queue: Array[int] = []
-
-	for start_idx in range(size_x * size_z):
-		if labels[start_idx] != -1:
-			continue
-
-		queue.clear()
-		queue.append(start_idx)
-		labels[start_idx] = region_id
-		var count: int = 0
-
-		var head: int = 0
-		while head < queue.size():
-			var idx: int = queue[head]
-			head += 1
-			count += 1
-
-			var x: int = idx % size_x
-			var z: int = idx / size_x
-			var h0: float = heights[idx]
-
-			_region_try(queue, labels, x - 1, z, region_id, h0, step)
-			_region_try(queue, labels, x + 1, z, region_id, h0, step)
-			_region_try(queue, labels, x, z - 1, region_id, h0, step)
-			_region_try(queue, labels, x, z + 1, region_id, h0, step)
-
-		sizes.append(count)
-		region_id += 1
-
-	var packed_sizes := PackedInt32Array()
-	packed_sizes.resize(sizes.size())
-	for i in range(sizes.size()):
-		packed_sizes[i] = sizes[i]
-
-	return {
-		"labels": labels,
-		"sizes": packed_sizes,
-		"count": region_id
-	}
-
-func _region_try(queue: Array[int], labels: PackedInt32Array, x: int, z: int, rid: int, h0: float, step: float) -> void:
-	if x < 0 or x >= size_x or z < 0 or z >= size_z:
-		return
-	var idx: int = z * size_x + x
-	if labels[idx] != -1:
-		return
-	if absf(heights[idx] - h0) <= step + 0.0001:
-		labels[idx] = rid
-		queue.append(idx)
-
-func _find_main_region(labels: PackedInt32Array, start_cells: PackedInt32Array) -> int:
-	for i in range(start_cells.size()):
-		var idx: int = start_cells[i]
-		if idx >= 0 and idx < labels.size() and labels[idx] >= 0:
-			return labels[idx]
-	return -1
-
-func _pick_region_anchor(labels: PackedInt32Array, rid: int, step: float) -> Vector2i:
-	var best := Vector2i(size_x / 2, size_z / 2)
-	var best_h: float = 1e30
-	var best_flat: int = -1
-
+func _pick_peaks(count: int, min_spacing: int) -> Array[Vector2i]:
+	var cands: Array[Vector2i] = []
 	for z in range(1, size_z - 1):
 		for x in range(1, size_x - 1):
-			var idx: int = z * size_x + x
-			if labels[idx] != rid:
-				continue
-
-			var h0: float = heights[idx]
-			var flat: int = _flat_area_score(x, z, step)
-
-			if h0 < best_h - 0.0001 or (is_equal_approx(h0, best_h) and flat > best_flat):
-				best_h = h0
-				best_flat = flat
-				best = Vector2i(x, z)
-
-	return best
-
-func _collect_top_peaks(count: int, min_height: float) -> Array[Vector2i]:
-	var peaks: Array[Vector2i] = []
-	var stride: int = max(2, int(round(8.0 / cell_size)))
-
-	for z in range(stride, size_z - stride, stride):
-		for x in range(stride, size_x - stride, stride):
-			var h0: float = _h(x, z)
-			if h0 < min_height:
-				continue
-
-			var is_peak := true
-			for dz in [-1, 0, 1]:
-				for dx in [-1, 0, 1]:
-					if dx == 0 and dz == 0:
-						continue
-					if _h(x + dx * stride, z + dz * stride) > h0:
-						is_peak = false
-						break
-				if not is_peak:
+			var h0 := _h(x, z)
+			var ok := true
+			for n in _neighbors8(Vector2i(x, z)):
+				if _h(n.x, n.y) > h0:
+					ok = false
 					break
+			if ok:
+				cands.append(Vector2i(x, z))
 
-			if is_peak:
-				peaks.append(Vector2i(x, z))
-
-	peaks.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+	cands.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		return _h(a.x, a.y) > _h(b.x, b.y)
 	)
 
-	if peaks.size() > count:
-		peaks.resize(count)
-	return peaks
+	return _pick_spaced(cands, count, min_spacing)
 
-func _mst_edges(nodes: Array[Vector2i]) -> Array:
-	var edges: Array = []
-	if nodes.size() < 2:
-		return edges
+func _pick_valleys(count: int, min_spacing: int) -> Array[Vector2i]:
+	var cands: Array[Vector2i] = []
+	for z in range(1, size_z - 1):
+		for x in range(1, size_x - 1):
+			var h0 := _h(x, z)
+			var ok := true
+			for n in _neighbors8(Vector2i(x, z)):
+				if _h(n.x, n.y) < h0:
+					ok = false
+					break
+			if ok:
+				cands.append(Vector2i(x, z))
 
+	cands.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return _h(a.x, a.y) < _h(b.x, b.y)
+	)
+
+	return _pick_spaced(cands, count, min_spacing)
+
+func _pick_spaced(sorted: Array[Vector2i], count: int, min_spacing: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for p in sorted:
+		var ok := true
+		for q in out:
+			if abs(p.x - q.x) + abs(p.y - q.y) < min_spacing:
+				ok = false
+				break
+		if ok:
+			out.append(p)
+			if out.size() >= count:
+				break
+	return out
+
+func _neighbors8(p: Vector2i) -> Array[Vector2i]:
+	return [
+		Vector2i(p.x + 1, p.y), Vector2i(p.x - 1, p.y),
+		Vector2i(p.x, p.y + 1), Vector2i(p.x, p.y - 1),
+		Vector2i(p.x + 1, p.y + 1), Vector2i(p.x + 1, p.y - 1),
+		Vector2i(p.x - 1, p.y + 1), Vector2i(p.x - 1, p.y - 1),
+	]
+
+func _neighbors4(p: Vector2i) -> Array[Vector2i]:
+	return [
+		Vector2i(p.x + 1, p.y), Vector2i(p.x - 1, p.y),
+		Vector2i(p.x, p.y + 1), Vector2i(p.x, p.y - 1),
+	]
+
+func _mst_edges(points: Array[Vector2i]) -> Array:
+	var n := points.size()
 	var in_tree := PackedByteArray()
-	in_tree.resize(nodes.size())
-	for i in range(in_tree.size()):
-		in_tree[i] = 0
+	in_tree.resize(n)
+	in_tree.fill(0)
+
+	var best_cost := PackedFloat32Array()
+	best_cost.resize(n)
+	for i in range(n):
+		best_cost[i] = 1e30
+
+	var parent := PackedInt32Array()
+	parent.resize(n)
+	for i in range(n):
+		parent[i] = -1
 
 	in_tree[0] = 1
-	var added: int = 1
+	for i in range(1, n):
+		best_cost[i] = _road_edge_cost(points[0], points[i])
+		parent[i] = 0
 
-	while added < nodes.size():
-		var best_i: int = -1
-		var best_j: int = -1
-		var best_d: int = 1 << 30
-
-		for i in range(nodes.size()):
-			if in_tree[i] == 0:
+	var edges: Array = []
+	for _k in range(n - 1):
+		var v := -1
+		var v_cost := 1e30
+		for i in range(n):
+			if in_tree[i] == 1:
 				continue
-			for j in range(nodes.size()):
-				if in_tree[j] == 1:
-					continue
-				var d: int = abs(nodes[i].x - nodes[j].x) + abs(nodes[i].y - nodes[j].y)
-				if d < best_d:
-					best_d = d
-					best_i = i
-					best_j = j
-
-		if best_i == -1:
+			if best_cost[i] < v_cost:
+				v_cost = best_cost[i]
+				v = i
+		if v == -1:
 			break
+		in_tree[v] = 1
+		edges.append([parent[v], v])
 
-		edges.append({ "a": nodes[best_i], "b": nodes[best_j] })
-		in_tree[best_j] = 1
-		added += 1
+		for u in range(n):
+			if in_tree[u] == 1:
+				continue
+			var c := _road_edge_cost(points[v], points[u])
+			if c < best_cost[u]:
+				best_cost[u] = c
+				parent[u] = v
 
 	return edges
 
-func _add_loop_edges(nodes: Array[Vector2i], edges: Array, loops: int) -> void:
-	if nodes.size() < 3:
-		return
+func _road_edge_cost(a: Vector2i, b: Vector2i) -> float:
+	var d := float(abs(a.x - b.x) + abs(a.y - b.y))
+	var dh := absf(_h(a.x, a.y) - _h(b.x, b.y)) / height_step
+	return d + dh * 6.0
 
-	var existing: Dictionary = {}
-	for e in edges:
-		existing[_edge_key(e["a"], e["b"])] = true
-
-	var candidates: Array = []
-	for i in range(nodes.size()):
-		for j in range(i + 1, nodes.size()):
-			var key: String = _edge_key(nodes[i], nodes[j])
-			if existing.has(key):
-				continue
-			var d: int = abs(nodes[i].x - nodes[j].x) + abs(nodes[i].y - nodes[j].y)
-			candidates.append({ "a": nodes[i], "b": nodes[j], "d": d })
-
-	candidates.sort_custom(Callable(self, "_sort_loop_candidates"))
-	var k: int = min(loops, candidates.size())
-	for i in range(k):
-		edges.append({ "a": candidates[i]["a"], "b": candidates[i]["b"] })
-
-func _sort_loop_candidates(a: Dictionary, b: Dictionary) -> bool:
-	return a["d"] < b["d"]
-
-func _edge_key(a: Vector2i, b: Vector2i) -> String:
-	var ax: int = a.x
-	var az: int = a.y
-	var bx: int = b.x
-	var bz: int = b.y
-	if (bx < ax) or (bx == ax and bz < az):
-		ax = b.x
-		az = b.y
-		bx = a.x
-		bz = a.y
-	return str(ax) + "," + str(az) + "->" + str(bx) + "," + str(bz)
-
-func _astar_2d(start: Vector2i, goal: Vector2i, step: float) -> Array[Vector2i]:
+func _astar_road_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 	var open: Array[Vector2i] = [start]
-	var came: Dictionary = {}
+	var came_from: Dictionary = {}
 	var g: Dictionary = {}
 	var f: Dictionary = {}
 
-	var sk: int = start.y * size_x + start.x
+	var sk := start.y * size_x + start.x
 	g[sk] = 0.0
-	f[sk] = float(abs(start.x - goal.x) + abs(start.y - goal.y))
+	f[sk] = float(_manhattan(start, goal))
 
-	var in_open: Dictionary = {}
-	in_open[sk] = true
+	var in_open: Dictionary = { sk: true }
 
 	while not open.is_empty():
-		var best_i: int = 0
-		var best_f: float = 1e30
+		var best_i := 0
+		var best_f := 1e30
 		for i in range(open.size()):
-			var v: Vector2i = open[i]
-			var k: int = v.y * size_x + v.x
-			var fv: float = float(f.get(k, 1e30))
+			var v := open[i]
+			var k := v.y * size_x + v.x
+			var fv := float(f.get(k, 1e30))
 			if fv < best_f:
 				best_f = fv
 				best_i = i
 
-		var cur: Vector2i = open[best_i]
+		var cur := open[best_i]
 		open.remove_at(best_i)
-		in_open.erase(cur.y * size_x + cur.x)
+		var ck := cur.y * size_x + cur.x
+		in_open.erase(ck)
 
 		if cur == goal:
-			return _reconstruct_astar(came, cur)
+			return _reconstruct_path(came_from, cur)
 
-		var ch: float = _h(cur.x, cur.y)
+		var ch := _h(cur.x, cur.y)
+		var neighs := _neighbors8(cur) if road_allow_diagonals else _neighbors4(cur)
 
-		for n in [Vector2i(cur.x + 1, cur.y), Vector2i(cur.x - 1, cur.y), Vector2i(cur.x, cur.y + 1), Vector2i(cur.x, cur.y - 1)]:
+		for n in neighs:
 			if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
 				continue
+			var nk := n.y * size_x + n.x
+			var nh := _h(n.x, n.y)
+			var dh := absf(nh - ch)
 
-			var nh: float = _h(n.x, n.y)
-			var dh: float = nh - ch
-			var max_edge: float = float(road_max_edge_cliff_steps) * step
-			if absf(dh) > max_edge:
-				continue
+			var slope_steps := dh / height_step
+			var slope_pen := slope_steps * slope_steps * road_cliff_penalty
 
-			var slope_pen: float = absf(dh) * 4.0
-			var cliff_pen: float = 0.0
-			if absf(dh) > step + 0.0001:
-				cliff_pen = 25.0 + absf(dh) * 2.0
-
-			var ck: int = cur.y * size_x + cur.x
-			var nk: int = n.y * size_x + n.x
-			var tentative: float = float(g.get(ck, 1e30)) + 1.0 + slope_pen + cliff_pen
+			var step_cost := 1.0 + slope_pen
+			var tentative := float(g.get(ck, 1e30)) + step_cost
 
 			if tentative < float(g.get(nk, 1e30)):
-				came[nk] = cur
+				came_from[nk] = cur
 				g[nk] = tentative
-				f[nk] = tentative + float(abs(n.x - goal.x) + abs(n.y - goal.y))
-
+				f[nk] = tentative + float(_manhattan(n, goal))
 				if not in_open.has(nk):
 					open.append(n)
 					in_open[nk] = true
 
 	return []
 
-func _reconstruct_astar(came: Dictionary, cur: Vector2i) -> Array[Vector2i]:
+func _reconstruct_path(came_from: Dictionary, cur: Vector2i) -> Array[Vector2i]:
 	var path: Array[Vector2i] = [cur]
 	var ck: int = cur.y * size_x + cur.x
-	while came.has(ck):
-		cur = came[ck]
+	while came_from.has(ck):
+		cur = came_from[ck]
 		path.append(cur)
 		ck = cur.y * size_x + cur.x
 	path.reverse()
 	return path
 
-func _carve_road_path(path: Array[Vector2i], _step: float, _run_per_step: int, width: int) -> void:
+func _stamp_road_path(path: Array[Vector2i]) -> void:
 	if path.size() < 2:
 		return
 
-	var w: int = max(1, width)
-	var max_step_allowed: float = maxf(0.001, road_carve_max_step)
+	var prof: Array[float] = []
+	prof.resize(path.size())
+	for i in range(path.size()):
+		prof[i] = _h(path[i].x, path[i].y)
 
-	var cur_h: float = _h(path[0].x, path[0].y)
-	_stamp_road_corridor(path[0], cur_h, w)
+	for _iter in range(4):
+		for i in range(1, prof.size()):
+			prof[i] = clampf(prof[i], prof[i - 1] - height_step, prof[i - 1] + height_step)
+		for i in range(prof.size() - 2, -1, -1):
+			prof[i] = clampf(prof[i], prof[i + 1] - height_step, prof[i + 1] + height_step)
 
-	for i in range(1, path.size()):
-		var p: Vector2i = path[i]
-		var target_h: float = _h(p.x, p.y)
-		var dh: float = target_h - cur_h
+	for i in range(prof.size()):
+		prof[i] = _quantize(prof[i], height_step)
 
-		if absf(dh) > max_step_allowed + 0.0001:
-			cur_h = _quantize(move_toward(cur_h, target_h, max_step_allowed), height_step)
-		else:
-			cur_h = target_h
+	for i in range(path.size()):
+		_paint_road_ribbon(path[i], prof[i])
 
-		_stamp_road_corridor(p, cur_h, w)
+	for i in range(path.size() - 1):
+		var a := path[i]
+		var b := path[i + 1]
+		var dha := prof[i + 1] - prof[i]
+		if dha == height_step:
+			_set_ramp_from_to(a, b)
+		elif dha == -height_step:
+			_set_ramp_from_to(b, a)
 
-func _stamp_road_corridor(p: Vector2i, h: float, w: int) -> void:
-	for dz in range(-w, w + 1):
-		for dx in range(-w, w + 1):
-			var man: int = abs(dx) + abs(dz)
-			if man > w:
+func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
+	var cut_max := float(road_cut_max_steps) * height_step
+	var width := max(1, road_width)
+
+	for dz in range(-width, width + 1):
+		for dx in range(-width, width + 1):
+			var md := abs(dx) + abs(dz)
+			if md > width:
 				continue
-			var x: int = p.x + dx
-			var z: int = p.y + dz
+
+			var x := p.x + dx
+			var z := p.y + dz
 			if x < 0 or x >= size_x or z < 0 or z >= size_z:
 				continue
-			var idx: int = z * size_x + x
-			heights[idx] = _quantize(h, height_step)
+
+			var idx := z * size_x + x
 			road_mask[idx] = 1
+
+			var t := 1.0 - float(md) / float(width + 1)
+			var h0 := heights[idx]
+			var h1 := lerpf(h0, target_h, t)
+			h1 = clampf(h1, h0 - cut_max, 1e30)
+
+			heights[idx] = _quantize(h1, height_step)
+
+func _set_ramp_from_to(low: Vector2i, high: Vector2i) -> void:
+	var dx := high.x - low.x
+	var dz := high.y - low.y
+	var idx := low.y * size_x + low.x
+	if dx == 1 and dz == 0:
+		ramp_dir[idx] = RAMP_PX
+	elif dx == -1 and dz == 0:
+		ramp_dir[idx] = RAMP_NX
+	elif dx == 0 and dz == 1:
+		ramp_dir[idx] = RAMP_PZ
+	elif dx == 0 and dz == -1:
+		ramp_dir[idx] = RAMP_NZ
+
+func _derive_road_ramps() -> void:
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx := z * size_x + x
+			if road_mask[idx] == 0:
+				continue
+			var d := ramp_dir[idx]
+			if d == RAMP_NONE:
+				continue
+
+			var h0 := _h(x, z)
+			var ok := false
+			match d:
+				RAMP_PX:
+					if x + 1 < size_x and _h(x + 1, z) == h0 + height_step:
+						ok = true
+				RAMP_NX:
+					if x - 1 >= 0 and _h(x - 1, z) == h0 + height_step:
+						ok = true
+				RAMP_PZ:
+					if z + 1 < size_z and _h(x, z + 1) == h0 + height_step:
+						ok = true
+				RAMP_NZ:
+					if z - 1 >= 0 and _h(x, z - 1) == h0 + height_step:
+						ok = true
+			if not ok:
+				ramp_dir[idx] = RAMP_NONE
+
+func _connect_one_unroaded_region() -> bool:
+	var regions := _label_regions_by_step(height_step)
+	if regions.size() <= 1:
+		return false
+
+	var road_region := -1
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx := z * size_x + x
+			if road_mask[idx] == 1:
+				road_region = regions[idx]
+				break
+		if road_region != -1:
+			break
+	if road_region == -1:
+		return false
+
+	var best_peak := Vector2i(-1, -1)
+	var best_h := -1e30
+	var best_reg := -1
+
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx := z * size_x + x
+			var r := regions[idx]
+			if r == road_region:
+				continue
+			var h := heights[idx]
+			if h > best_h:
+				best_h = h
+				best_peak = Vector2i(x, z)
+				best_reg = r
+
+	if best_reg == -1:
+		return false
+
+	var road_cell := Vector2i(-1, -1)
+	var best_d := 1 << 30
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx := z * size_x + x
+			if road_mask[idx] == 0:
+				continue
+			var d := abs(x - best_peak.x) + abs(z - best_peak.y)
+			if d < best_d:
+				best_d = d
+				road_cell = Vector2i(x, z)
+
+	if road_cell.x == -1:
+		return false
+
+	var path := _astar_road_path(best_peak, road_cell)
+	if path.is_empty():
+		return false
+	_stamp_road_path(path)
+	return true
+
+func _label_regions_by_step(max_step: float) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(size_x * size_z)
+	out.fill(-1)
+
+	var rid := 0
+	for z in range(size_z):
+		for x in range(size_x):
+			var idx := z * size_x + x
+			if out[idx] != -1:
+				continue
+			var q: Array[Vector2i] = [Vector2i(x, z)]
+			out[idx] = rid
+			while not q.is_empty():
+				var p := q.pop_back()
+				var ph := _h(p.x, p.y)
+				for n in _neighbors4(p):
+					if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
+						continue
+					var ni := n.y * size_x + n.x
+					if out[ni] != -1:
+						continue
+					var nh := _h(n.x, n.y)
+					if absf(nh - ph) > max_step:
+						continue
+					out[ni] = rid
+					q.append(n)
+			rid += 1
+	return out
+
+func _manhattan(a: Vector2i, b: Vector2i) -> int:
+	return abs(a.x - b.x) + abs(a.y - b.y)
+
+func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
+	if x + 1 >= size_x:
+		return false
+	if enable_step_ramps and is_equal_approx(_h(x + 1, z) - _h(x, z), step):
+		return true
+	var idx := z * size_x + x
+	if ramp_dir[idx] == RAMP_PX:
+		return _h(x + 1, z) == _h(x, z) + step
+	if x + 1 < size_x:
+		var idx2 := z * size_x + (x + 1)
+		if ramp_dir[idx2] == RAMP_NX:
+			return _h(x, z) == _h(x + 1, z) + step
+	return false
+
+func _edge_is_ramp_z(x: int, z: int, step: float) -> bool:
+	if z + 1 >= size_z:
+		return false
+	if enable_step_ramps and is_equal_approx(_h(x, z + 1) - _h(x, z), step):
+		return true
+	var idx := z * size_x + x
+	if ramp_dir[idx] == RAMP_PZ:
+		return _h(x, z + 1) == _h(x, z) + step
+	if z + 1 < size_z:
+		var idx2 := (z + 1) * size_x + x
+		if ramp_dir[idx2] == RAMP_NZ:
+			return _h(x, z) == _h(x, z + 1) + step
+	return false
 
 # -----------------------------
 # MESH
@@ -854,12 +906,12 @@ func _build_blocky_mesh_and_collision() -> void:
 
 			# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
 			if enable_step_ramps:
-				if is_equal_approx(h10 - h00, step):
+				if _edge_is_ramp_x(x, z, step):
 					# Ramp rises to the east
 					ramp_east = true
 					b_y = h10
 					c_y = h10
-				if is_equal_approx(h01 - h00, step):
+				if _edge_is_ramp_z(x, z, step):
 					# Ramp rises to the south
 					ramp_south = true
 					c_y = h01
@@ -867,7 +919,7 @@ func _build_blocky_mesh_and_collision() -> void:
 
 			var top_color: Color = terrain_color
 			var top_idx: int = z * size_x + x
-			if top_idx >= 0 and top_idx < road_mask.size() and road_mask[top_idx] == 1:
+			if enable_roads and top_idx >= 0 and top_idx < road_mask.size() and road_mask[top_idx] == 1:
 				top_color = road_color
 
 			_add_quad(
