@@ -4,7 +4,8 @@
 [ext_resource type="Script" uid="uid://c5fqv7m0847vy" path="res://Scripts/free_camera.gd" id="2_u45fm"]
 
 [sub_resource type="StandardMaterial3D" id="2"]
-albedo_color = Color(0.32, 0.68, 0.34, 1)
+albedo_color = Color(1, 1, 1, 1)
+vertex_color_use_as_albedo = true
 
 [sub_resource type="Environment" id="3"]
 background_mode = 1

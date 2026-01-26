@@ -47,10 +47,23 @@ class_name BlockyTerrain
 @export var access_max_iterations: int = 4
 @export var access_min_cliff_steps: int = 2
 
+# Roads (connect unreachable regions)
+@export var build_roads: bool = true
+@export var road_count_budget: int = 32
+@export var road_width_cells: int = 4
+@export var road_run_per_step: int = 3
+@export var road_max_iters: int = 6
+@export var road_min_region_size: int = 64
+@export var road_extra_loops: int = 2
+
+@export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+@export var road_color: Color = Color(0.85, 0.12, 0.12, 1.0)
+
 @onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
 @onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
 
 var heights: PackedFloat32Array
+var road_mask: PackedByteArray
 var _ox: float
 var _oz: float
 
@@ -61,6 +74,12 @@ func generate() -> void:
 	_ox = -float(size_x) * cell_size * 0.5
 	_oz = -float(size_z) * cell_size * 0.5
 	_generate_heights()
+	road_mask = PackedByteArray()
+	road_mask.resize(size_x * size_z)
+	for i in range(road_mask.size()):
+		road_mask[i] = 0
+	if build_roads:
+		_build_roads()
 	if ensure_access:
 		_build_access_ramps()
 	_build_blocky_mesh_and_collision()
@@ -406,6 +425,331 @@ func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -
 			heights[idx] = _quantize(target_height, height_step)
 
 # -----------------------------
+# ROADS
+# -----------------------------
+func _build_roads() -> void:
+	var step: float = maxf(0.001, height_step)
+	var run_per_step: int = max(1, road_run_per_step)
+	var width: int = max(1, road_width_cells)
+
+	var carved_budget: int = max(0, road_count_budget)
+	if carved_budget <= 0:
+		return
+
+	var start_cells: PackedInt32Array = _access_start_cells()
+	if start_cells.is_empty():
+		return
+
+	for _iter in range(road_max_iters):
+		var region_info: Dictionary = _label_regions(step)
+		var labels: PackedInt32Array = region_info["labels"]
+		var region_sizes: PackedInt32Array = region_info["sizes"]
+		var region_count: int = region_info["count"]
+
+		var main_region: int = _find_main_region(labels, start_cells)
+		if main_region < 0:
+			return
+
+		var other_regions: Array[int] = []
+		for r in range(region_count):
+			if r == main_region:
+				continue
+			if region_sizes[r] < road_min_region_size:
+				continue
+			other_regions.append(r)
+
+		if other_regions.is_empty():
+			break
+
+		var anchors: Array[Vector2i] = []
+		anchors.append(_pick_region_anchor(labels, main_region, step))
+		for r in other_regions:
+			anchors.append(_pick_region_anchor(labels, r, step))
+
+		var edges: Array = _mst_edges(anchors)
+		if road_extra_loops > 0:
+			_add_loop_edges(anchors, edges, road_extra_loops)
+
+		for e in edges:
+			if carved_budget <= 0:
+				return
+			var a: Vector2i = e["a"]
+			var b: Vector2i = e["b"]
+			var path: Array[Vector2i] = _astar_2d(a, b, step)
+			if path.size() < 2:
+				continue
+			_carve_road_path(path, step, run_per_step, width)
+			carved_budget -= 1
+
+	for i in range(size_x * size_z):
+		heights[i] = _quantize(heights[i], height_step)
+
+func _label_regions(step: float) -> Dictionary:
+	var labels := PackedInt32Array()
+	labels.resize(size_x * size_z)
+	for i in range(labels.size()):
+		labels[i] = -1
+
+	var sizes: Array[int] = []
+	var region_id: int = 0
+
+	var queue: Array[int] = []
+
+	for start_idx in range(size_x * size_z):
+		if labels[start_idx] != -1:
+			continue
+
+		queue.clear()
+		queue.append(start_idx)
+		labels[start_idx] = region_id
+		var count: int = 0
+
+		var head: int = 0
+		while head < queue.size():
+			var idx: int = queue[head]
+			head += 1
+			count += 1
+
+			var x: int = idx % size_x
+			var z: int = idx / size_x
+			var h0: float = heights[idx]
+
+			_region_try(queue, labels, x - 1, z, region_id, h0, step)
+			_region_try(queue, labels, x + 1, z, region_id, h0, step)
+			_region_try(queue, labels, x, z - 1, region_id, h0, step)
+			_region_try(queue, labels, x, z + 1, region_id, h0, step)
+
+		sizes.append(count)
+		region_id += 1
+
+	var packed_sizes := PackedInt32Array()
+	packed_sizes.resize(sizes.size())
+	for i in range(sizes.size()):
+		packed_sizes[i] = sizes[i]
+
+	return {
+		"labels": labels,
+		"sizes": packed_sizes,
+		"count": region_id
+	}
+
+func _region_try(queue: Array[int], labels: PackedInt32Array, x: int, z: int, rid: int, h0: float, step: float) -> void:
+	if x < 0 or x >= size_x or z < 0 or z >= size_z:
+		return
+	var idx: int = z * size_x + x
+	if labels[idx] != -1:
+		return
+	if absf(heights[idx] - h0) <= step + 0.0001:
+		labels[idx] = rid
+		queue.append(idx)
+
+func _find_main_region(labels: PackedInt32Array, start_cells: PackedInt32Array) -> int:
+	for i in range(start_cells.size()):
+		var idx: int = start_cells[i]
+		if idx >= 0 and idx < labels.size() and labels[idx] >= 0:
+			return labels[idx]
+	return -1
+
+func _pick_region_anchor(labels: PackedInt32Array, rid: int, step: float) -> Vector2i:
+	var best := Vector2i(size_x / 2, size_z / 2)
+	var best_h: float = 1e30
+	var best_flat: int = -1
+
+	for z in range(1, size_z - 1):
+		for x in range(1, size_x - 1):
+			var idx: int = z * size_x + x
+			if labels[idx] != rid:
+				continue
+
+			var h0: float = heights[idx]
+			var flat: int = _flat_area_score(x, z, step)
+
+			if h0 < best_h - 0.0001 or (is_equal_approx(h0, best_h) and flat > best_flat):
+				best_h = h0
+				best_flat = flat
+				best = Vector2i(x, z)
+
+	return best
+
+func _mst_edges(nodes: Array[Vector2i]) -> Array:
+	var edges: Array = []
+	if nodes.size() < 2:
+		return edges
+
+	var in_tree := PackedByteArray()
+	in_tree.resize(nodes.size())
+	for i in range(in_tree.size()):
+		in_tree[i] = 0
+
+	in_tree[0] = 1
+	var added: int = 1
+
+	while added < nodes.size():
+		var best_i: int = -1
+		var best_j: int = -1
+		var best_d: int = 1 << 30
+
+		for i in range(nodes.size()):
+			if in_tree[i] == 0:
+				continue
+			for j in range(nodes.size()):
+				if in_tree[j] == 1:
+					continue
+				var d: int = abs(nodes[i].x - nodes[j].x) + abs(nodes[i].y - nodes[j].y)
+				if d < best_d:
+					best_d = d
+					best_i = i
+					best_j = j
+
+		if best_i == -1:
+			break
+
+		edges.append({ "a": nodes[best_i], "b": nodes[best_j] })
+		in_tree[best_j] = 1
+		added += 1
+
+	return edges
+
+func _add_loop_edges(nodes: Array[Vector2i], edges: Array, loops: int) -> void:
+	if nodes.size() < 3:
+		return
+
+	var existing: Dictionary = {}
+	for e in edges:
+		existing[_edge_key(e["a"], e["b"])] = true
+
+	var candidates: Array = []
+	for i in range(nodes.size()):
+		for j in range(i + 1, nodes.size()):
+			var key: String = _edge_key(nodes[i], nodes[j])
+			if existing.has(key):
+				continue
+			var d: int = abs(nodes[i].x - nodes[j].x) + abs(nodes[i].y - nodes[j].y)
+			candidates.append({ "a": nodes[i], "b": nodes[j], "d": d })
+
+	candidates.sort_custom(Callable(self, "_sort_loop_candidates"))
+	var k: int = min(loops, candidates.size())
+	for i in range(k):
+		edges.append({ "a": candidates[i]["a"], "b": candidates[i]["b"] })
+
+func _sort_loop_candidates(a: Dictionary, b: Dictionary) -> bool:
+	return a["d"] < b["d"]
+
+func _edge_key(a: Vector2i, b: Vector2i) -> String:
+	var ax: int = a.x
+	var az: int = a.y
+	var bx: int = b.x
+	var bz: int = b.y
+	if (bx < ax) or (bx == ax and bz < az):
+		ax = b.x
+		az = b.y
+		bx = a.x
+		bz = a.y
+	return str(ax) + "," + str(az) + "->" + str(bx) + "," + str(bz)
+
+func _astar_2d(start: Vector2i, goal: Vector2i, step: float) -> Array[Vector2i]:
+	var open: Array[Vector2i] = [start]
+	var came: Dictionary = {}
+	var g: Dictionary = {}
+	var f: Dictionary = {}
+
+	var sk: int = start.y * size_x + start.x
+	g[sk] = 0.0
+	f[sk] = float(abs(start.x - goal.x) + abs(start.y - goal.y))
+
+	var in_open: Dictionary = {}
+	in_open[sk] = true
+
+	while not open.is_empty():
+		var best_i: int = 0
+		var best_f: float = 1e30
+		for i in range(open.size()):
+			var v: Vector2i = open[i]
+			var k: int = v.y * size_x + v.x
+			var fv: float = float(f.get(k, 1e30))
+			if fv < best_f:
+				best_f = fv
+				best_i = i
+
+		var cur: Vector2i = open[best_i]
+		open.remove_at(best_i)
+		in_open.erase(cur.y * size_x + cur.x)
+
+		if cur == goal:
+			return _reconstruct_astar(came, cur)
+
+		var ch: float = _h(cur.x, cur.y)
+
+		for n in [Vector2i(cur.x + 1, cur.y), Vector2i(cur.x - 1, cur.y), Vector2i(cur.x, cur.y + 1), Vector2i(cur.x, cur.y - 1)]:
+			if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
+				continue
+
+			var nh: float = _h(n.x, n.y)
+			var dh: float = nh - ch
+
+			var slope_pen: float = absf(dh) * 4.0
+			var cliff_pen: float = 0.0
+			if absf(dh) > step + 0.0001:
+				cliff_pen = 25.0 + absf(dh) * 2.0
+
+			var ck: int = cur.y * size_x + cur.x
+			var nk: int = n.y * size_x + n.x
+			var tentative: float = float(g.get(ck, 1e30)) + 1.0 + slope_pen + cliff_pen
+
+			if tentative < float(g.get(nk, 1e30)):
+				came[nk] = cur
+				g[nk] = tentative
+				f[nk] = tentative + float(abs(n.x - goal.x) + abs(n.y - goal.y))
+
+				if not in_open.has(nk):
+					open.append(n)
+					in_open[nk] = true
+
+	return []
+
+func _reconstruct_astar(came: Dictionary, cur: Vector2i) -> Array[Vector2i]:
+	var path: Array[Vector2i] = [cur]
+	var ck: int = cur.y * size_x + cur.x
+	while came.has(ck):
+		cur = came[ck]
+		path.append(cur)
+		ck = cur.y * size_x + cur.x
+	path.reverse()
+	return path
+
+func _carve_road_path(path: Array[Vector2i], step: float, run_per_step: int, width: int) -> void:
+	if path.size() < 2:
+		return
+
+	var w: int = max(1, width)
+	var start: Vector2i = path[0]
+	var cur_h: float = _h(start.x, start.y)
+
+	for i in range(1, path.size()):
+		var b: Vector2i = path[i]
+
+		var terrain_h: float = _h(b.x, b.y)
+		var max_delta: float = step / float(run_per_step)
+		var desired: float = move_toward(cur_h, terrain_h, max_delta)
+
+		desired = _quantize(desired, height_step)
+		cur_h = desired
+
+		for dz in range(-w, w + 1):
+			for dx in range(-w, w + 1):
+				var rx: int = b.x + dx
+				var rz: int = b.y + dz
+				if rx < 0 or rx >= size_x or rz < 0 or rz >= size_z:
+					continue
+				var idx: int = rz * size_x + rx
+
+				var man: int = abs(dx) + abs(dz)
+				var t: float = clampf(1.0 - float(man) / float(w + 1), 0.0, 1.0)
+
+				heights[idx] = _quantize(lerpf(heights[idx], desired, t), height_step)
+				road_mask[idx] = 1
+
+# -----------------------------
 # MESH
 # -----------------------------
 func _build_blocky_mesh_and_collision() -> void:
@@ -444,6 +788,11 @@ func _build_blocky_mesh_and_collision() -> void:
 					c_y = h01
 					d_y = h01
 
+			var top_color: Color = terrain_color
+			var top_idx: int = z * size_x + x
+			if top_idx >= 0 and top_idx < road_mask.size() and road_mask[top_idx] == 1:
+				top_color = road_color
+
 			_add_quad(
 				st,
 				_pos(x,     z,     a_y),
@@ -453,7 +802,8 @@ func _build_blocky_mesh_and_collision() -> void:
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
-				Vector2(float(x), float(z + 1)) * uv_scale_top
+				Vector2(float(x), float(z + 1)) * uv_scale_top,
+				top_color
 			)
 
 			# Walls: only where neighbor is lower AND not replaced by a ramp on that edge
@@ -464,73 +814,73 @@ func _build_blocky_mesh_and_collision() -> void:
 
 			# North edge (no ramp handled here)
 			if z > 0 and hn < h00:
-				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall)
+				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall, terrain_color)
 
 			# West edge (no ramp handled here)
 			if x > 0 and hw < h00:
-				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall)
+				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall, terrain_color)
 
 			# South edge: skip the wall if this cell ramps south into it
 			if hs < h00 and not ramp_south:
-				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall)
+				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall, terrain_color)
 
 			# East edge: skip the wall if this cell ramps east into it
 			if he < h00 and not ramp_east:
-				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall)
+				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall, terrain_color)
 
-	_add_box_walls(st, uv_scale_wall)
+	_add_box_walls(st, uv_scale_wall, terrain_color)
 
 	if build_ceiling:
-		_add_ceiling(st)
+		_add_ceiling(st, terrain_color)
 
 	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
 
-func _add_box_walls(st: SurfaceTool, uv_scale_wall: float) -> void:
+func _add_box_walls(st: SurfaceTool, uv_scale_wall: float, color: Color) -> void:
 	var floor_y: float = minf(outer_floor_height, min_height)
 	var top_y: float = box_height
 
 	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, 0, floor_y, top_y, true, uv_scale_wall)
+		_add_wall_z_one_sided(st, x, 0, floor_y, top_y, true, uv_scale_wall, color)
 	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, size_z - 1, floor_y, top_y, false, uv_scale_wall)
+		_add_wall_z_one_sided(st, x, size_z - 1, floor_y, top_y, false, uv_scale_wall, color)
 
 	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, 0, z, floor_y, top_y, true, uv_scale_wall)
+		_add_wall_x_one_sided(st, 0, z, floor_y, top_y, true, uv_scale_wall, color)
 	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, size_x - 1, z, floor_y, top_y, false, uv_scale_wall)
+		_add_wall_x_one_sided(st, size_x - 1, z, floor_y, top_y, false, uv_scale_wall, color)
 
-func _add_ceiling(st: SurfaceTool) -> void:
+func _add_ceiling(st: SurfaceTool, color: Color) -> void:
 	var y: float = box_height
 	var a: Vector3 = _pos(0, 0, y)
 	var b: Vector3 = _pos(size_x - 1, 0, y)
 	var c: Vector3 = _pos(size_x - 1, size_z - 1, y)
 	var d: Vector3 = _pos(0, size_z - 1, y)
-	_add_quad(st, a, d, c, b, Vector2(0,0), Vector2(0,1), Vector2(1,1), Vector2(1,0))
+	_add_quad(st, a, d, c, b, Vector2(0,0), Vector2(0,1), Vector2(1,1), Vector2(1,0), color)
 
 # -----------------------------
 # Geometry helpers
 # -----------------------------
 func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
-	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2) -> void:
-	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(ub); st.add_vertex(b)
-	st.set_uv(uc); st.add_vertex(c)
-	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(uc); st.add_vertex(c)
-	st.set_uv(ud); st.add_vertex(d)
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2, color: Color) -> void:
+	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+	st.set_color(color); st.set_uv(ub); st.add_vertex(b)
+	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
 
-func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
-	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, north, uv_scale)
-	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, not north, uv_scale)
+func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float, color: Color) -> void:
+	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, north, uv_scale, color)
+	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, not north, uv_scale, color)
 
-func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
-	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, west, uv_scale)
-	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, not west, uv_scale)
+func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float, color: Color) -> void:
+	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, west, uv_scale, color)
+	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, not west, uv_scale, color)
 
-func _add_wall_z_one_sided(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
+func _add_wall_z_one_sided(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float, color: Color) -> void:
 	var step: float = maxf(0.001, height_step)
 	var y0: float = h_low
 	while y0 < h_high - 0.0001:
@@ -547,13 +897,13 @@ func _add_wall_z_one_sided(st: SurfaceTool, x: int, z_edge: int, h_low: float, h
 		var uv3: Vector2 = Vector2(0.0, y1 * uv_scale)
 
 		if north:
-			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
+			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
 		else:
-			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
+			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, color)
 
 		y0 = y1
 
-func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
+func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float, color: Color) -> void:
 	var step: float = maxf(0.001, height_step)
 	var y0: float = h_low
 	while y0 < h_high - 0.0001:
@@ -570,8 +920,8 @@ func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h
 		var uv3: Vector2 = Vector2(0.0, y1 * uv_scale)
 
 		if west:
-			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
+			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, color)
 		else:
-			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
+			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
 
 		y0 = y1
