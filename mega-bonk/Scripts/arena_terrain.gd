@@ -478,6 +478,9 @@ func _build_roads() -> void:
 
 		var anchors: Array[Vector2i] = []
 		anchors.append(_pick_region_anchor(labels, main_region, step))
+		var peak_anchors: Array[Vector2i] = _collect_top_peaks(8, 12.0)
+		for p in peak_anchors:
+			anchors.append(p)
 		for r in other_regions:
 			anchors.append(_pick_region_anchor(labels, r, step))
 
@@ -585,6 +588,38 @@ func _pick_region_anchor(labels: PackedInt32Array, rid: int, step: float) -> Vec
 				best = Vector2i(x, z)
 
 	return best
+
+func _collect_top_peaks(count: int, min_height: float) -> Array[Vector2i]:
+	var peaks: Array[Vector2i] = []
+	var stride: int = max(2, int(round(8.0 / cell_size)))
+
+	for z in range(stride, size_z - stride, stride):
+		for x in range(stride, size_x - stride, stride):
+			var h0: float = _h(x, z)
+			if h0 < min_height:
+				continue
+
+			var is_peak := true
+			for dz in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dz == 0:
+						continue
+					if _h(x + dx * stride, z + dz * stride) > h0:
+						is_peak = false
+						break
+				if not is_peak:
+					break
+
+			if is_peak:
+				peaks.append(Vector2i(x, z))
+
+	peaks.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return _h(a.x, a.y) > _h(b.x, b.y)
+	)
+
+	if peaks.size() > count:
+		peaks.resize(count)
+	return peaks
 
 func _mst_edges(nodes: Array[Vector2i]) -> Array:
 	var edges: Array = []
@@ -739,59 +774,25 @@ func _carve_road_path(path: Array[Vector2i], step: float, run_per_step: int, wid
 	if path.size() < 2:
 		return
 
+	var _unused_step := step
+	var _unused_run_per_step := run_per_step
 	var w: int = max(1, width)
 	var max_step_allowed: float = maxf(0.001, road_carve_max_step)
 
-	var cur: Vector2i = path[0]
-	var cur_h: float = _h(cur.x, cur.y)
-
-	_mark_road_disk(cur, cur_h, w)
+	var cur_h: float = _h(path[0].x, path[0].y)
+	_mark_road_disk(path[0], cur_h, w)
 
 	for i in range(1, path.size()):
-		var nxt: Vector2i = path[i]
-		var dx: int = nxt.x - cur.x
-		var dz: int = nxt.y - cur.y
-		if (abs(dx) + abs(dz)) != 1:
-			cur = nxt
-			cur_h = _h(cur.x, cur.y)
-			continue
-
-		var target_h: float = _h(nxt.x, nxt.y)
+		var p: Vector2i = path[i]
+		var target_h: float = _h(p.x, p.y)
 		var dh: float = target_h - cur_h
 
-		if absf(dh) <= max_step_allowed + 0.0001:
-			cur = nxt
-			cur_h = target_h
-			_mark_road_disk(cur, cur_h, w)
-			continue
-
-		if not road_expand_multistep:
-			cur = nxt
+		if absf(dh) > max_step_allowed + 0.0001:
 			cur_h = _quantize(move_toward(cur_h, target_h, max_step_allowed), height_step)
-			_mark_road_disk(cur, cur_h, w)
-			continue
+		else:
+			cur_h = target_h
 
-		var steps_needed: int = int(ceil(absf(dh) / max_step_allowed))
-		var run_len: int = steps_needed * max(1, run_per_step)
-		var sign_dir: float = 1.0 if dh > 0.0 else -1.0
-
-		for r in range(1, run_len + 1):
-			var t_steps: int = int(floor(float(r) / float(max(1, run_per_step))))
-			var ramp_h: float = cur_h + sign_dir * max_step_allowed * float(t_steps)
-			ramp_h = _quantize(ramp_h, height_step)
-
-			var rx: int = cur.x + dx * r
-			var rz: int = cur.y + dz * r
-			if rx < 0 or rx >= size_x or rz < 0 or rz >= size_z:
-				break
-
-			_mark_road_disk(Vector2i(rx, rz), ramp_h, w)
-
-		cur = nxt
-		cur_h = _h(cur.x, cur.y)
-
-		if road_debug_print:
-			print("Road ramp: steps=", steps_needed, " run_len=", run_len, " dh=", dh)
+		_mark_road_disk(p, cur_h, w)
 
 func _mark_road_disk(p: Vector2i, h: float, w: int) -> void:
 	for dz in range(-w, w + 1):
