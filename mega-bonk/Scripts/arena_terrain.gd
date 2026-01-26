@@ -523,7 +523,7 @@ func _pick_spaced(sorted: Array[Vector2i], count: int, min_spacing: int) -> Arra
 	for p in sorted:
 		var ok := true
 		for q in out:
-			if abs(p.x - q.x) + abs(p.y - q.y) < min_spacing:
+			if absi(p.x - q.x) + absi(p.y - q.y) < min_spacing:
 				ok = false
 				break
 		if ok:
@@ -593,7 +593,7 @@ func _mst_edges(points: Array[Vector2i]) -> Array:
 	return edges
 
 func _road_edge_cost(a: Vector2i, b: Vector2i) -> float:
-	var d := float(abs(a.x - b.x) + abs(a.y - b.y))
+	var d := float(absi(a.x - b.x) + absi(a.y - b.y))
 	var dh := absf(_h(a.x, a.y) - _h(b.x, b.y)) / height_step
 	return d + dh * 6.0
 
@@ -803,7 +803,7 @@ func _connect_one_unroaded_region() -> bool:
 			var idx := z * size_x + x
 			if road_mask[idx] == 0:
 				continue
-			var d := abs(x - best_peak.x) + abs(z - best_peak.y)
+			var d: int = absi(x - best_peak.x) + absi(z - best_peak.y)
 			if d < best_d:
 				best_d = d
 				road_cell = Vector2i(x, z)
@@ -831,7 +831,8 @@ func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 			var q: Array[Vector2i] = [Vector2i(x, z)]
 			out[idx] = rid
 			while not q.is_empty():
-				var p := q.pop_back()
+				var p: Vector2i = q[q.size() - 1]
+				q.remove_at(q.size() - 1)
 				var ph := _h(p.x, p.y)
 				for n in _neighbors4(p):
 					if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
@@ -848,7 +849,7 @@ func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 	return out
 
 func _manhattan(a: Vector2i, b: Vector2i) -> int:
-	return abs(a.x - b.x) + abs(a.y - b.y)
+	return absi(a.x - b.x) + absi(a.y - b.y)
 
 func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
 	if x + 1 >= size_x:
