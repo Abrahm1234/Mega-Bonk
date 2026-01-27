@@ -1078,34 +1078,34 @@ func _build_blocky_mesh_and_collision() -> void:
 			var ramp_east: bool = false
 			var ramp_south: bool = false
 
-				# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
-				if enable_step_ramps:
-					var do_x: bool = _edge_is_ramp_x(x, z, step)
-					var do_z: bool = _edge_is_ramp_z(x, z, step)
+			# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
+			if enable_step_ramps:
+				var do_x: bool = _edge_is_ramp_x(x, z, step)
+				var do_z: bool = _edge_is_ramp_z(x, z, step)
 
-					if do_x and do_z:
-						var score_x: int = 0
-						var score_z: int = 0
-						if enable_roads:
-							if x + 1 < size_x and road_mask[z * size_x + (x + 1)] == 1:
-								score_x += 10
-							if z + 1 < size_z and road_mask[(z + 1) * size_x + x] == 1:
-								score_z += 10
-						if score_x >= score_z:
-							do_z = false
-						else:
-							do_x = false
+				if do_x and do_z:
+					var score_x: int = 0
+					var score_z: int = 0
+					if enable_roads:
+						if x + 1 < size_x and road_mask[z * size_x + (x + 1)] == 1:
+							score_x += 10
+						if z + 1 < size_z and road_mask[(z + 1) * size_x + x] == 1:
+							score_z += 10
+					if score_x >= score_z:
+						do_z = false
+					else:
+						do_x = false
 
-					if do_x:
-						# Ramp rises to the east
-						ramp_east = true
-						b_y = h10
-						c_y = h10
-					elif do_z:
-						# Ramp rises to the south
-						ramp_south = true
-						c_y = h01
-						d_y = h01
+				if do_x:
+					# Ramp rises to the east
+					ramp_east = true
+					b_y = h10
+					c_y = h10
+				elif do_z:
+					# Ramp rises to the south
+					ramp_south = true
+					c_y = h01
+					d_y = h01
 
 			var top_color: Color = road_color if is_road else terrain_color
 
