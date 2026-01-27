@@ -58,6 +58,8 @@ class_name BlockyTerrain
 @export var road_allow_diagonals: bool = false
 @export var road_cut_max_steps: int = 0
 @export var road_turn_penalty: float = 2.0
+@export var road_smooth_los: bool = true
+@export var road_smooth_max_hops: int = 64
 @export var road_peak_height_percentile: float = 0.88
 @export var road_peak_min_height_abs: float = 0.0
 @export var road_peak_region_step_merge: int = 1
@@ -78,6 +80,7 @@ var heights: PackedFloat32Array
 var road_mask: PackedByteArray
 var ramp_dir: PackedByteArray
 var ramp_kind: PackedByteArray
+var road_flow: PackedByteArray
 var _ox: float
 var _oz: float
 
@@ -89,6 +92,9 @@ const RAMP_NZ: int = 8
 const CELL_RAMP_NONE: int = 0
 const CELL_RAMP_EAST: int = 1
 const CELL_RAMP_SOUTH: int = 2
+const FLOW_NONE: int = 0
+const FLOW_X: int = 1
+const FLOW_Z: int = 2
 
 class CellCorners:
 	var a: float
@@ -121,6 +127,10 @@ func generate() -> void:
 	ramp_dir.resize(size_x * size_z)
 	for i in range(ramp_dir.size()):
 		ramp_dir[i] = RAMP_NONE
+	road_flow = PackedByteArray()
+	road_flow.resize(size_x * size_z)
+	for i in range(road_flow.size()):
+		road_flow[i] = FLOW_NONE
 	# 1) Ensure access first so later roads carve on reachable terrain.
 	if ensure_access:
 		_build_access_ramps()
@@ -476,6 +486,7 @@ func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -
 func _build_road_network() -> void:
 	road_mask.fill(0)
 	ramp_dir.fill(RAMP_NONE)
+	road_flow.fill(FLOW_NONE)
 
 	var peaks: Array[Vector2i] = _pick_peak_anchors_threshold()
 	var valleys: Array[Vector2i] = _pick_valleys(road_valley_count, road_min_anchor_spacing)
@@ -492,9 +503,12 @@ func _build_road_network() -> void:
 		var path: Array[Vector2i] = _astar_road_path(a, b)
 		if path.is_empty():
 			continue
-		if road_allow_diagonals:
-			path = _expand_diagonals_to_4(path)
-		_stamp_road_path(path)
+		var waypoints: Array[Vector2i] = path
+		if road_smooth_los:
+			waypoints = _simplify_path_los(waypoints)
+		var dense: Array[Vector2i] = _rasterize_waypoints_4(waypoints)
+		_write_flow_from_path(dense)
+		_stamp_road_path(dense)
 
 	if road_connect_all_regions:
 		var guard: int = 0
@@ -711,6 +725,12 @@ func _road_edge_cost(a: Vector2i, b: Vector2i) -> float:
 	var dh := absf(_h(a.x, a.y) - _h(b.x, b.y)) / height_step
 	return d + dh * 6.0
 
+func _flow_set(x: int, z: int, v: int) -> void:
+	road_flow[z * size_x + x] = v
+
+func _flow_get(x: int, z: int) -> int:
+	return int(road_flow[z * size_x + x])
+
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	var dx: int = absi(a.x - b.x)
 	var dz: int = absi(a.y - b.y)
@@ -801,38 +821,96 @@ func _reconstruct_path(came_from: Dictionary, cur: Vector2i) -> Array[Vector2i]:
 func _in_bounds(p: Vector2i) -> bool:
 	return p.x >= 0 and p.x < size_x and p.y >= 0 and p.y < size_z
 
-func _expand_diagonals_to_4(path: Array[Vector2i]) -> Array[Vector2i]:
-	if path.size() < 2:
-		return path
-
+func _line_4_connected_supercover(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	out.append(path[0])
+	var x0: int = a.x
+	var y0: int = a.y
+	var x1: int = b.x
+	var y1: int = b.y
 
-	for i in range(1, path.size()):
-		var a: Vector2i = out[out.size() - 1]
-		var b: Vector2i = path[i]
-		var dx: int = b.x - a.x
-		var dz: int = b.y - a.y
+	var dx: int = absi(x1 - x0)
+	var dy: int = absi(y1 - y0)
+	var sx: int = 1 if x0 < x1 else -1
+	var sy: int = 1 if y0 < y1 else -1
+	var err: int = dx - dy
 
-		if absi(dx) == 1 and absi(dz) == 1:
-			var opt1: Vector2i = Vector2i(a.x + dx, a.y)
-			var opt2: Vector2i = Vector2i(a.x, a.y + dz)
+	out.append(Vector2i(x0, y0))
 
-			var pick: Vector2i = opt1
-			if _in_bounds(opt1) and _in_bounds(opt2):
-				var h_a: float = _h(a.x, a.y)
-				var c1: float = absf(_h(opt1.x, opt1.y) - h_a) + absf(_h(b.x, b.y) - _h(opt1.x, opt1.y))
-				var c2: float = absf(_h(opt2.x, opt2.y) - h_a) + absf(_h(b.x, b.y) - _h(opt2.x, opt2.y))
-				pick = opt1 if c1 <= c2 else opt2
-			elif _in_bounds(opt2):
-				pick = opt2
+	while not (x0 == x1 and y0 == y1):
+		var e2: int = err * 2
+		var step_x: bool = e2 > -dy
+		var step_y: bool = e2 < dx
 
-			if out[out.size() - 1] != pick:
-				out.append(pick)
-
-		out.append(b)
+		if step_x and step_y:
+			if dx >= dy:
+				err -= dy
+				x0 += sx
+				out.append(Vector2i(x0, y0))
+				err += dx
+				y0 += sy
+				out.append(Vector2i(x0, y0))
+			else:
+				err += dx
+				y0 += sy
+				out.append(Vector2i(x0, y0))
+				err -= dy
+				x0 += sx
+				out.append(Vector2i(x0, y0))
+		elif step_x:
+			err -= dy
+			x0 += sx
+			out.append(Vector2i(x0, y0))
+		else:
+			err += dx
+			y0 += sy
+			out.append(Vector2i(x0, y0))
 
 	return out
+
+func _rasterize_waypoints_4(waypoints: Array[Vector2i]) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if waypoints.is_empty():
+		return out
+	out.append(waypoints[0])
+	for i in range(waypoints.size() - 1):
+		var seg: Array[Vector2i] = _line_4_connected_supercover(waypoints[i], waypoints[i + 1])
+		for j in range(1, seg.size()):
+			out.append(seg[j])
+	return out
+
+func _has_los(a: Vector2i, b: Vector2i) -> bool:
+	var seg: Array[Vector2i] = _line_4_connected_supercover(a, b)
+	for c: Vector2i in seg:
+		if not _in_bounds(c):
+			return false
+	return true
+
+func _simplify_path_los(path: Array[Vector2i]) -> Array[Vector2i]:
+	if path.size() <= 2:
+		return path
+	var out: Array[Vector2i] = []
+	var i: int = 0
+	out.append(path[0])
+	while i < path.size() - 1:
+		var best_j: int = i + 1
+		var j_limit: int = mini(path.size() - 1, i + road_smooth_max_hops)
+		for j in range(i + 2, j_limit + 1):
+			if _has_los(path[i], path[j]):
+				best_j = j
+		out.append(path[best_j])
+		i = best_j
+	return out
+
+func _write_flow_from_path(dense: Array[Vector2i]) -> void:
+	for i in range(dense.size() - 1):
+		var a: Vector2i = dense[i]
+		var b: Vector2i = dense[i + 1]
+		var dx: int = b.x - a.x
+		var dz: int = b.y - a.y
+		if absi(dx) > absi(dz):
+			_flow_set(a.x, a.y, FLOW_X)
+		elif absi(dz) > absi(dx):
+			_flow_set(a.x, a.y, FLOW_Z)
 
 func _stamp_road_path(path: Array[Vector2i]) -> void:
 	if path.size() < 2:
@@ -1058,9 +1136,12 @@ func _connect_one_unroaded_region() -> bool:
 	var path := _astar_road_path(best_peak, road_cell)
 	if path.is_empty():
 		return false
-	if road_allow_diagonals:
-		path = _expand_diagonals_to_4(path)
-	_stamp_road_path(path)
+	var waypoints: Array[Vector2i] = path
+	if road_smooth_los:
+		waypoints = _simplify_path_los(waypoints)
+	var dense: Array[Vector2i] = _rasterize_waypoints_4(waypoints)
+	_write_flow_from_path(dense)
+	_stamp_road_path(dense)
 	return true
 
 func _label_regions_by_step(max_step: float) -> PackedInt32Array:
@@ -1134,17 +1215,23 @@ func _compute_ramp_kind() -> void:
 			var do_x: bool = enable_step_ramps and _edge_is_ramp_x(x, z, step)
 			var do_z: bool = enable_step_ramps and _edge_is_ramp_z(x, z, step)
 			if do_x and do_z:
-				var score_x: int = 0
-				var score_z: int = 0
-				if enable_roads:
-					if road_mask[z * size_x + (x + 1)] == 1:
-						score_x += 10
-					if road_mask[(z + 1) * size_x + x] == 1:
-						score_z += 10
-				if score_x >= score_z:
+				var flow: int = _flow_get(x, z)
+				if flow == FLOW_X:
 					do_z = false
-				else:
+				elif flow == FLOW_Z:
 					do_x = false
+				else:
+					var score_x: int = 0
+					var score_z: int = 0
+					if enable_roads:
+						if road_mask[z * size_x + (x + 1)] == 1:
+							score_x += 10
+						if road_mask[(z + 1) * size_x + x] == 1:
+							score_z += 10
+					if score_x >= score_z:
+						do_z = false
+					else:
+						do_x = false
 			var kind: int = CELL_RAMP_NONE
 			if do_x:
 				kind = CELL_RAMP_EAST
