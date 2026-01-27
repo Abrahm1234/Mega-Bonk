@@ -1042,9 +1042,12 @@ func _build_blocky_mesh_and_collision() -> void:
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
 	var step: float = height_step
+	var floor_y: float = minf(outer_floor_height, min_height)
 
 	for z in range(size_z - 1):
 		for x in range(size_x - 1):
+			var top_idx: int = z * size_x + x
+			var is_road: bool = enable_roads and road_mask[top_idx] == 1
 			var h00: float = _h(x, z)
 			var h10: float = _h(x + 1, z)
 			var h01: float = _h(x, z + 1)
@@ -1071,10 +1074,7 @@ func _build_blocky_mesh_and_collision() -> void:
 					c_y = h01
 					d_y = h01
 
-			var top_color: Color = terrain_color
-			var top_idx: int = z * size_x + x
-			if enable_roads and top_idx >= 0 and top_idx < road_mask.size() and road_mask[top_idx] == 1:
-				top_color = road_color
+			var top_color: Color = road_color if is_road else terrain_color
 
 			_add_quad(
 				st,
@@ -1094,22 +1094,44 @@ func _build_blocky_mesh_and_collision() -> void:
 			var hs: float = _h(x, z + 1)
 			var hw: float = _h(x - 1, z) if x > 0 else h00
 			var he: float = _h(x + 1, z)
+			var road_n: bool = z > 0 and enable_roads and road_mask[(z - 1) * size_x + x] == 1
+			var road_s: bool = enable_roads and road_mask[(z + 1) * size_x + x] == 1
+			var road_w: bool = x > 0 and enable_roads and road_mask[z * size_x + (x - 1)] == 1
+			var road_e: bool = enable_roads and road_mask[z * size_x + (x + 1)] == 1
 
 			# North edge (no ramp handled here)
-			if z > 0 and hn < h00:
+			if z > 0 and hn < h00 and not is_road and not road_n:
 				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall, terrain_color)
 
 			# West edge (no ramp handled here)
-			if x > 0 and hw < h00:
+			if x > 0 and hw < h00 and not is_road and not road_w:
 				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall, terrain_color)
 
 			# South edge: skip the wall if this cell ramps south into it
-			if hs < h00 and not ramp_south:
+			if hs < h00 and not ramp_south and not is_road and not road_s:
 				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall, terrain_color)
 
 			# East edge: skip the wall if this cell ramps east into it
-			if he < h00 and not ramp_east:
+			if he < h00 and not ramp_east and not is_road and not road_e:
 				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall, terrain_color)
+
+			if is_road:
+				if z > 0 and not road_n:
+					var bn0: float = _h(x, z - 1) if z > 0 else floor_y
+					var bn1: float = _h(x + 1, z - 1) if z > 0 else floor_y
+					_add_road_skirt_z(st, x, z, a_y, b_y, bn0, bn1, true, uv_scale_wall, road_color)
+				if not road_s:
+					var bs0: float = _h(x, z + 1)
+					var bs1: float = _h(x + 1, z + 1)
+					_add_road_skirt_z(st, x, z + 1, d_y, c_y, bs0, bs1, false, uv_scale_wall, road_color)
+				if x > 0 and not road_w:
+					var bw0: float = _h(x - 1, z) if x > 0 else floor_y
+					var bw1: float = _h(x - 1, z + 1) if x > 0 else floor_y
+					_add_road_skirt_x(st, x, z, a_y, d_y, bw0, bw1, true, uv_scale_wall, road_color)
+				if not road_e:
+					var be0: float = _h(x + 1, z)
+					var be1: float = _h(x + 1, z + 1)
+					_add_road_skirt_x(st, x + 1, z, b_y, c_y, be0, be1, false, uv_scale_wall, road_color)
 
 	_add_box_walls(st, uv_scale_wall, terrain_color)
 
@@ -1208,3 +1230,37 @@ func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h
 			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
 
 		y0 = y1
+
+func _add_road_skirt_z(st: SurfaceTool, x: int, z_edge: int, top0: float, top1: float, bottom0: float, bottom1: float,
+		north: bool, uv_scale: float, color: Color) -> void:
+	var p0: Vector3 = _pos(x,     z_edge, top0)
+	var p1: Vector3 = _pos(x + 1, z_edge, top1)
+	var p2: Vector3 = _pos(x + 1, z_edge, bottom1)
+	var p3: Vector3 = _pos(x,     z_edge, bottom0)
+
+	var uv0: Vector2 = Vector2(0.0, top0 * uv_scale)
+	var uv1: Vector2 = Vector2(cell_size * uv_scale, top1 * uv_scale)
+	var uv2: Vector2 = Vector2(cell_size * uv_scale, bottom1 * uv_scale)
+	var uv3: Vector2 = Vector2(0.0, bottom0 * uv_scale)
+
+	if north:
+		_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
+	else:
+		_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, color)
+
+func _add_road_skirt_x(st: SurfaceTool, x_edge: int, z: int, top0: float, top1: float, bottom0: float, bottom1: float,
+		west: bool, uv_scale: float, color: Color) -> void:
+	var p0: Vector3 = _pos(x_edge, z,     top0)
+	var p1: Vector3 = _pos(x_edge, z + 1, top1)
+	var p2: Vector3 = _pos(x_edge, z + 1, bottom1)
+	var p3: Vector3 = _pos(x_edge, z,     bottom0)
+
+	var uv0: Vector2 = Vector2(0.0, top0 * uv_scale)
+	var uv1: Vector2 = Vector2(cell_size * uv_scale, top1 * uv_scale)
+	var uv2: Vector2 = Vector2(cell_size * uv_scale, bottom1 * uv_scale)
+	var uv3: Vector2 = Vector2(0.0, bottom0 * uv_scale)
+
+	if west:
+		_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, color)
+	else:
+		_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
