@@ -1090,9 +1090,9 @@ func _build_blocky_mesh_and_collision() -> void:
 			)
 
 			# Walls: only where neighbor is lower AND not replaced by a ramp on that edge
-			var hn: float = _h(x, z - 1) if z > 0 else h00
+			var hn: float = _h(x, z - 1) if z > 0 else floor_y
 			var hs: float = _h(x, z + 1)
-			var hw: float = _h(x - 1, z) if x > 0 else h00
+			var hw: float = _h(x - 1, z) if x > 0 else floor_y
 			var he: float = _h(x + 1, z)
 			var road_n: bool = z > 0 and enable_roads and road_mask[(z - 1) * size_x + x] == 1
 			var road_s: bool = enable_roads and road_mask[(z + 1) * size_x + x] == 1
@@ -1100,38 +1100,30 @@ func _build_blocky_mesh_and_collision() -> void:
 			var road_e: bool = enable_roads and road_mask[z * size_x + (x + 1)] == 1
 
 			# North edge (no ramp handled here)
-			if z > 0 and hn < h00 and not is_road and not road_n:
-				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall, terrain_color)
+			if z > 0 and not is_road and not road_n:
+				_add_edge_face_z(st, x, z, a_y, b_y, hn, true, uv_scale_wall, terrain_color)
 
 			# West edge (no ramp handled here)
-			if x > 0 and hw < h00 and not is_road and not road_w:
-				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall, terrain_color)
+			if x > 0 and not is_road and not road_w:
+				_add_edge_face_x(st, x, z, a_y, d_y, hw, true, uv_scale_wall, terrain_color)
 
 			# South edge: skip the wall if this cell ramps south into it
-			if hs < h00 and not ramp_south and not is_road and not road_s:
-				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall, terrain_color)
+			if not is_road and not road_s:
+				_add_edge_face_z(st, x, z + 1, d_y, c_y, hs, false, uv_scale_wall, terrain_color)
 
 			# East edge: skip the wall if this cell ramps east into it
-			if he < h00 and not ramp_east and not is_road and not road_e:
-				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall, terrain_color)
+			if not is_road and not road_e:
+				_add_edge_face_x(st, x + 1, z, b_y, c_y, he, false, uv_scale_wall, terrain_color)
 
 			if is_road:
 				if z > 0 and not road_n:
-					var bn0: float = _h(x, z - 1) if z > 0 else floor_y
-					var bn1: float = _h(x + 1, z - 1) if z > 0 else floor_y
-					_add_road_skirt_z(st, x, z, a_y, b_y, bn0, bn1, true, uv_scale_wall, road_color)
+					_add_edge_face_z(st, x, z, a_y, b_y, hn, true, uv_scale_wall, road_color)
 				if not road_s:
-					var bs0: float = _h(x, z + 1)
-					var bs1: float = _h(x + 1, z + 1)
-					_add_road_skirt_z(st, x, z + 1, d_y, c_y, bs0, bs1, false, uv_scale_wall, road_color)
+					_add_edge_face_z(st, x, z + 1, d_y, c_y, hs, false, uv_scale_wall, road_color)
 				if x > 0 and not road_w:
-					var bw0: float = _h(x - 1, z) if x > 0 else floor_y
-					var bw1: float = _h(x - 1, z + 1) if x > 0 else floor_y
-					_add_road_skirt_x(st, x, z, a_y, d_y, bw0, bw1, true, uv_scale_wall, road_color)
+					_add_edge_face_x(st, x, z, a_y, d_y, hw, true, uv_scale_wall, road_color)
 				if not road_e:
-					var be0: float = _h(x + 1, z)
-					var be1: float = _h(x + 1, z + 1)
-					_add_road_skirt_x(st, x + 1, z, b_y, c_y, be0, be1, false, uv_scale_wall, road_color)
+					_add_edge_face_x(st, x + 1, z, b_y, c_y, he, false, uv_scale_wall, road_color)
 
 	_add_box_walls(st, uv_scale_wall, terrain_color)
 
@@ -1264,3 +1256,23 @@ func _add_road_skirt_x(st: SurfaceTool, x_edge: int, z: int, top0: float, top1: 
 		_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3, color)
 	else:
 		_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3, color)
+
+const EPS: float = 0.0001
+
+func _add_edge_face_z(st: SurfaceTool, x: int, z_edge: int, top0: float, top1: float, neighbor_h: float, north: bool,
+		uv_scale: float, color: Color) -> void:
+	var b0: float = minf(neighbor_h, top0)
+	var b1: float = minf(neighbor_h, top1)
+	if (top0 - b0) <= EPS and (top1 - b1) <= EPS:
+		return
+	_add_road_skirt_z(st, x, z_edge, top0, top1, b0, b1, north, uv_scale, color)
+	_add_road_skirt_z(st, x, z_edge, top0, top1, b0, b1, not north, uv_scale, color)
+
+func _add_edge_face_x(st: SurfaceTool, x_edge: int, z: int, top0: float, top1: float, neighbor_h: float, west: bool,
+		uv_scale: float, color: Color) -> void:
+	var b0: float = minf(neighbor_h, top0)
+	var b1: float = minf(neighbor_h, top1)
+	if (top0 - b0) <= EPS and (top1 - b1) <= EPS:
+		return
+	_add_road_skirt_x(st, x_edge, z, top0, top1, b0, b1, west, uv_scale, color)
+	_add_road_skirt_x(st, x_edge, z, top0, top1, b0, b1, not west, uv_scale, color)
