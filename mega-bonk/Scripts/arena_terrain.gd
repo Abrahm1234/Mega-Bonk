@@ -75,6 +75,7 @@ class_name BlockyTerrain
 var heights: PackedFloat32Array
 var road_mask: PackedByteArray
 var ramp_dir: PackedByteArray
+var ramp_kind: PackedByteArray
 var _ox: float
 var _oz: float
 
@@ -83,6 +84,15 @@ const RAMP_PX: int = 1
 const RAMP_NX: int = 2
 const RAMP_PZ: int = 4
 const RAMP_NZ: int = 8
+const CELL_RAMP_NONE: int = 0
+const CELL_RAMP_EAST: int = 1
+const CELL_RAMP_SOUTH: int = 2
+
+class CellCorners:
+	var a: float
+	var b: float
+	var c: float
+	var d: float
 
 func _ready() -> void:
 	print("BlockyTerrain ACTIVE: ", get_path(), " enable_roads=", enable_roads, " ensure_access=", ensure_access)
@@ -115,6 +125,7 @@ func generate() -> void:
 	# 2) Build roads on top of the access-adjusted heights.
 	if enable_roads:
 		_build_road_network()
+	_compute_ramp_kind()
 	_build_blocky_mesh_and_collision()
 
 # -----------------------------
@@ -1049,6 +1060,54 @@ func _edge_is_ramp_z(x: int, z: int, step: float) -> bool:
 			return _h(x, z) == _h(x, z + 1) + step
 	return false
 
+func _cell_index(x: int, z: int) -> int:
+	return z * (size_x - 1) + x
+
+func _compute_ramp_kind() -> void:
+	ramp_kind = PackedByteArray()
+	ramp_kind.resize((size_x - 1) * (size_z - 1))
+	for z in range(size_z - 1):
+		for x in range(size_x - 1):
+			var step: float = height_step
+			var do_x: bool = enable_step_ramps and _edge_is_ramp_x(x, z, step)
+			var do_z: bool = enable_step_ramps and _edge_is_ramp_z(x, z, step)
+			if do_x and do_z:
+				var score_x: int = 0
+				var score_z: int = 0
+				if enable_roads:
+					if road_mask[z * size_x + (x + 1)] == 1:
+						score_x += 10
+					if road_mask[(z + 1) * size_x + x] == 1:
+						score_z += 10
+				if score_x >= score_z:
+					do_z = false
+				else:
+					do_x = false
+			var kind: int = CELL_RAMP_NONE
+			if do_x:
+				kind = CELL_RAMP_EAST
+			elif do_z:
+				kind = CELL_RAMP_SOUTH
+			ramp_kind[_cell_index(x, z)] = kind
+
+func _cell_corners(x: int, z: int) -> CellCorners:
+	var cc: CellCorners = CellCorners.new()
+	var h00: float = _h(x, z)
+	cc.a = h00
+	cc.b = h00
+	cc.c = h00
+	cc.d = h00
+	var kind: int = ramp_kind[_cell_index(x, z)]
+	if kind == CELL_RAMP_EAST:
+		var he: float = _h(x + 1, z)
+		cc.b = he
+		cc.c = he
+	elif kind == CELL_RAMP_SOUTH:
+		var hs: float = _h(x, z + 1)
+		cc.c = hs
+		cc.d = hs
+	return cc
+
 # -----------------------------
 # MESH
 # -----------------------------
@@ -1058,54 +1117,17 @@ func _build_blocky_mesh_and_collision() -> void:
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
-	var step: float = height_step
 	var floor_y: float = minf(outer_floor_height, min_height)
 
 	for z in range(size_z - 1):
 		for x in range(size_x - 1):
 			var top_idx: int = z * size_x + x
 			var is_road: bool = enable_roads and road_mask[top_idx] == 1
-			var h00: float = _h(x, z)
-			var h10: float = _h(x + 1, z)
-			var h01: float = _h(x, z + 1)
-
-			# Default: flat top quad at h00
-			var a_y: float = h00
-			var b_y: float = h00
-			var c_y: float = h00
-			var d_y: float = h00
-
-			var ramp_east: bool = false
-			var ramp_south: bool = false
-
-			# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
-			if enable_step_ramps:
-				var do_x: bool = _edge_is_ramp_x(x, z, step)
-				var do_z: bool = _edge_is_ramp_z(x, z, step)
-
-				if do_x and do_z:
-					var score_x: int = 0
-					var score_z: int = 0
-					if enable_roads:
-						if x + 1 < size_x and road_mask[z * size_x + (x + 1)] == 1:
-							score_x += 10
-						if z + 1 < size_z and road_mask[(z + 1) * size_x + x] == 1:
-							score_z += 10
-					if score_x >= score_z:
-						do_z = false
-					else:
-						do_x = false
-
-				if do_x:
-					# Ramp rises to the east
-					ramp_east = true
-					b_y = h10
-					c_y = h10
-				elif do_z:
-					# Ramp rises to the south
-					ramp_south = true
-					c_y = h01
-					d_y = h01
+			var cc: CellCorners = _cell_corners(x, z)
+			var a_y: float = cc.a
+			var b_y: float = cc.b
+			var c_y: float = cc.c
+			var d_y: float = cc.d
 
 			var top_color: Color = road_color if is_road else terrain_color
 
@@ -1122,41 +1144,32 @@ func _build_blocky_mesh_and_collision() -> void:
 				top_color
 			)
 
-			# Walls: only where neighbor is lower AND not replaced by a ramp on that edge
-			var hn: float = _h(x, z - 1) if z > 0 else floor_y
-			var hs: float = _h(x, z + 1)
-			var hw: float = _h(x - 1, z) if x > 0 else floor_y
-			var he: float = _h(x + 1, z)
 			var road_n: bool = z > 0 and enable_roads and road_mask[(z - 1) * size_x + x] == 1
 			var road_s: bool = enable_roads and road_mask[(z + 1) * size_x + x] == 1
 			var road_w: bool = x > 0 and enable_roads and road_mask[z * size_x + (x - 1)] == 1
 			var road_e: bool = enable_roads and road_mask[z * size_x + (x + 1)] == 1
 
-			# North edge (no ramp handled here)
-			if z > 0 and not is_road and not road_n:
-				_add_edge_face_z(st, x, z, a_y, b_y, hn, true, uv_scale_wall, terrain_color)
+			if z == 0:
+				var border_n_color: Color = road_color if is_road else terrain_color
+				_add_edge_face_z(st, x, z, a_y, b_y, floor_y, true, uv_scale_wall, border_n_color)
+			if x == 0:
+				var border_w_color: Color = road_color if is_road else terrain_color
+				_add_edge_face_x(st, x, z, a_y, d_y, floor_y, true, uv_scale_wall, border_w_color)
+			if z == size_z - 2:
+				var border_s_color: Color = road_color if is_road else terrain_color
+				_add_edge_face_z(st, x, z + 1, d_y, c_y, floor_y, false, uv_scale_wall, border_s_color)
+			if x == size_x - 2:
+				var border_e_color: Color = road_color if is_road else terrain_color
+				_add_edge_face_x(st, x + 1, z, b_y, c_y, floor_y, false, uv_scale_wall, border_e_color)
 
-			# West edge (no ramp handled here)
-			if x > 0 and not is_road and not road_w:
-				_add_edge_face_x(st, x, z, a_y, d_y, hw, true, uv_scale_wall, terrain_color)
-
-			# South edge: skip the wall if this cell ramps south into it
-			if not is_road and not road_s:
-				_add_edge_face_z(st, x, z + 1, d_y, c_y, hs, false, uv_scale_wall, terrain_color)
-
-			# East edge: skip the wall if this cell ramps east into it
-			if not is_road and not road_e:
-				_add_edge_face_x(st, x + 1, z, b_y, c_y, he, false, uv_scale_wall, terrain_color)
-
-			if is_road:
-				if z > 0 and not road_n:
-					_add_edge_face_z(st, x, z, a_y, b_y, hn, true, uv_scale_wall, road_color)
-				if not road_s:
-					_add_edge_face_z(st, x, z + 1, d_y, c_y, hs, false, uv_scale_wall, road_color)
-				if x > 0 and not road_w:
-					_add_edge_face_x(st, x, z, a_y, d_y, hw, true, uv_scale_wall, road_color)
-				if not road_e:
-					_add_edge_face_x(st, x + 1, z, b_y, c_y, he, false, uv_scale_wall, road_color)
+			if x < size_x - 2:
+				var east_cc: CellCorners = _cell_corners(x + 1, z)
+				var seam_e_color: Color = road_color if (is_road or road_e) else terrain_color
+				_add_seam_x(st, x + 1, z, z + 1, b_y, c_y, east_cc.a, east_cc.d, uv_scale_wall, seam_e_color)
+			if z < size_z - 2:
+				var south_cc: CellCorners = _cell_corners(x, z + 1)
+				var seam_s_color: Color = road_color if (is_road or road_s) else terrain_color
+				_add_seam_z(st, z + 1, x, x + 1, d_y, c_y, south_cc.a, south_cc.b, uv_scale_wall, seam_s_color)
 
 	_add_box_walls(st, uv_scale_wall, terrain_color)
 
@@ -1201,6 +1214,36 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
 	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
 	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+
+func _add_seam_x(st: SurfaceTool, x_edge: int, z0: int, z1: int,
+		y_left0: float, y_left1: float, y_right0: float, y_right1: float,
+		uv_scale: float, color: Color) -> void:
+	if is_equal_approx(y_left0, y_right0) and is_equal_approx(y_left1, y_right1):
+		return
+	var v0: Vector3 = _pos(x_edge, z0, y_left0)
+	var v1: Vector3 = _pos(x_edge, z0, y_right0)
+	var v2: Vector3 = _pos(x_edge, z1, y_right1)
+	var v3: Vector3 = _pos(x_edge, z1, y_left1)
+	var uv0: Vector2 = Vector2(0.0, y_left0 * uv_scale)
+	var uv1: Vector2 = Vector2(cell_size * uv_scale, y_right0 * uv_scale)
+	var uv2: Vector2 = Vector2(cell_size * uv_scale, y_right1 * uv_scale)
+	var uv3: Vector2 = Vector2(0.0, y_left1 * uv_scale)
+	_add_quad(st, v0, v1, v2, v3, uv0, uv1, uv2, uv3, color)
+
+func _add_seam_z(st: SurfaceTool, z_edge: int, x0: int, x1: int,
+		y_north0: float, y_north1: float, y_south0: float, y_south1: float,
+		uv_scale: float, color: Color) -> void:
+	if is_equal_approx(y_north0, y_south0) and is_equal_approx(y_north1, y_south1):
+		return
+	var v0: Vector3 = _pos(x0, z_edge, y_north0)
+	var v1: Vector3 = _pos(x0, z_edge, y_south0)
+	var v2: Vector3 = _pos(x1, z_edge, y_south1)
+	var v3: Vector3 = _pos(x1, z_edge, y_north1)
+	var uv0: Vector2 = Vector2(0.0, y_north0 * uv_scale)
+	var uv1: Vector2 = Vector2(0.0, y_south0 * uv_scale)
+	var uv2: Vector2 = Vector2(cell_size * uv_scale, y_south1 * uv_scale)
+	var uv3: Vector2 = Vector2(cell_size * uv_scale, y_north1 * uv_scale)
+	_add_quad(st, v0, v1, v2, v3, uv0, uv1, uv2, uv3, color)
 
 func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float, color: Color) -> void:
 	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, north, uv_scale, color)
