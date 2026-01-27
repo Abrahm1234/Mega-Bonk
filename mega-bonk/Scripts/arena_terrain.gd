@@ -55,11 +55,14 @@ class_name BlockyTerrain
 @export var road_width: int = 2
 @export var road_budget_extra_links: int = 8
 @export var road_cliff_penalty: float = 30.0
-@export var road_allow_diagonals: bool = false
+@export var road_allow_diagonals: bool = true
 @export var road_cut_max_steps: int = 0
 @export var road_turn_penalty: float = 2.0
 @export var road_smooth_los: bool = true
 @export var road_smooth_max_hops: int = 64
+@export var road_run_per_height_step: int = 3
+@export var road_profile_smooth_passes: int = 3
+@export var road_profile_quant_step: float = 0.0
 @export var road_peak_height_percentile: float = 0.88
 @export var road_peak_min_height_abs: float = 0.0
 @export var road_peak_region_step_merge: int = 1
@@ -503,12 +506,16 @@ func _build_road_network() -> void:
 		var path: Array[Vector2i] = _astar_road_path(a, b)
 		if path.is_empty():
 			continue
-		var waypoints: Array[Vector2i] = path
-		if road_smooth_los:
-			waypoints = _simplify_path_los(waypoints)
-		var dense: Array[Vector2i] = _rasterize_waypoints_4(waypoints)
-		_write_flow_from_path(dense)
-		_stamp_road_path(dense)
+			var waypoints: Array[Vector2i] = path
+			if road_smooth_los:
+				waypoints = _simplify_path_los(waypoints)
+			var dense: Array[Vector2i]
+			if road_allow_diagonals:
+				dense = _rasterize_waypoints_8(waypoints)
+			else:
+				dense = _rasterize_waypoints_4(waypoints)
+			_write_flow_from_path(dense)
+			_stamp_road_path(dense)
 
 	if road_connect_all_regions:
 		var guard: int = 0
@@ -867,6 +874,33 @@ func _line_4_connected_supercover(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
 
 	return out
 
+func _line_8_connected(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var x0: int = a.x
+	var y0: int = a.y
+	var x1: int = b.x
+	var y1: int = b.y
+
+	var dx: int = absi(x1 - x0)
+	var dy: int = absi(y1 - y0)
+	var sx: int = 1 if x0 < x1 else -1
+	var sy: int = 1 if y0 < y1 else -1
+	var err: int = dx - dy
+
+	while true:
+		out.append(Vector2i(x0, y0))
+		if x0 == x1 and y0 == y1:
+			break
+		var e2: int = err * 2
+		if e2 > -dy:
+			err -= dy
+			x0 += sx
+		if e2 < dx:
+			err += dx
+			y0 += sy
+
+	return out
+
 func _rasterize_waypoints_4(waypoints: Array[Vector2i]) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if waypoints.is_empty():
@@ -874,6 +908,17 @@ func _rasterize_waypoints_4(waypoints: Array[Vector2i]) -> Array[Vector2i]:
 	out.append(waypoints[0])
 	for i in range(waypoints.size() - 1):
 		var seg: Array[Vector2i] = _line_4_connected_supercover(waypoints[i], waypoints[i + 1])
+		for j in range(1, seg.size()):
+			out.append(seg[j])
+	return out
+
+func _rasterize_waypoints_8(waypoints: Array[Vector2i]) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if waypoints.is_empty():
+		return out
+	out.append(waypoints[0])
+	for i in range(waypoints.size() - 1):
+		var seg: Array[Vector2i] = _line_8_connected(waypoints[i], waypoints[i + 1])
 		for j in range(1, seg.size()):
 			out.append(seg[j])
 	return out
@@ -912,23 +957,40 @@ func _write_flow_from_path(dense: Array[Vector2i]) -> void:
 		elif absi(dz) > absi(dx):
 			_flow_set(a.x, a.y, FLOW_Z)
 
+func _smooth_profile_1d(prof: Array[float]) -> void:
+	if prof.size() < 3:
+		return
+	var tmp: Array[float] = []
+	tmp.resize(prof.size())
+	tmp[0] = prof[0]
+	tmp[prof.size() - 1] = prof[prof.size() - 1]
+	for i in range(1, prof.size() - 1):
+		tmp[i] = prof[i - 1] * 0.25 + prof[i] * 0.5 + prof[i + 1] * 0.25
+	for i in range(prof.size()):
+		prof[i] = tmp[i]
+
 func _stamp_road_path(path: Array[Vector2i]) -> void:
 	if path.size() < 2:
 		return
 
+	var max_dy: float = height_step / float(maxi(1, road_run_per_height_step))
 	var prof: Array[float] = []
 	prof.resize(path.size())
 	for i in range(path.size()):
 		prof[i] = _h(path[i].x, path[i].y)
 
-	for _iter in range(4):
-		for i in range(1, prof.size()):
-			prof[i] = clampf(prof[i], prof[i - 1] - height_step, prof[i - 1] + height_step)
-		for i in range(prof.size() - 2, -1, -1):
-			prof[i] = clampf(prof[i], prof[i + 1] - height_step, prof[i + 1] + height_step)
+	for _iter in range(road_profile_smooth_passes):
+		_smooth_profile_1d(prof)
 
-	for i in range(prof.size()):
-		prof[i] = _quantize(prof[i], height_step)
+	for _iter2 in range(4):
+		for i in range(1, prof.size()):
+			prof[i] = clampf(prof[i], prof[i - 1] - max_dy, prof[i - 1] + max_dy)
+		for i in range(prof.size() - 2, -1, -1):
+			prof[i] = clampf(prof[i], prof[i + 1] - max_dy, prof[i + 1] + max_dy)
+
+	if road_profile_quant_step > 0.0:
+		for i in range(prof.size()):
+			prof[i] = _quantize(prof[i], road_profile_quant_step)
 
 	for i in range(path.size()):
 		_paint_road_ribbon(path[i], prof[i])
@@ -1139,7 +1201,11 @@ func _connect_one_unroaded_region() -> bool:
 	var waypoints: Array[Vector2i] = path
 	if road_smooth_los:
 		waypoints = _simplify_path_los(waypoints)
-	var dense: Array[Vector2i] = _rasterize_waypoints_4(waypoints)
+	var dense: Array[Vector2i]
+	if road_allow_diagonals:
+		dense = _rasterize_waypoints_8(waypoints)
+	else:
+		dense = _rasterize_waypoints_4(waypoints)
 	_write_flow_from_path(dense)
 	_stamp_road_path(dense)
 	return true
@@ -1280,7 +1346,7 @@ func _build_blocky_mesh_and_collision() -> void:
 
 			var top_color: Color = road_color if is_road else terrain_color
 
-			_add_quad(
+			_add_quad_smart(
 				st,
 				_pos(x,     z,     a_y),
 				_pos(x + 1, z,     b_y),
@@ -1290,7 +1356,11 @@ func _build_blocky_mesh_and_collision() -> void:
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top,
-				top_color
+				top_color,
+				a_y,
+				b_y,
+				c_y,
+				d_y
 			)
 
 			var road_n: bool = z > 0 and enable_roads and road_mask[(z - 1) * size_x + x] == 1
@@ -1363,6 +1433,26 @@ func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
 	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
 	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+
+func _add_quad_smart(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2, color: Color,
+	ya: float, yb: float, yc: float, yd: float) -> void:
+	var ac: float = absf(ya - yc)
+	var bd: float = absf(yb - yd)
+	if ac <= bd:
+		st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+		st.set_color(color); st.set_uv(ub); st.add_vertex(b)
+		st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+		st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+		st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+		st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+	else:
+		st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+		st.set_color(color); st.set_uv(ub); st.add_vertex(b)
+		st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+		st.set_color(color); st.set_uv(ub); st.add_vertex(b)
+		st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+		st.set_color(color); st.set_uv(ud); st.add_vertex(d)
 
 func _add_seam_x(st: SurfaceTool, x_edge: int, z0: int, z1: int,
 		y_left0: float, y_left1: float, y_right0: float, y_right1: float,
