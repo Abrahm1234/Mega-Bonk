@@ -57,6 +57,7 @@ class_name BlockyTerrain
 @export var road_cliff_penalty: float = 30.0
 @export var road_allow_diagonals: bool = false
 @export var road_cut_max_steps: int = 0
+@export var road_turn_penalty: float = 2.0
 @export var road_peak_height_percentile: float = 0.88
 @export var road_peak_min_height_abs: float = 0.0
 @export var road_peak_region_step_merge: int = 1
@@ -65,6 +66,7 @@ class_name BlockyTerrain
 @export var road_max_extra_region_links: int = 128
 @export var road_grade_passes: int = 8
 @export var road_raise_only: bool = true
+@export var road_edge_falloff_power: float = 1.6
 
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var road_color: Color = Color(0.85, 0.12, 0.12, 1.0)
@@ -490,6 +492,8 @@ func _build_road_network() -> void:
 		var path: Array[Vector2i] = _astar_road_path(a, b)
 		if path.is_empty():
 			continue
+		if road_allow_diagonals:
+			path = _expand_diagonals_to_4(path)
 		_stamp_road_path(path)
 
 	if road_connect_all_regions:
@@ -707,57 +711,77 @@ func _road_edge_cost(a: Vector2i, b: Vector2i) -> float:
 	var dh := absf(_h(a.x, a.y) - _h(b.x, b.y)) / height_step
 	return d + dh * 6.0
 
+func _heuristic(a: Vector2i, b: Vector2i) -> float:
+	var dx: int = absi(a.x - b.x)
+	var dz: int = absi(a.y - b.y)
+	if road_allow_diagonals:
+		var mn: int = mini(dx, dz)
+		var mx: int = maxi(dx, dz)
+		return float(mx - mn) + float(mn) * 1.41421356
+	return float(dx + dz)
+
 func _astar_road_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 	var open: Array[Vector2i] = [start]
 	var came_from: Dictionary = {}
 	var g: Dictionary = {}
 	var f: Dictionary = {}
 
-	var sk := start.y * size_x + start.x
+	var sk: int = start.y * size_x + start.x
 	g[sk] = 0.0
-	f[sk] = float(_manhattan(start, goal))
+	f[sk] = _heuristic(start, goal)
 
 	var in_open: Dictionary = { sk: true }
 
 	while not open.is_empty():
-		var best_i := 0
-		var best_f := 1e30
+		var best_i: int = 0
+		var best_f: float = 1e30
 		for i in range(open.size()):
-			var v := open[i]
-			var k := v.y * size_x + v.x
-			var fv := float(f.get(k, 1e30))
+			var v: Vector2i = open[i]
+			var k: int = v.y * size_x + v.x
+			var fv: float = float(f.get(k, 1e30))
 			if fv < best_f:
 				best_f = fv
 				best_i = i
 
-		var cur := open[best_i]
+		var cur: Vector2i = open[best_i]
 		open.remove_at(best_i)
-		var ck := cur.y * size_x + cur.x
+		var ck: int = cur.y * size_x + cur.x
 		in_open.erase(ck)
 
 		if cur == goal:
 			return _reconstruct_path(came_from, cur)
 
-		var ch := _h(cur.x, cur.y)
-		var neighs := _neighbors8(cur) if road_allow_diagonals else _neighbors4(cur)
+		var ch: float = _h(cur.x, cur.y)
+		var neighs: Array[Vector2i] = _neighbors8(cur) if road_allow_diagonals else _neighbors4(cur)
 
-		for n in neighs:
+		var has_parent: bool = came_from.has(ck)
+		var parent: Vector2i = came_from[ck] if has_parent else Vector2i(0, 0)
+		var pdx: int = cur.x - parent.x
+		var pdz: int = cur.y - parent.y
+
+		for n: Vector2i in neighs:
 			if n.x < 0 or n.x >= size_x or n.y < 0 or n.y >= size_z:
 				continue
-			var nk := n.y * size_x + n.x
-			var nh := _h(n.x, n.y)
-			var dh := absf(nh - ch)
+			var nk: int = n.y * size_x + n.x
+			var nh: float = _h(n.x, n.y)
+			var dh: float = absf(nh - ch)
 
-			var slope_steps := dh / height_step
-			var slope_pen := slope_steps * slope_steps * road_cliff_penalty
+			var ndx: int = n.x - cur.x
+			var ndz: int = n.y - cur.y
+			var step_len: float = 1.41421356 if (ndx != 0 and ndz != 0) else 1.0
 
-			var step_cost := 1.0 + slope_pen
-			var tentative := float(g.get(ck, 1e30)) + step_cost
+			var slope_steps: float = dh / height_step
+			var slope_pen: float = slope_steps * slope_steps * road_cliff_penalty
+
+			var step_cost: float = step_len + slope_pen
+			if has_parent and (ndx != pdx or ndz != pdz):
+				step_cost += road_turn_penalty
+			var tentative: float = float(g.get(ck, 1e30)) + step_cost
 
 			if tentative < float(g.get(nk, 1e30)):
 				came_from[nk] = cur
 				g[nk] = tentative
-				f[nk] = tentative + float(_manhattan(n, goal))
+				f[nk] = tentative + _heuristic(n, goal)
 				if not in_open.has(nk):
 					open.append(n)
 					in_open[nk] = true
@@ -773,6 +797,42 @@ func _reconstruct_path(came_from: Dictionary, cur: Vector2i) -> Array[Vector2i]:
 		ck = cur.y * size_x + cur.x
 	path.reverse()
 	return path
+
+func _in_bounds(p: Vector2i) -> bool:
+	return p.x >= 0 and p.x < size_x and p.y >= 0 and p.y < size_z
+
+func _expand_diagonals_to_4(path: Array[Vector2i]) -> Array[Vector2i]:
+	if path.size() < 2:
+		return path
+
+	var out: Array[Vector2i] = []
+	out.append(path[0])
+
+	for i in range(1, path.size()):
+		var a: Vector2i = out[out.size() - 1]
+		var b: Vector2i = path[i]
+		var dx: int = b.x - a.x
+		var dz: int = b.y - a.y
+
+		if absi(dx) == 1 and absi(dz) == 1:
+			var opt1: Vector2i = Vector2i(a.x + dx, a.y)
+			var opt2: Vector2i = Vector2i(a.x, a.y + dz)
+
+			var pick: Vector2i = opt1
+			if _in_bounds(opt1) and _in_bounds(opt2):
+				var h_a: float = _h(a.x, a.y)
+				var c1: float = absf(_h(opt1.x, opt1.y) - h_a) + absf(_h(b.x, b.y) - _h(opt1.x, opt1.y))
+				var c2: float = absf(_h(opt2.x, opt2.y) - h_a) + absf(_h(b.x, b.y) - _h(opt2.x, opt2.y))
+				pick = opt1 if c1 <= c2 else opt2
+			elif _in_bounds(opt2):
+				pick = opt2
+
+			if out[out.size() - 1] != pick:
+				out.append(pick)
+
+		out.append(b)
+
+	return out
 
 func _stamp_road_path(path: Array[Vector2i]) -> void:
 	if path.size() < 2:
@@ -807,11 +867,12 @@ func _stamp_road_path(path: Array[Vector2i]) -> void:
 func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
 	var cut_max: float = float(road_cut_max_steps) * height_step
 	var width: int = maxi(1, road_width)
+	var r2: int = width * width
 
 	for dz: int in range(-width, width + 1):
 		for dx: int in range(-width, width + 1):
-			var md: int = absi(dx) + absi(dz)
-			if md > width:
+			var dd: int = dx * dx + dz * dz
+			if dd > r2:
 				continue
 
 			var x: int = p.x + dx
@@ -822,7 +883,9 @@ func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
 			var idx: int = z * size_x + x
 			road_mask[idx] = 1
 
-			var t: float = 1.0 - float(md) / float(width + 1)
+			var dist: float = sqrt(float(dd))
+			var t: float = 1.0 - (dist / float(width + 0.0001))
+			t = pow(t, road_edge_falloff_power)
 			var h0: float = heights[idx]
 			var h1: float = lerpf(h0, target_h, t)
 			h1 = clampf(h1, h0 - cut_max, 1e30)
@@ -995,6 +1058,8 @@ func _connect_one_unroaded_region() -> bool:
 	var path := _astar_road_path(best_peak, road_cell)
 	if path.is_empty():
 		return false
+	if road_allow_diagonals:
+		path = _expand_diagonals_to_4(path)
 	_stamp_road_path(path)
 	return true
 
@@ -1028,9 +1093,6 @@ func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 					q.append(n)
 			rid += 1
 	return out
-
-func _manhattan(a: Vector2i, b: Vector2i) -> int:
-	return absi(a.x - b.x) + absi(a.y - b.y)
 
 func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
 	if x + 1 >= size_x:
