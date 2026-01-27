@@ -89,6 +89,7 @@ func _ready() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh_instance.material_override = mat
 	generate()
 
@@ -895,23 +896,39 @@ func _derive_road_ramps_full() -> void:
 			if road_mask[idx] == 0:
 				continue
 			var h0 := _h(x, z)
+			var best_flag: int = RAMP_NONE
+			var best_score: int = -1
 
-			if x + 1 < size_x:
-				var ni: int = z * size_x + (x + 1)
-				if road_mask[ni] == 1 and _h(x + 1, z) == h0 + step:
-					ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_PX
-			if x - 1 >= 0:
-				var ni2: int = z * size_x + (x - 1)
-				if road_mask[ni2] == 1 and _h(x - 1, z) == h0 + step:
-					ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_NX
-			if z + 1 < size_z:
-				var ni3: int = (z + 1) * size_x + x
-				if road_mask[ni3] == 1 and _h(x, z + 1) == h0 + step:
-					ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_PZ
-			if z - 1 >= 0:
-				var ni4: int = (z - 1) * size_x + x
-				if road_mask[ni4] == 1 and _h(x, z - 1) == h0 + step:
-					ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_NZ
+			var dirs: Array = [
+				{"x": x + 1, "z": z, "flag": RAMP_PX},
+				{"x": x - 1, "z": z, "flag": RAMP_NX},
+				{"x": x, "z": z + 1, "flag": RAMP_PZ},
+				{"x": x, "z": z - 1, "flag": RAMP_NZ},
+			]
+
+			for d in dirs:
+				var nx: int = d["x"]
+				var nz: int = d["z"]
+				if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
+					continue
+				var ni: int = nz * size_x + nx
+				if road_mask[ni] == 0:
+					continue
+				if _h(nx, nz) != h0 + step:
+					continue
+
+				var score: int = 0
+				for nn in _neighbors4(Vector2i(nx, nz)):
+					if nn.x < 0 or nn.x >= size_x or nn.y < 0 or nn.y >= size_z:
+						continue
+					if road_mask[nn.y * size_x + nn.x] == 1:
+						score += 1
+
+				if score > best_score:
+					best_score = score
+					best_flag = d["flag"]
+
+			ramp_dir[idx] = best_flag
 
 func _connect_one_unroaded_region() -> bool:
 	var regions := _label_regions_by_step(height_step)
@@ -1061,18 +1078,34 @@ func _build_blocky_mesh_and_collision() -> void:
 			var ramp_east: bool = false
 			var ramp_south: bool = false
 
-			# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
-			if enable_step_ramps:
-				if _edge_is_ramp_x(x, z, step):
-					# Ramp rises to the east
-					ramp_east = true
-					b_y = h10
-					c_y = h10
-				if _edge_is_ramp_z(x, z, step):
-					# Ramp rises to the south
-					ramp_south = true
-					c_y = h01
-					d_y = h01
+				# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
+				if enable_step_ramps:
+					var do_x: bool = _edge_is_ramp_x(x, z, step)
+					var do_z: bool = _edge_is_ramp_z(x, z, step)
+
+					if do_x and do_z:
+						var score_x: int = 0
+						var score_z: int = 0
+						if enable_roads:
+							if x + 1 < size_x and road_mask[z * size_x + (x + 1)] == 1:
+								score_x += 10
+							if z + 1 < size_z and road_mask[(z + 1) * size_x + x] == 1:
+								score_z += 10
+						if score_x >= score_z:
+							do_z = false
+						else:
+							do_x = false
+
+					if do_x:
+						# Ramp rises to the east
+						ramp_east = true
+						b_y = h10
+						c_y = h10
+					elif do_z:
+						# Ramp rises to the south
+						ramp_south = true
+						c_y = h01
+						d_y = h01
 
 			var top_color: Color = road_color if is_road else terrain_color
 
@@ -1266,7 +1299,6 @@ func _add_edge_face_z(st: SurfaceTool, x: int, z_edge: int, top0: float, top1: f
 	if (top0 - b0) <= EPS and (top1 - b1) <= EPS:
 		return
 	_add_road_skirt_z(st, x, z_edge, top0, top1, b0, b1, north, uv_scale, color)
-	_add_road_skirt_z(st, x, z_edge, top0, top1, b0, b1, not north, uv_scale, color)
 
 func _add_edge_face_x(st: SurfaceTool, x_edge: int, z: int, top0: float, top1: float, neighbor_h: float, west: bool,
 		uv_scale: float, color: Color) -> void:
@@ -1275,4 +1307,3 @@ func _add_edge_face_x(st: SurfaceTool, x_edge: int, z: int, top0: float, top1: f
 	if (top0 - b0) <= EPS and (top1 - b1) <= EPS:
 		return
 	_add_road_skirt_x(st, x_edge, z, top0, top1, b0, b1, west, uv_scale, color)
-	_add_road_skirt_x(st, x_edge, z, top0, top1, b0, b1, not west, uv_scale, color)
