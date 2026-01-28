@@ -45,6 +45,9 @@ class_name BlockyTerrain
 @export_range(1, 3, 1) var ramp_step_count: int = 1
 @export var ramp_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export_range(1, 64, 1) var min_plateau_cells: int = 3
+@export_range(0.0, 1.0, 0.01) var extra_ramp_skip_chance: float = 0.10
+@export_range(1, 64, 1) var rescue_min_plateau_cells: int = 1
+@export_range(0, 256, 1) var rescue_ramp_budget: int = 32
 
 # -----------------------------
 # Traversal constraints
@@ -456,6 +459,7 @@ func _generate_ramps() -> void:
 			comp_count += 1
 
 	var candidates: Array[RampCandidate] = []
+	var candidates_relaxed: Array[RampCandidate] = []
 	var ramp_dirs: Array[int] = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
 
 	var comp_size: PackedInt32Array = PackedInt32Array()
@@ -479,6 +483,7 @@ func _generate_ramps() -> void:
 				var dh: float = h0 - h1
 
 				if absf(dh - want_delta) <= delta_eps:
+					candidates_relaxed.append(RampCandidate.new(x, z, dir, h1))
 					var idx0: int = z * n + x
 					var idx1: int = nb.y * n + nb.x
 					var high_comp: int = comp_id[idx0]
@@ -569,13 +574,71 @@ func _generate_ramps() -> void:
 		if _ramp_dir[idx] != RAMP_NONE:
 			continue
 
-		if rng.randf() < 0.35:
+		if rng.randf() < extra_ramp_skip_chance:
 			continue
 
 		_ramp_dir[idx] = c.dir
 		_ramp_low[idx] = c.low
 		placed += 1
 		extra_budget -= 1
+
+	_validate_ramps_move(n, want_delta, delta_eps)
+	_prune_unconnected_ramps(n, delta_eps)
+
+	var comp_degree: PackedInt32Array = PackedInt32Array()
+	comp_degree.resize(comp_count)
+	for i in range(comp_count):
+		comp_degree[i] = 0
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var dir: int = _ramp_dir[idx]
+			if dir == RAMP_NONE:
+				continue
+			var nb: Vector2i = _neighbor_of(x, z, dir)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				continue
+			var a: int = comp_id[idx]
+			var b: int = comp_id[nb.y * n + nb.x]
+			comp_degree[a] += 1
+			comp_degree[b] += 1
+
+	var rescue_left: int = rescue_ramp_budget
+	for cid in range(comp_count):
+		if rescue_left <= 0:
+			break
+		if comp_degree[cid] > 0:
+			continue
+
+		for k in range(candidates_relaxed.size()):
+			var c: RampCandidate = candidates_relaxed[k]
+			var idx_hi: int = c.z * n + c.x
+			var nb: Vector2i = _neighbor_of(c.x, c.z, c.dir)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				continue
+			var idx_lo: int = nb.y * n + nb.x
+			var hi_comp: int = comp_id[idx_hi]
+			var lo_comp: int = comp_id[idx_lo]
+
+			if hi_comp != cid and lo_comp != cid:
+				continue
+
+			if comp_size[hi_comp] < rescue_min_plateau_cells:
+				continue
+			if comp_size[lo_comp] < rescue_min_plateau_cells:
+				continue
+			if _ramp_dir[idx_hi] != RAMP_NONE:
+				continue
+			if not _landing_ok(n, nb.x, nb.y, c.dir):
+				continue
+
+			_ramp_dir[idx_hi] = c.dir
+			_ramp_low[idx_hi] = c.low
+			comp_degree[hi_comp] += 1
+			comp_degree[lo_comp] += 1
+			rescue_left -= 1
+			break
 
 	_validate_ramps_move(n, want_delta, delta_eps)
 	_prune_unconnected_ramps(n, delta_eps)
