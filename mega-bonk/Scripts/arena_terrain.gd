@@ -169,10 +169,10 @@ func _cells_connected_by_move(n: int, ax: int, az: int, bx: int, bz: int, levels
 
 func _compute_comp_reachable(n: int, comp_count: int, comp_id: PackedInt32Array, levels: PackedInt32Array,
 	start_comp: int) -> PackedByteArray:
-	var adj: Array[Array[int]] = []
+	var adj: Array[PackedInt32Array] = []
 	adj.resize(comp_count)
 	for i in range(comp_count):
-		adj[i] = []
+		adj[i] = PackedInt32Array()
 
 	for z in range(n):
 		for x in range(n):
