@@ -4,7 +4,7 @@ class_name BlockyTerrain
 @export var size_x: int = 256
 @export var size_z: int = 256
 @export var cell_size: float = 2.0
-@export var lock_dimensions_to_target: bool = false
+@export var lock_dimensions_to_target: bool = true
 @export var target_world_size_m: float = 256.0
 @export var target_cells_per_side: int = 128
 
@@ -121,14 +121,20 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
 		generate()
 
+func _apply_target_dimensions() -> void:
+	if not lock_dimensions_to_target:
+		return
+	var target_cells: int = max(2, target_cells_per_side)
+	size_x = target_cells
+	size_z = target_cells
+	cell_size = target_world_size_m / float(target_cells - 1)
+
 func generate() -> void:
-	if lock_dimensions_to_target:
-		var target_cells: int = max(8, target_cells_per_side)
-		size_x = target_cells
-		size_z = target_cells
-		cell_size = target_world_size_m / float(max(1, target_cells - 1))
-	_ox = -float(size_x) * cell_size * 0.5
-	_oz = -float(size_z) * cell_size * 0.5
+	_apply_target_dimensions()
+	var world_w: float = float(size_x - 1) * cell_size
+	var world_d: float = float(size_z - 1) * cell_size
+	_ox = -world_w * 0.5
+	_oz = -world_d * 0.5
 	_generate_heights()
 	road_mask = PackedByteArray()
 	road_mask.resize(size_x * size_z)
