@@ -7,6 +7,8 @@ class_name BlockyTerrain
 @export var lock_dimensions_to_target: bool = true
 @export var target_world_size_m: float = 256.0
 @export var target_cells_per_side: int = 128
+@export var macro_cells_per_side: int = 14
+@export var subcells_per_macro: int = 8
 
 # Voxel look
 @export var height_step: float = 2.0
@@ -124,10 +126,14 @@ func _unhandled_input(e: InputEvent) -> void:
 func _apply_target_dimensions() -> void:
 	if not lock_dimensions_to_target:
 		return
-	var target_cells: int = max(2, target_cells_per_side)
-	size_x = target_cells
-	size_z = target_cells
-	cell_size = target_world_size_m / float(target_cells - 1)
+	var macro: int = max(2, macro_cells_per_side)
+	var sub: int = max(1, subcells_per_macro)
+	var quads: int = macro * sub
+	size_x = quads + 1
+	size_z = quads + 1
+	cell_size = target_world_size_m / float(quads)
+	arena_lr_cells = macro
+	macro_block_size_m = float(sub) * cell_size
 
 func generate() -> void:
 	_apply_target_dimensions()
