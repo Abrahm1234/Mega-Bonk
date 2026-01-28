@@ -4,6 +4,9 @@ class_name BlockyTerrain
 @export var size_x: int = 256
 @export var size_z: int = 256
 @export var cell_size: float = 2.0
+@export var lock_dimensions_to_target: bool = false
+@export var target_world_size_m: float = 256.0
+@export var target_cells_per_side: int = 128
 
 # Voxel look
 @export var height_step: float = 2.0
@@ -119,6 +122,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		generate()
 
 func generate() -> void:
+	if lock_dimensions_to_target:
+		var target_cells: int = max(8, target_cells_per_side)
+		size_x = target_cells
+		size_z = target_cells
+		cell_size = target_world_size_m / float(max(1, target_cells - 1))
 	_ox = -float(size_x) * cell_size * 0.5
 	_oz = -float(size_z) * cell_size * 0.5
 	_generate_heights()
@@ -506,16 +514,17 @@ func _build_road_network() -> void:
 		var path: Array[Vector2i] = _astar_road_path(a, b)
 		if path.is_empty():
 			continue
-			var waypoints: Array[Vector2i] = path
-			if road_smooth_los:
-				waypoints = _simplify_path_los(waypoints)
-			var dense: Array[Vector2i]
-			if road_allow_diagonals:
-				dense = _rasterize_waypoints_8(waypoints)
-			else:
-				dense = _rasterize_waypoints_4(waypoints)
-			_write_flow_from_path(dense)
-			_stamp_road_path(dense)
+
+		var waypoints: Array[Vector2i] = path
+		if road_smooth_los:
+			waypoints = _simplify_path_los(waypoints)
+		var dense: Array[Vector2i]
+		if road_allow_diagonals:
+			dense = _rasterize_waypoints_8(waypoints)
+		else:
+			dense = _rasterize_waypoints_4(waypoints)
+		_write_flow_from_path(dense)
+		_stamp_road_path(dense)
 
 	if road_connect_all_regions:
 		var guard: int = 0
