@@ -51,6 +51,7 @@ class_name BlockyTerrain
 @export_range(0.0, 1.0, 0.01) var ramp_fill_ratio: float = 0.40
 @export_range(0, 256, 1) var connectivity_rescue_budget: int = 64
 @export_range(0, 4, 1) var pit_fill_passes: int = 2
+@export_range(0, 512, 1) var per_level_ramp_budget: int = 96
 
 # -----------------------------
 # Traversal constraints
@@ -159,7 +160,7 @@ func _has_ramp_between(ax: int, az: int, bx: int, bz: int) -> bool:
 		return _ramp_dir[b_idx] == _dir_from_to(bx, bz, ax, az)
 	return true
 
-func _cells_connected_by_move(n: int, ax: int, az: int, bx: int, bz: int, levels: PackedInt32Array) -> bool:
+func _can_move_dir(n: int, ax: int, az: int, bx: int, bz: int, levels: PackedInt32Array) -> bool:
 	var aidx: int = az * n + ax
 	var bidx: int = bz * n + bx
 	var da: int = levels[bidx] - levels[aidx]
@@ -168,8 +169,8 @@ func _cells_connected_by_move(n: int, ax: int, az: int, bx: int, bz: int, levels
 	return _has_ramp_between(ax, az, bx, bz)
 
 func _compute_comp_reachable(n: int, comp_count: int, comp_id: PackedInt32Array, levels: PackedInt32Array,
-	start_comp: int) -> PackedByteArray:
-	var adj: Array[PackedInt32Array] = []
+	start_comp: int, reverse: bool) -> PackedByteArray:
+	var adj: Array = []
 	adj.resize(comp_count)
 	for i in range(comp_count):
 		adj[i] = PackedInt32Array()
@@ -181,16 +182,38 @@ func _compute_comp_reachable(n: int, comp_count: int, comp_id: PackedInt32Array,
 
 			if x + 1 < n:
 				var b: int = comp_id[idx + 1]
-				if a != b and _cells_connected_by_move(n, x, z, x + 1, z, levels):
-					adj[a].append(b)
-					adj[b].append(a)
+				if a != b:
+					var allow_ab: bool
+					if reverse:
+						allow_ab = _can_move_dir(n, x + 1, z, x, z, levels)
+						if allow_ab:
+							var arr_b: PackedInt32Array = adj[b]
+							arr_b.append(a)
+							adj[b] = arr_b
+					else:
+						allow_ab = _can_move_dir(n, x, z, x + 1, z, levels)
+						if allow_ab:
+							var arr_a: PackedInt32Array = adj[a]
+							arr_a.append(b)
+							adj[a] = arr_a
 
 			if z + 1 < n:
 				var cidx: int = idx + n
 				var c: int = comp_id[cidx]
-				if a != c and _cells_connected_by_move(n, x, z, x, z + 1, levels):
-					adj[a].append(c)
-					adj[c].append(a)
+				if a != c:
+					var allow_ac: bool
+					if reverse:
+						allow_ac = _can_move_dir(n, x, z + 1, x, z, levels)
+						if allow_ac:
+							var arr_c: PackedInt32Array = adj[c]
+							arr_c.append(a)
+							adj[c] = arr_c
+					else:
+						allow_ac = _can_move_dir(n, x, z, x, z + 1, levels)
+						if allow_ac:
+							var arr_a2: PackedInt32Array = adj[a]
+							arr_a2.append(c)
+							adj[a] = arr_a2
 
 	var vis: PackedByteArray = PackedByteArray()
 	vis.resize(comp_count)
@@ -203,13 +226,179 @@ func _compute_comp_reachable(n: int, comp_count: int, comp_id: PackedInt32Array,
 
 	while q.size() > 0:
 		var cur: int = int(q.pop_back())
-		for nb in adj[cur]:
+		var neigh: PackedInt32Array = adj[cur]
+		for nb in neigh:
 			var v: int = int(nb)
 			if vis[v] == 0:
 				vis[v] = 1
 				q.append(v)
 
 	return vis
+
+func _try_place_ramp_down(n: int, hx: int, hz: int, dir_to_low: int, low_h: float, protect: bool) -> bool:
+	var hidx: int = hz * n + hx
+	if _ramp_dir[hidx] != RAMP_NONE:
+		return false
+	_ramp_dir[hidx] = dir_to_low
+	_ramp_low[hidx] = low_h
+	_ramp_protect[hidx] = protect ? 1 : 0
+	return true
+
+func _ensure_each_component_has_incident_ramp(n: int, comp_count: int, comp_id: PackedInt32Array,
+	levels: PackedInt32Array, want_delta: float, delta_eps: float, rng: RandomNumberGenerator) -> void:
+	var has_down: PackedByteArray = PackedByteArray()
+	has_down.resize(comp_count)
+	var has_in: PackedByteArray = PackedByteArray()
+	has_in.resize(comp_count)
+
+	for i in range(comp_count):
+		has_down[i] = 0
+		has_in[i] = 0
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var dir: int = _ramp_dir[idx]
+			if dir == RAMP_NONE:
+				continue
+			var nb: Vector2i = _neighbor_of(x, z, dir)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				continue
+			var nidx: int = nb.y * n + nb.x
+			if levels[idx] > levels[nidx]:
+				var hi_c: int = comp_id[idx]
+				var lo_c: int = comp_id[nidx]
+				has_down[hi_c] = 1
+				has_in[lo_c] = 1
+
+	var min_lvl: int = 1 << 30
+	var max_lvl: int = -(1 << 30)
+	for i in range(n * n):
+		min_lvl = mini(min_lvl, levels[i])
+		max_lvl = maxi(max_lvl, levels[i])
+
+	var budget: int = per_level_ramp_budget
+
+	for target_c in range(comp_count):
+		if budget <= 0:
+			break
+
+		var target_level: int = 0
+		var found_level: bool = false
+		for i in range(n * n):
+			if comp_id[i] == target_c:
+				target_level = levels[i]
+				found_level = true
+				break
+		if not found_level:
+			continue
+		if target_level <= min_lvl:
+			continue
+		if has_down[target_c] != 0:
+			continue
+
+		var pick: int = 0
+		var pick_dir: int = RAMP_NONE
+		var pick_low_h: float = 0.0
+		var seen: int = 0
+
+		for z in range(n):
+			for x in range(n):
+				var idx: int = z * n + x
+				if comp_id[idx] != target_c:
+					continue
+
+				var h0: float = _heights[idx]
+				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+					var nb: Vector2i = _neighbor_of(x, z, dir)
+					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+						continue
+					var nidx: int = nb.y * n + nb.x
+
+					var dh: float = h0 - _heights[nidx]
+					if absf(dh - want_delta) > delta_eps:
+						continue
+					if not _uphill_supported(n, x, z, dir, h0, delta_eps):
+						continue
+
+					seen += 1
+					if rng.randi_range(1, seen) == 1:
+						pick = idx
+						pick_dir = dir
+						pick_low_h = _heights[nidx]
+
+		if pick_dir != RAMP_NONE:
+			var px: int = pick % n
+			var pz: int = int(float(pick) / float(n))
+			if _try_place_ramp_down(n, px, pz, pick_dir, pick_low_h, true):
+				has_down[target_c] = 1
+				var low_nb: Vector2i = _neighbor_of(px, pz, pick_dir)
+				var low_cid: int = comp_id[low_nb.y * n + low_nb.x]
+				has_in[low_cid] = 1
+				budget -= 1
+
+	if walk_up_steps_without_ramp == 0:
+		for low_c in range(comp_count):
+			if budget <= 0:
+				break
+
+			var low_level: int = 0
+			var found_low: bool = false
+			for i in range(n * n):
+				if comp_id[i] == low_c:
+					low_level = levels[i]
+					found_low = true
+					break
+			if not found_low:
+				continue
+			if low_level >= max_lvl:
+				continue
+			if has_in[low_c] != 0:
+				continue
+
+			var pick_hi: int = -1
+			var pick_hi_dir: int = RAMP_NONE
+			var pick_low_h2: float = 0.0
+			var seen2: int = 0
+
+			for z in range(n):
+				for x in range(n):
+					var low_idx: int = z * n + x
+					if comp_id[low_idx] != low_c:
+						continue
+
+					for dir_to_hi in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+						var hi: Vector2i = _neighbor_of(x, z, dir_to_hi)
+						if hi.x < 0 or hi.x >= n or hi.y < 0 or hi.y >= n:
+							continue
+						var hi_idx: int = hi.y * n + hi.x
+
+						var dh2: float = _heights[hi_idx] - _heights[low_idx]
+						if absf(dh2 - want_delta) > delta_eps:
+							continue
+
+						var dir_hi_to_low: int = _opposite_dir(dir_to_hi)
+						var hi_h: float = _heights[hi_idx]
+
+						if not _uphill_supported(n, hi.x, hi.y, dir_hi_to_low, hi_h, delta_eps):
+							continue
+						if _ramp_dir[hi_idx] != RAMP_NONE:
+							continue
+
+						seen2 += 1
+						if rng.randi_range(1, seen2) == 1:
+							pick_hi = hi_idx
+							pick_hi_dir = dir_hi_to_low
+							pick_low_h2 = _heights[low_idx]
+
+			if pick_hi_dir != RAMP_NONE and pick_hi >= 0:
+				var hx: int = pick_hi % n
+				var hz: int = int(float(pick_hi) / float(n))
+				if _try_place_ramp_down(n, hx, hz, pick_hi_dir, pick_low_h2, true):
+					has_in[low_c] = 1
+					var hi_cid: int = comp_id[pick_hi]
+					has_down[hi_cid] = 1
+					budget -= 1
 
 func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
 	for z in range(n):
@@ -749,16 +938,19 @@ func _generate_ramps() -> void:
 		placed += 1
 		extra_budget -= 1
 
+	_ensure_each_component_has_incident_ramp(n, comp_count, comp_id, levels, want_delta, delta_eps, rng)
+
 	var start_x: int = n / 2
 	var start_z: int = n / 2
 	var start_comp: int = comp_id[start_z * n + start_x]
 	var rescue_budget: int = connectivity_rescue_budget
 
 	while rescue_budget > 0:
-		var vis: PackedByteArray = _compute_comp_reachable(n, comp_count, comp_id, levels, start_comp)
+		var fwd: PackedByteArray = _compute_comp_reachable(n, comp_count, comp_id, levels, start_comp, false)
+		var rev: PackedByteArray = _compute_comp_reachable(n, comp_count, comp_id, levels, start_comp, true)
 		var all_ok: bool = true
 		for cid in range(comp_count):
-			if vis[cid] == 0:
+			if fwd[cid] == 0 or rev[cid] == 0:
 				all_ok = false
 				break
 		if all_ok:
@@ -775,7 +967,7 @@ func _generate_ramps() -> void:
 			var idx_lo: int = nb.y * n + nb.x
 			var hi_comp: int = comp_id[idx_hi]
 			var lo_comp: int = comp_id[idx_lo]
-			if vis[hi_comp] == vis[lo_comp]:
+			if fwd[hi_comp] == fwd[lo_comp] and rev[hi_comp] == rev[lo_comp]:
 				continue
 
 			_ramp_dir[idx_hi] = c_mid.dir
