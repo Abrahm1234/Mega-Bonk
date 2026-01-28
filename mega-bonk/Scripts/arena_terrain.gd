@@ -44,6 +44,7 @@ class_name BlockyTerrain
 @export_range(0, 64, 1) var ramp_count: int = 18
 @export_range(1, 3, 1) var ramp_step_count: int = 1
 @export var ramp_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+@export_range(1, 64, 1) var min_plateau_cells: int = 3
 
 # -----------------------------
 # Traversal constraints
@@ -122,6 +123,13 @@ func _landing_ok(n: int, lx: int, lz: int, exit_dir: int) -> bool:
 	var max_drop: float = float(max_neighbor_steps) * height_step
 	return (h - fwd_h) <= max_drop
 
+func _uphill_supported(n: int, x: int, z: int, dir: int, high_h: float, eps: float) -> bool:
+	var up_dir: int = _opposite_dir(dir)
+	var up: Vector2i = _neighbor_of(x, z, up_dir)
+	if up.x < 0 or up.x >= n or up.y < 0 or up.y >= n:
+		return false
+	return absf(_cell_h(up.x, up.y) - high_h) <= eps
+
 func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
 	for z in range(n):
 		for x in range(n):
@@ -152,6 +160,70 @@ func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
 				continue
 
 			_ramp_dir[idx] = RAMP_NONE
+
+func _edge_matches(ca: Vector4, cb: Vector4, edge_a: int, edge_b: int, eps: float) -> bool:
+	var ea: Vector2 = _edge_pair(ca, edge_a)
+	var eb: Vector2 = _edge_pair(cb, edge_b)
+	return absf(ea.x - eb.x) <= eps and absf(ea.y - eb.y) <= eps
+
+func _down_edge(dir: int) -> int:
+	match dir:
+		RAMP_EAST:
+			return 0
+		RAMP_WEST:
+			return 1
+		RAMP_NORTH:
+			return 2
+		RAMP_SOUTH:
+			return 3
+		_:
+			return 0
+
+func _up_edge(dir: int) -> int:
+	match dir:
+		RAMP_EAST:
+			return 1
+		RAMP_WEST:
+			return 0
+		RAMP_NORTH:
+			return 3
+		RAMP_SOUTH:
+			return 2
+		_:
+			return 1
+
+func _prune_unconnected_ramps(n: int, eps: float) -> void:
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var dir: int = _ramp_dir[idx]
+			if dir == RAMP_NONE:
+				continue
+
+			var down_nb: Vector2i = _neighbor_of(x, z, dir)
+			var up_nb: Vector2i = _neighbor_of(x, z, _opposite_dir(dir))
+
+			if down_nb.x < 0 or down_nb.x >= n or down_nb.y < 0 or down_nb.y >= n:
+				_ramp_dir[idx] = RAMP_NONE
+				continue
+			if up_nb.x < 0 or up_nb.x >= n or up_nb.y < 0 or up_nb.y >= n:
+				_ramp_dir[idx] = RAMP_NONE
+				continue
+
+			var c_here: Vector4 = _cell_corners(x, z)
+			var c_down: Vector4 = _cell_corners(down_nb.x, down_nb.y)
+			var c_up: Vector4 = _cell_corners(up_nb.x, up_nb.y)
+
+			var d_edge: int = _down_edge(dir)
+			var d_opp: int = _up_edge(dir)
+			if not _edge_matches(c_here, c_down, d_edge, d_opp, eps):
+				_ramp_dir[idx] = RAMP_NONE
+				continue
+
+			var u_edge: int = _up_edge(dir)
+			var u_opp: int = _down_edge(dir)
+			if not _edge_matches(c_here, c_up, u_edge, u_opp, eps):
+				_ramp_dir[idx] = RAMP_NONE
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -386,6 +458,15 @@ func _generate_ramps() -> void:
 	var candidates: Array[RampCandidate] = []
 	var ramp_dirs: Array[int] = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
 
+	var comp_size: PackedInt32Array = PackedInt32Array()
+	comp_size.resize(comp_count)
+	for i in range(comp_count):
+		comp_size[i] = 0
+	for i in range(n * n):
+		var cid: int = comp_id[i]
+		if cid >= 0:
+			comp_size[cid] += 1
+
 	for z in range(n):
 		for x in range(n):
 			var h0: float = _cell_h(x, z)
@@ -398,7 +479,17 @@ func _generate_ramps() -> void:
 				var dh: float = h0 - h1
 
 				if absf(dh - want_delta) <= delta_eps:
+					var idx0: int = z * n + x
+					var idx1: int = nb.y * n + nb.x
+					var high_comp: int = comp_id[idx0]
+					var low_comp: int = comp_id[idx1]
+					if comp_size[high_comp] < min_plateau_cells:
+						continue
+					if comp_size[low_comp] < min_plateau_cells:
+						continue
 					if not _landing_ok(n, nb.x, nb.y, dir):
+						continue
+					if not _uphill_supported(n, x, z, dir, h0, delta_eps):
 						continue
 					candidates.append(RampCandidate.new(x, z, dir, h1))
 
@@ -487,6 +578,7 @@ func _generate_ramps() -> void:
 		extra_budget -= 1
 
 	_validate_ramps_move(n, want_delta, delta_eps)
+	_prune_unconnected_ramps(n, delta_eps)
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
