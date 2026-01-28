@@ -358,7 +358,7 @@ func _generate_ramps() -> void:
 			while queue.size() > 0:
 				var current: int = int(queue.pop_back())
 				var cx: int = current % n
-				var cz: int = int(current / n)
+				var cz: int = int(float(current) / float(n))
 
 				if cx > 0:
 					var left: int = current - 1
