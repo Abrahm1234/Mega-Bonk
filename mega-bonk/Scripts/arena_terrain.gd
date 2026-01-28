@@ -241,7 +241,7 @@ func _try_place_ramp_down(n: int, hx: int, hz: int, dir_to_low: int, low_h: floa
 		return false
 	_ramp_dir[hidx] = dir_to_low
 	_ramp_low[hidx] = low_h
-	_ramp_protect[hidx] = protect ? 1 : 0
+	_ramp_protect[hidx] = 1 if protect else 0
 	return true
 
 func _ensure_each_component_has_incident_ramp(n: int, comp_count: int, comp_id: PackedInt32Array,
