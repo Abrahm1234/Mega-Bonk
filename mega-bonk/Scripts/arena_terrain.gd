@@ -6,7 +6,6 @@ class_name BlockyTerrain
 @export var cell_size: float = 2.0
 @export var lock_dimensions_to_target: bool = true
 @export var target_world_size_m: float = 256.0
-@export var target_cells_per_side: int = 128
 @export var macro_cells_per_side: int = 14
 @export var subcells_per_macro: int = 8
 
@@ -40,18 +39,6 @@ class_name BlockyTerrain
 # Optional slope control (can flatten if too aggressive)
 @export var max_step_per_cell: float = 0.0      # set 0 to disable
 @export var step_clamp_passes: int = 0
-
-# 1-step ramp rule
-@export var enable_step_ramps: bool = true
-@export var step_ramps_only_on_roads: bool = true
-
-# Access ramp pass (multi-step grading)
-@export var ensure_access: bool = true
-@export var access_ramp_count: int = 12
-@export var access_ramp_width_cells: int = 3
-@export var access_run_per_step: int = 3
-@export var access_max_iterations: int = 4
-@export var access_min_cliff_steps: int = 2
 
 # Roads (connect peaks + valleys)
 @export var enable_roads: bool = true
@@ -87,23 +74,8 @@ class_name BlockyTerrain
 
 var heights: PackedFloat32Array
 var road_mask: PackedByteArray
-var ramp_dir: PackedByteArray
-var ramp_kind: PackedByteArray
-var road_flow: PackedByteArray
 var _ox: float
 var _oz: float
-
-const RAMP_NONE: int = 0
-const RAMP_PX: int = 1
-const RAMP_NX: int = 2
-const RAMP_PZ: int = 4
-const RAMP_NZ: int = 8
-const CELL_RAMP_NONE: int = 0
-const CELL_RAMP_EAST: int = 1
-const CELL_RAMP_SOUTH: int = 2
-const FLOW_NONE: int = 0
-const FLOW_X: int = 1
-const FLOW_Z: int = 2
 
 class CellCorners:
 	var a: float
@@ -112,7 +84,7 @@ class CellCorners:
 	var d: float
 
 func _ready() -> void:
-	print("BlockyTerrain ACTIVE: ", get_path(), " enable_roads=", enable_roads, " ensure_access=", ensure_access)
+	print("BlockyTerrain ACTIVE: ", get_path(), " enable_roads=", enable_roads)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.vertex_color_use_as_albedo = true
@@ -147,21 +119,9 @@ func generate() -> void:
 	road_mask.resize(size_x * size_z)
 	for i in range(road_mask.size()):
 		road_mask[i] = 0
-	ramp_dir = PackedByteArray()
-	ramp_dir.resize(size_x * size_z)
-	for i in range(ramp_dir.size()):
-		ramp_dir[i] = RAMP_NONE
-	road_flow = PackedByteArray()
-	road_flow.resize(size_x * size_z)
-	for i in range(road_flow.size()):
-		road_flow[i] = FLOW_NONE
-	# 1) Ensure access first so later roads carve on reachable terrain.
-	if ensure_access:
-		_build_access_ramps()
-	# 2) Build roads on top of the access-adjusted heights.
+	# Build roads on top of the generated heights.
 	if enable_roads:
 		_build_road_network()
-	_compute_ramp_kind()
 	_build_blocky_mesh_and_collision()
 
 # -----------------------------
@@ -292,225 +252,10 @@ func _pos(x: int, z: int, y: float) -> Vector3:
 	return Vector3(_ox + float(x) * cell_size, y, _oz + float(z) * cell_size)
 
 # -----------------------------
-# ACCESS RAMPS
-# -----------------------------
-func _build_access_ramps() -> void:
-	var step: float = maxf(0.001, height_step)
-	var min_cliff_steps: int = max(1, access_min_cliff_steps)
-	var run_per_step: int = max(1, access_run_per_step)
-	var remaining: int = max(0, access_ramp_count)
-	if remaining == 0 or access_max_iterations <= 0:
-		return
-
-	var start_cells: PackedInt32Array = _access_start_cells()
-	if start_cells.is_empty():
-		return
-
-	var reachable: PackedByteArray = _flood_reachable(start_cells, step)
-
-	for _iter in range(access_max_iterations):
-		if remaining <= 0:
-			break
-
-		var candidates: Array = _collect_access_candidates(reachable, step, min_cliff_steps)
-		if candidates.is_empty():
-			break
-
-		candidates.sort_custom(Callable(self, "_sort_access_candidates"))
-		var chosen: Array = []
-		var min_dist: int = max(2, access_ramp_width_cells * 2)
-		for candidate in candidates:
-			if remaining <= 0:
-				break
-			if _candidate_too_close(candidate, chosen, min_dist):
-				continue
-			_carve_access_ramp(candidate, step, run_per_step)
-			chosen.append(candidate)
-			remaining -= 1
-
-		if chosen.is_empty():
-			break
-
-		reachable = _flood_reachable(start_cells, step)
-
-func _access_start_cells() -> PackedInt32Array:
-	var cells := PackedInt32Array()
-	if size_x <= 0 or size_z <= 0:
-		return cells
-
-	var cx: int = size_x / 2
-	var cz: int = size_z / 2
-	cells.append(cz * size_x + cx)
-
-	for x in range(size_x):
-		cells.append(0 * size_x + x)
-		cells.append((size_z - 1) * size_x + x)
-	for z in range(1, size_z - 1):
-		cells.append(z * size_x + 0)
-		cells.append(z * size_x + (size_x - 1))
-
-	return cells
-
-func _flood_reachable(start_cells: PackedInt32Array, step: float) -> PackedByteArray:
-	var reachable := PackedByteArray()
-	reachable.resize(size_x * size_z)
-
-	var queue: Array[int] = []
-	queue.resize(start_cells.size())
-	for i in range(start_cells.size()):
-		queue[i] = start_cells[i]
-
-	var head: int = 0
-	while head < queue.size():
-		var idx: int = queue[head]
-		head += 1
-		if idx < 0 or idx >= reachable.size():
-			continue
-		if reachable[idx] == 1:
-			continue
-		reachable[idx] = 1
-		var x: int = idx % size_x
-		var z: int = idx / size_x
-		var h0: float = heights[idx]
-
-		if x > 0:
-			_try_reach(queue, reachable, x - 1, z, h0, step)
-		if x + 1 < size_x:
-			_try_reach(queue, reachable, x + 1, z, h0, step)
-		if z > 0:
-			_try_reach(queue, reachable, x, z - 1, h0, step)
-		if z + 1 < size_z:
-			_try_reach(queue, reachable, x, z + 1, h0, step)
-
-	return reachable
-
-func _try_reach(queue: Array[int], reachable: PackedByteArray, x: int, z: int, h0: float, step: float) -> void:
-	var idx: int = z * size_x + x
-	if reachable[idx] == 1:
-		return
-	if absf(heights[idx] - h0) <= step + 0.0001:
-		queue.append(idx)
-
-func _collect_access_candidates(reachable: PackedByteArray, step: float, min_cliff_steps: int) -> Array:
-	var candidates: Array = []
-	var threshold: float = float(min_cliff_steps) * step
-
-	for z in range(size_z):
-		for x in range(size_x):
-			var idx: int = z * size_x + x
-			if reachable[idx] == 0:
-				continue
-			var h0: float = heights[idx]
-
-			_add_access_candidate(candidates, reachable, x, z, x + 1, z, h0, step, threshold)
-			_add_access_candidate(candidates, reachable, x, z, x - 1, z, h0, step, threshold)
-			_add_access_candidate(candidates, reachable, x, z, x, z + 1, h0, step, threshold)
-			_add_access_candidate(candidates, reachable, x, z, x, z - 1, h0, step, threshold)
-
-	return candidates
-
-func _add_access_candidate(candidates: Array, reachable: PackedByteArray, x: int, z: int, nx: int, nz: int,
-		h0: float, step: float, threshold: float) -> void:
-	if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
-		return
-	var nidx: int = nz * size_x + nx
-	if reachable[nidx] == 1:
-		return
-	var h1: float = heights[nidx]
-	var diff: float = h1 - h0
-	if absf(diff) < threshold - 0.0001:
-		return
-	var diff_steps: int = int(absf(diff) / step)
-	var flat_score: int = _flat_area_score(x, z, step)
-
-	candidates.append({
-		"x": x,
-		"z": z,
-		"nx": nx,
-		"nz": nz,
-		"diff_steps": diff_steps,
-		"flat_score": flat_score,
-		"start_height": h0,
-		"end_height": h1
-	})
-
-func _flat_area_score(x: int, z: int, step: float) -> int:
-	var score: int = 0
-	var h0: float = _h(x, z)
-	for dz in range(-1, 2):
-		for dx in range(-1, 2):
-			var nx: int = x + dx
-			var nz: int = z + dz
-			if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
-				continue
-			if absf(_h(nx, nz) - h0) <= step + 0.0001:
-				score += 1
-	return score
-
-func _sort_access_candidates(a: Dictionary, b: Dictionary) -> bool:
-	if a["diff_steps"] == b["diff_steps"]:
-		if a["flat_score"] == b["flat_score"]:
-			return a["start_height"] < b["start_height"]
-		return a["flat_score"] > b["flat_score"]
-	return a["diff_steps"] < b["diff_steps"]
-
-func _candidate_too_close(candidate: Dictionary, chosen: Array, min_dist: int) -> bool:
-	var x: int = candidate["x"]
-	var z: int = candidate["z"]
-	var min_dist_sq: int = min_dist * min_dist
-	for other in chosen:
-		var ox: int = other["x"]
-		var oz: int = other["z"]
-		var dx: int = x - ox
-		var dz: int = z - oz
-		if dx * dx + dz * dz <= min_dist_sq:
-			return true
-	return false
-
-func _carve_access_ramp(candidate: Dictionary, step: float, run_per_step: int) -> void:
-	var start_x: int = candidate["x"]
-	var start_z: int = candidate["z"]
-	var end_x: int = candidate["nx"]
-	var end_z: int = candidate["nz"]
-	var start_height: float = candidate["start_height"]
-	var end_height: float = candidate["end_height"]
-	var diff: float = end_height - start_height
-
-	var steps_needed: int = int(absf(diff) / step)
-	if steps_needed <= 0:
-		return
-	var length: int = steps_needed * run_per_step
-	var dir_x: int = end_x - start_x
-	var dir_z: int = end_z - start_z
-	var dir_sign: float = 1.0 if diff >= 0.0 else -1.0
-
-	var width: int = max(1, access_ramp_width_cells)
-	var half: int = width / 2
-	var perp_x: int = 0
-	var perp_z: int = 0
-	if dir_x != 0:
-		perp_z = 1
-	else:
-		perp_x = 1
-
-	for i in range(length + 1):
-		var step_index: int = int(floor(float(i) / float(run_per_step)))
-		var target_height: float = start_height + dir_sign * step * float(step_index)
-		for w in range(-half, width - half):
-			var rx: int = start_x + dir_x * i + perp_x * w
-			var rz: int = start_z + dir_z * i + perp_z * w
-			if rx < 0 or rx >= size_x or rz < 0 or rz >= size_z:
-				continue
-			var idx: int = rz * size_x + rx
-			heights[idx] = _quantize(target_height, height_step)
-
-# -----------------------------
 # ROADS
 # -----------------------------
 func _build_road_network() -> void:
 	road_mask.fill(0)
-	ramp_dir.fill(RAMP_NONE)
-	road_flow.fill(FLOW_NONE)
 
 	var peaks: Array[Vector2i] = _pick_peak_anchors_threshold()
 	var valleys: Array[Vector2i] = _pick_valleys(road_valley_count, road_min_anchor_spacing)
@@ -536,7 +281,6 @@ func _build_road_network() -> void:
 			dense = _rasterize_waypoints_8(waypoints)
 		else:
 			dense = _rasterize_waypoints_4(waypoints)
-		_write_flow_from_path(dense)
 		_stamp_road_path(dense)
 
 	if road_connect_all_regions:
@@ -549,7 +293,6 @@ func _build_road_network() -> void:
 				break
 
 	_grade_road_surface()
-	_derive_road_ramps_full()
 
 func _height_percentile(p: float) -> float:
 	var arr: Array[float] = []
@@ -754,11 +497,6 @@ func _road_edge_cost(a: Vector2i, b: Vector2i) -> float:
 	var dh := absf(_h(a.x, a.y) - _h(b.x, b.y)) / height_step
 	return d + dh * 6.0
 
-func _flow_set(x: int, z: int, v: int) -> void:
-	road_flow[z * size_x + x] = v
-
-func _flow_get(x: int, z: int) -> int:
-	return int(road_flow[z * size_x + x])
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	var dx: int = absi(a.x - b.x)
@@ -968,17 +706,6 @@ func _simplify_path_los(path: Array[Vector2i]) -> Array[Vector2i]:
 		i = best_j
 	return out
 
-func _write_flow_from_path(dense: Array[Vector2i]) -> void:
-	for i in range(dense.size() - 1):
-		var a: Vector2i = dense[i]
-		var b: Vector2i = dense[i + 1]
-		var dx: int = b.x - a.x
-		var dz: int = b.y - a.y
-		if absi(dx) > absi(dz):
-			_flow_set(a.x, a.y, FLOW_X)
-		elif absi(dz) > absi(dx):
-			_flow_set(a.x, a.y, FLOW_Z)
-
 func _smooth_profile_1d(prof: Array[float]) -> void:
 	if prof.size() < 3:
 		return
@@ -1017,15 +744,6 @@ func _stamp_road_path(path: Array[Vector2i]) -> void:
 	for i in range(path.size()):
 		_paint_road_ribbon(path[i], prof[i])
 
-	for i in range(path.size() - 1):
-		var a := path[i]
-		var b := path[i + 1]
-		var dha := prof[i + 1] - prof[i]
-		if dha == height_step:
-			_set_ramp_from_to(a, b)
-		elif dha == -height_step:
-			_set_ramp_from_to(b, a)
-
 func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
 	var cut_max: float = float(road_cut_max_steps) * height_step
 	var width: int = maxi(1, road_width)
@@ -1055,19 +773,6 @@ func _paint_road_ribbon(p: Vector2i, target_h: float) -> void:
 				h1 = h0
 
 			heights[idx] = _quantize(h1, height_step)
-
-func _set_ramp_from_to(low: Vector2i, high: Vector2i) -> void:
-	var dx := high.x - low.x
-	var dz := high.y - low.y
-	var idx := low.y * size_x + low.x
-	if dx == 1 and dz == 0:
-		ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_PX
-	elif dx == -1 and dz == 0:
-		ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_NX
-	elif dx == 0 and dz == 1:
-		ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_PZ
-	elif dx == 0 and dz == -1:
-		ramp_dir[idx] = int(ramp_dir[idx]) | RAMP_NZ
 
 func _grade_road_surface() -> void:
 	if road_grade_passes <= 0:
@@ -1121,50 +826,6 @@ func _grade_road_surface() -> void:
 
 		if not changed:
 			break
-
-func _derive_road_ramps_full() -> void:
-	ramp_dir.fill(RAMP_NONE)
-	var step: float = height_step
-
-	for z in range(size_z):
-		for x in range(size_x):
-			var idx := z * size_x + x
-			if road_mask[idx] == 0:
-				continue
-			var h0 := _h(x, z)
-			var best_flag: int = RAMP_NONE
-			var best_score: int = -1
-
-			var dirs: Array = [
-				{"x": x + 1, "z": z, "flag": RAMP_PX},
-				{"x": x - 1, "z": z, "flag": RAMP_NX},
-				{"x": x, "z": z + 1, "flag": RAMP_PZ},
-				{"x": x, "z": z - 1, "flag": RAMP_NZ},
-			]
-
-			for d in dirs:
-				var nx: int = d["x"]
-				var nz: int = d["z"]
-				if nx < 0 or nx >= size_x or nz < 0 or nz >= size_z:
-					continue
-				var ni: int = nz * size_x + nx
-				if road_mask[ni] == 0:
-					continue
-				if _h(nx, nz) != h0 + step:
-					continue
-
-				var score: int = 0
-				for nn in _neighbors4(Vector2i(nx, nz)):
-					if nn.x < 0 or nn.x >= size_x or nn.y < 0 or nn.y >= size_z:
-						continue
-					if road_mask[nn.y * size_x + nn.x] == 1:
-						score += 1
-
-				if score > best_score:
-					best_score = score
-					best_flag = d["flag"]
-
-			ramp_dir[idx] = best_flag
 
 func _connect_one_unroaded_region() -> bool:
 	var regions := _label_regions_by_step(height_step)
@@ -1228,9 +889,8 @@ func _connect_one_unroaded_region() -> bool:
 		dense = _rasterize_waypoints_8(waypoints)
 	else:
 		dense = _rasterize_waypoints_4(waypoints)
-	_write_flow_from_path(dense)
-	_stamp_road_path(dense)
-	return true
+		_stamp_road_path(dense)
+		return true
 
 func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 	var out := PackedInt32Array()
@@ -1263,102 +923,18 @@ func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 			rid += 1
 	return out
 
-func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
-	if x + 1 >= size_x:
-		return false
-	if enable_step_ramps:
-		if step_ramps_only_on_roads and not (_is_road_cell(x, z) or _is_road_cell(x + 1, z)):
-			return false
-		if is_equal_approx(_h(x + 1, z) - _h(x, z), step):
-			return true
-	var idx := z * size_x + x
-	if (int(ramp_dir[idx]) & RAMP_PX) != 0:
-		return _h(x + 1, z) == _h(x, z) + step
-	if x + 1 < size_x:
-		var idx2 := z * size_x + (x + 1)
-		if (int(ramp_dir[idx2]) & RAMP_NX) != 0:
-			return _h(x, z) == _h(x + 1, z) + step
-	return false
-
-func _edge_is_ramp_z(x: int, z: int, step: float) -> bool:
-	if z + 1 >= size_z:
-		return false
-	if enable_step_ramps:
-		if step_ramps_only_on_roads and not (_is_road_cell(x, z) or _is_road_cell(x, z + 1)):
-			return false
-		if is_equal_approx(_h(x, z + 1) - _h(x, z), step):
-			return true
-	var idx := z * size_x + x
-	if (int(ramp_dir[idx]) & RAMP_PZ) != 0:
-		return _h(x, z + 1) == _h(x, z) + step
-	if z + 1 < size_z:
-		var idx2 := (z + 1) * size_x + x
-		if (int(ramp_dir[idx2]) & RAMP_NZ) != 0:
-			return _h(x, z) == _h(x, z + 1) + step
-	return false
-
-func _cell_index(x: int, z: int) -> int:
-	return z * (size_x - 1) + x
-
-func _is_road_cell(x: int, z: int) -> bool:
-	if not enable_roads:
-		return false
-	if road_mask.is_empty():
-		return false
-	var idx: int = z * size_x + x
-	if idx < 0 or idx >= road_mask.size():
-		return false
-	return road_mask[idx] == 1
-
-func _compute_ramp_kind() -> void:
-	ramp_kind = PackedByteArray()
-	ramp_kind.resize((size_x - 1) * (size_z - 1))
-	for z in range(size_z - 1):
-		for x in range(size_x - 1):
-			var step: float = height_step
-			var do_x: bool = enable_step_ramps and _edge_is_ramp_x(x, z, step)
-			var do_z: bool = enable_step_ramps and _edge_is_ramp_z(x, z, step)
-			if do_x and do_z:
-				var flow: int = _flow_get(x, z)
-				if flow == FLOW_X:
-					do_z = false
-				elif flow == FLOW_Z:
-					do_x = false
-				else:
-					var score_x: int = 0
-					var score_z: int = 0
-					if enable_roads:
-						if road_mask[z * size_x + (x + 1)] == 1:
-							score_x += 10
-						if road_mask[(z + 1) * size_x + x] == 1:
-							score_z += 10
-					if score_x >= score_z:
-						do_z = false
-					else:
-						do_x = false
-			var kind: int = CELL_RAMP_NONE
-			if do_x:
-				kind = CELL_RAMP_EAST
-			elif do_z:
-				kind = CELL_RAMP_SOUTH
-			ramp_kind[_cell_index(x, z)] = kind
-
 func _cell_corners(x: int, z: int) -> CellCorners:
 	var cc: CellCorners = CellCorners.new()
-	var h00: float = _h(x, z)
-	cc.a = h00
-	cc.b = h00
-	cc.c = h00
-	cc.d = h00
-	var kind: int = ramp_kind[_cell_index(x, z)]
-	if kind == CELL_RAMP_EAST:
-		var he: float = _h(x + 1, z)
-		cc.b = he
-		cc.c = he
-	elif kind == CELL_RAMP_SOUTH:
-		var hs: float = _h(x, z + 1)
-		cc.c = hs
-		cc.d = hs
+	var a: float = heights[z * size_x + x]
+	var b: float = heights[z * size_x + (x + 1)]
+	var c: float = heights[(z + 1) * size_x + (x + 1)]
+	var d: float = heights[(z + 1) * size_x + x]
+	var h: float = (a + b + c + d) * 0.25
+	h = _quantize(h, height_step)
+	cc.a = h
+	cc.b = h
+	cc.c = h
+	cc.d = h
 	return cc
 
 # -----------------------------
