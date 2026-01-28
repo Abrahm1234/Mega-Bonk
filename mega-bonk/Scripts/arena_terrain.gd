@@ -85,6 +85,74 @@ class RampCandidate:
 		dir = _dir
 		low = _low
 
+func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
+	match dir:
+		RAMP_EAST:
+			return Vector2i(x + 1, z)
+		RAMP_WEST:
+			return Vector2i(x - 1, z)
+		RAMP_SOUTH:
+			return Vector2i(x, z + 1)
+		RAMP_NORTH:
+			return Vector2i(x, z - 1)
+		_:
+			return Vector2i(x, z)
+
+func _opposite_dir(dir: int) -> int:
+	match dir:
+		RAMP_EAST:
+			return RAMP_WEST
+		RAMP_WEST:
+			return RAMP_EAST
+		RAMP_SOUTH:
+			return RAMP_NORTH
+		RAMP_NORTH:
+			return RAMP_SOUTH
+		_:
+			return dir
+
+func _landing_ok(n: int, lx: int, lz: int, exit_dir: int) -> bool:
+	var landing_idx: int = lz * n + lx
+	var h: float = _heights[landing_idx]
+	var fwd: Vector2i = _neighbor_of(lx, lz, exit_dir)
+	if fwd.x < 0 or fwd.x >= n or fwd.y < 0 or fwd.y >= n:
+		return false
+
+	var fwd_h: float = _heights[fwd.y * n + fwd.x]
+	var max_drop: float = float(max_neighbor_steps) * height_step
+	return (h - fwd_h) <= max_drop
+
+func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var dir: int = _ramp_dir[idx]
+			if dir == RAMP_NONE:
+				continue
+
+			var nb: Vector2i = _neighbor_of(x, z, dir)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				_ramp_dir[idx] = RAMP_NONE
+				continue
+
+			var nidx: int = nb.y * n + nb.x
+			var h_here: float = _heights[idx]
+			var h_nb: float = _heights[nidx]
+			var dh: float = h_here - h_nb
+
+			if absf(dh - want_delta) <= delta_eps:
+				_ramp_low[idx] = h_nb
+				continue
+
+			if absf(-dh - want_delta) <= delta_eps:
+				if _ramp_dir[nidx] == RAMP_NONE:
+					_ramp_dir[nidx] = _opposite_dir(dir)
+					_ramp_low[nidx] = h_here
+				_ramp_dir[idx] = RAMP_NONE
+				continue
+
+			_ramp_dir[idx] = RAMP_NONE
+
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
 		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
@@ -316,28 +384,23 @@ func _generate_ramps() -> void:
 			comp_count += 1
 
 	var candidates: Array[RampCandidate] = []
+	var ramp_dirs: Array[int] = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
 
 	for z in range(n):
 		for x in range(n):
 			var h0: float = _cell_h(x, z)
+			for dir in ramp_dirs:
+				var nb: Vector2i = _neighbor_of(x, z, dir)
+				if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+					continue
 
-			if x + 1 < n:
-				var h1: float = _cell_h(x + 1, z)
-				var d: float = absf(h0 - h1)
-				if absf(d - want_delta) <= delta_eps:
-					if h0 > h1:
-						candidates.append(RampCandidate.new(x, z, RAMP_EAST, h1))
-					else:
-						candidates.append(RampCandidate.new(x + 1, z, RAMP_WEST, h0))
+				var h1: float = _cell_h(nb.x, nb.y)
+				var dh: float = h0 - h1
 
-			if z + 1 < n:
-				var h2: float = _cell_h(x, z + 1)
-				var d2: float = absf(h0 - h2)
-				if absf(d2 - want_delta) <= delta_eps:
-					if h0 > h2:
-						candidates.append(RampCandidate.new(x, z, RAMP_SOUTH, h2))
-					else:
-						candidates.append(RampCandidate.new(x, z + 1, RAMP_NORTH, h0))
+				if absf(dh - want_delta) <= delta_eps:
+					if not _landing_ok(n, nb.x, nb.y, dir):
+						continue
+					candidates.append(RampCandidate.new(x, z, dir, h1))
 
 	for i in range(candidates.size() - 1, 0, -1):
 		var j: int = rng.randi_range(0, i)
@@ -422,6 +485,8 @@ func _generate_ramps() -> void:
 		_ramp_low[idx] = c.low
 		placed += 1
 		extra_budget -= 1
+
+	_validate_ramps_move(n, want_delta, delta_eps)
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
