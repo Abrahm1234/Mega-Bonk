@@ -42,8 +42,14 @@ class_name BlockyTerrain
 # -----------------------------
 @export var enable_ramps: bool = true
 @export_range(0, 64, 1) var ramp_count: int = 18
-@export var ramp_min_delta: float = 4.0
+@export_range(1, 3, 1) var ramp_step_count: int = 1
 @export var ramp_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+
+# -----------------------------
+# Traversal constraints
+# -----------------------------
+@export_range(1, 4, 1) var max_neighbor_steps: int = 1
+@export_range(0, 64, 1) var relax_passes: int = 24
 
 # -----------------------------
 # Visuals
@@ -93,6 +99,7 @@ func generate() -> void:
 	_oz = -world_size_m * 0.5
 
 	_generate_heights()
+	_limit_neighbor_cliffs()
 	_generate_ramps()
 	_build_mesh_and_collision()
 
@@ -162,6 +169,65 @@ func _cell_h(x: int, z: int) -> float:
 	return _heights[z * n + x]
 
 # -----------------------------
+# Cliff limiter (enforces max neighbor delta)
+# -----------------------------
+func _h_to_level(h: float) -> int:
+	return int(roundf(h / maxf(0.0001, height_step)))
+
+func _level_to_h(level: int) -> float:
+	return float(level) * height_step
+
+func _limit_neighbor_cliffs() -> void:
+	var n: int = max(2, cells_per_side)
+	if height_step <= 0.0:
+		return
+
+	var levels := PackedInt32Array()
+	levels.resize(n * n)
+
+	for i in range(n * n):
+		levels[i] = _h_to_level(_heights[i])
+
+	for _pass in range(relax_passes):
+		var changed := false
+
+		for z in range(n):
+			for x in range(n):
+				var idx := z * n + x
+				var level := levels[idx]
+
+				var min_n := level
+				var max_n := level
+
+				if x > 0:
+					min_n = mini(min_n, levels[idx - 1])
+					max_n = maxi(max_n, levels[idx - 1])
+				if x + 1 < n:
+					min_n = mini(min_n, levels[idx + 1])
+					max_n = maxi(max_n, levels[idx + 1])
+				if z > 0:
+					min_n = mini(min_n, levels[idx - n])
+					max_n = maxi(max_n, levels[idx - n])
+				if z + 1 < n:
+					min_n = mini(min_n, levels[idx + n])
+					max_n = maxi(max_n, levels[idx + n])
+
+				if level > min_n + max_neighbor_steps:
+					levels[idx] = min_n + max_neighbor_steps
+					changed = true
+				elif level < max_n - max_neighbor_steps:
+					levels[idx] = max_n - max_neighbor_steps
+					changed = true
+
+		if not changed:
+			break
+
+	for i in range(n * n):
+		var h := _level_to_h(levels[i])
+		h = clampf(h, min_height, minf(max_height, box_height - 0.5))
+		_heights[i] = h
+
+# -----------------------------
 # Ramp generation (one-cell wedges)
 # -----------------------------
 func _generate_ramps() -> void:
@@ -175,11 +241,67 @@ func _generate_ramps() -> void:
 		_ramp_dir[i] = RAMP_NONE
 		_ramp_low[i] = 0.0
 
-	if not enable_ramps or ramp_count <= 0:
+	if not enable_ramps:
 		return
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(noise_seed) ^ 0x6c8e9cf1
+
+	var step := maxf(0.0001, height_step)
+	var want_delta := float(ramp_step_count) * step
+	var delta_eps := step * 0.25
+
+	var levels := PackedInt32Array()
+	levels.resize(n * n)
+	for i in range(n * n):
+		levels[i] = _h_to_level(_heights[i])
+
+	var comp_id := PackedInt32Array()
+	comp_id.resize(n * n)
+	for i in range(n * n):
+		comp_id[i] = -1
+
+	var comp_count := 0
+	var queue: Array[int] = []
+
+	for z in range(n):
+		for x in range(n):
+			var idx := z * n + x
+			if comp_id[idx] != -1:
+				continue
+
+			var target_level := levels[idx]
+			comp_id[idx] = comp_count
+			queue.clear()
+			queue.append(idx)
+
+			while queue.size() > 0:
+				var current := queue.pop_back()
+				var cx := current % n
+				var cz := int(current / n)
+
+				if cx > 0:
+					var left := current - 1
+					if comp_id[left] == -1 and levels[left] == target_level:
+						comp_id[left] = comp_count
+						queue.append(left)
+				if cx + 1 < n:
+					var right := current + 1
+					if comp_id[right] == -1 and levels[right] == target_level:
+						comp_id[right] = comp_count
+						queue.append(right)
+				if cz > 0:
+					var up := current - n
+					if comp_id[up] == -1 and levels[up] == target_level:
+						comp_id[up] = comp_count
+						queue.append(up)
+				if cz + 1 < n:
+					var down := current + n
+					if comp_id[down] == -1 and levels[down] == target_level:
+						comp_id[down] = comp_count
+						queue.append(down)
+
+			comp_count += 1
 
 	var candidates: Array = []
 
@@ -190,43 +312,102 @@ func _generate_ramps() -> void:
 			if x + 1 < n:
 				var h1 := _cell_h(x + 1, z)
 				var d := absf(h0 - h1)
-				if d >= ramp_min_delta:
+				if absf(d - want_delta) <= delta_eps:
 					if h0 > h1:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1, "delta": d })
+						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1 })
 					else:
-						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0, "delta": d })
+						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0 })
 
 			if z + 1 < n:
 				var h2 := _cell_h(x, z + 1)
 				var d2 := absf(h0 - h2)
-				if d2 >= ramp_min_delta:
+				if absf(d2 - want_delta) <= delta_eps:
 					if h0 > h2:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2, "delta": d2 })
+						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2 })
 					else:
-						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0, "delta": d2 })
+						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0 })
 
-	candidates.sort_custom(func(a, b):
-		return a["delta"] > b["delta"]
-	)
+	for i in range(candidates.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var temp := candidates[i]
+		candidates[i] = candidates[j]
+		candidates[j] = temp
+
+	var parent := PackedInt32Array()
+	parent.resize(comp_count)
+	for i in range(comp_count):
+		parent[i] = i
+
+	var find := func(a: int) -> int:
+		var root := a
+		while parent[root] != root:
+			root = parent[root]
+		while parent[a] != a:
+			var next := parent[a]
+			parent[a] = root
+			a = next
+		return root
+
+	var union := func(a: int, b: int) -> void:
+		var ra := find.call(a)
+		var rb := find.call(b)
+		if ra != rb:
+			parent[rb] = ra
 
 	var placed := 0
-	for c in candidates:
-		if placed >= ramp_count:
-			break
 
-		if rng.randf() < 0.25:
+	for c in candidates:
+		var x := int(c["x"])
+		var z := int(c["z"])
+		var idx := z * n + x
+		if _ramp_dir[idx] != RAMP_NONE:
 			continue
+
+		var low := float(c["low"])
+		var low_x := x
+		var low_z := z
+		match int(c["dir"]):
+			RAMP_EAST:
+				low_x += 1
+			RAMP_WEST:
+				low_x -= 1
+			RAMP_SOUTH:
+				low_z += 1
+			RAMP_NORTH:
+				low_z -= 1
+
+		if low_x < 0 or low_x >= n or low_z < 0 or low_z >= n:
+			continue
+
+		var high_comp := comp_id[idx]
+		var low_comp := comp_id[low_z * n + low_x]
+
+		if find.call(high_comp) == find.call(low_comp):
+			continue
+
+		_ramp_dir[idx] = int(c["dir"])
+		_ramp_low[idx] = low
+		placed += 1
+		union.call(high_comp, low_comp)
+
+	var extra_budget := max(0, ramp_count - placed)
+	for c in candidates:
+		if extra_budget <= 0:
+			break
 
 		var x := int(c["x"])
 		var z := int(c["z"])
 		var idx := z * n + x
-
 		if _ramp_dir[idx] != RAMP_NONE:
+			continue
+
+		if rng.randf() < 0.35:
 			continue
 
 		_ramp_dir[idx] = int(c["dir"])
 		_ramp_low[idx] = float(c["low"])
 		placed += 1
+		extra_budget -= 1
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
