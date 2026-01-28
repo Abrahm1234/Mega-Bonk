@@ -43,6 +43,7 @@ class_name BlockyTerrain
 
 # 1-step ramp rule
 @export var enable_step_ramps: bool = true
+@export var step_ramps_only_on_roads: bool = true
 
 # Access ramp pass (multi-step grading)
 @export var ensure_access: bool = true
@@ -1265,8 +1266,11 @@ func _label_regions_by_step(max_step: float) -> PackedInt32Array:
 func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
 	if x + 1 >= size_x:
 		return false
-	if enable_step_ramps and is_equal_approx(_h(x + 1, z) - _h(x, z), step):
-		return true
+	if enable_step_ramps:
+		if step_ramps_only_on_roads and not (_is_road_cell(x, z) or _is_road_cell(x + 1, z)):
+			return false
+		if is_equal_approx(_h(x + 1, z) - _h(x, z), step):
+			return true
 	var idx := z * size_x + x
 	if (int(ramp_dir[idx]) & RAMP_PX) != 0:
 		return _h(x + 1, z) == _h(x, z) + step
@@ -1279,8 +1283,11 @@ func _edge_is_ramp_x(x: int, z: int, step: float) -> bool:
 func _edge_is_ramp_z(x: int, z: int, step: float) -> bool:
 	if z + 1 >= size_z:
 		return false
-	if enable_step_ramps and is_equal_approx(_h(x, z + 1) - _h(x, z), step):
-		return true
+	if enable_step_ramps:
+		if step_ramps_only_on_roads and not (_is_road_cell(x, z) or _is_road_cell(x, z + 1)):
+			return false
+		if is_equal_approx(_h(x, z + 1) - _h(x, z), step):
+			return true
 	var idx := z * size_x + x
 	if (int(ramp_dir[idx]) & RAMP_PZ) != 0:
 		return _h(x, z + 1) == _h(x, z) + step
@@ -1292,6 +1299,16 @@ func _edge_is_ramp_z(x: int, z: int, step: float) -> bool:
 
 func _cell_index(x: int, z: int) -> int:
 	return z * (size_x - 1) + x
+
+func _is_road_cell(x: int, z: int) -> bool:
+	if not enable_roads:
+		return false
+	if road_mask.is_empty():
+		return false
+	var idx: int = z * size_x + x
+	if idx < 0 or idx >= road_mask.size():
+		return false
+	return road_mask[idx] == 1
 
 func _compute_ramp_kind() -> void:
 	ramp_kind = PackedByteArray()
