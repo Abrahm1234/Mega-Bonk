@@ -223,7 +223,7 @@ func _limit_neighbor_cliffs() -> void:
 			break
 
 	for i in range(n * n):
-		var h := _level_to_h(levels[i])
+		var h: float = _level_to_h(levels[i])
 		h = clampf(h, min_height, minf(max_height, box_height - 0.5))
 		_heights[i] = h
 
@@ -244,74 +244,74 @@ func _generate_ramps() -> void:
 	if not enable_ramps:
 		return
 
-	var rng := RandomNumberGenerator.new()
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = int(noise_seed) ^ 0x6c8e9cf1
 
-	var step := maxf(0.0001, height_step)
-	var want_delta := float(ramp_step_count) * step
-	var delta_eps := step * 0.25
+	var step: float = maxf(0.0001, height_step)
+	var want_delta: float = float(ramp_step_count) * step
+	var delta_eps: float = step * 0.25
 
-	var levels := PackedInt32Array()
+	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
 		levels[i] = _h_to_level(_heights[i])
 
-	var comp_id := PackedInt32Array()
+	var comp_id: PackedInt32Array = PackedInt32Array()
 	comp_id.resize(n * n)
 	for i in range(n * n):
 		comp_id[i] = -1
 
-	var comp_count := 0
+	var comp_count: int = 0
 	var queue: Array[int] = []
 
 	for z in range(n):
 		for x in range(n):
-			var idx := z * n + x
+			var idx: int = z * n + x
 			if comp_id[idx] != -1:
 				continue
 
-			var target_level := levels[idx]
+			var target_level: int = levels[idx]
 			comp_id[idx] = comp_count
 			queue.clear()
 			queue.append(idx)
 
 			while queue.size() > 0:
-				var current := queue.pop_back()
-				var cx := current % n
-				var cz := int(current / n)
+				var current: int = int(queue.pop_back())
+				var cx: int = current % n
+				var cz: int = int(current / n)
 
 				if cx > 0:
-					var left := current - 1
+					var left: int = current - 1
 					if comp_id[left] == -1 and levels[left] == target_level:
 						comp_id[left] = comp_count
 						queue.append(left)
 				if cx + 1 < n:
-					var right := current + 1
+					var right: int = current + 1
 					if comp_id[right] == -1 and levels[right] == target_level:
 						comp_id[right] = comp_count
 						queue.append(right)
 				if cz > 0:
-					var up := current - n
+					var up: int = current - n
 					if comp_id[up] == -1 and levels[up] == target_level:
 						comp_id[up] = comp_count
 						queue.append(up)
 				if cz + 1 < n:
-					var down := current + n
+					var down: int = current + n
 					if comp_id[down] == -1 and levels[down] == target_level:
 						comp_id[down] = comp_count
 						queue.append(down)
 
 			comp_count += 1
 
-	var candidates: Array = []
+	var candidates: Array[Dictionary] = []
 
 	for z in range(n):
 		for x in range(n):
-			var h0 := _cell_h(x, z)
+			var h0: float = _cell_h(x, z)
 
 			if x + 1 < n:
-				var h1 := _cell_h(x + 1, z)
-				var d := absf(h0 - h1)
+				var h1: float = _cell_h(x + 1, z)
+				var d: float = absf(h0 - h1)
 				if absf(d - want_delta) <= delta_eps:
 					if h0 > h1:
 						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1 })
@@ -319,8 +319,8 @@ func _generate_ramps() -> void:
 						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0 })
 
 			if z + 1 < n:
-				var h2 := _cell_h(x, z + 1)
-				var d2 := absf(h0 - h2)
+				var h2: float = _cell_h(x, z + 1)
+				var d2: float = absf(h0 - h2)
 				if absf(d2 - want_delta) <= delta_eps:
 					if h0 > h2:
 						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2 })
@@ -328,44 +328,45 @@ func _generate_ramps() -> void:
 						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0 })
 
 	for i in range(candidates.size() - 1, 0, -1):
-		var j := rng.randi_range(0, i)
-		var temp := candidates[i]
+		var j: int = rng.randi_range(0, i)
+		var temp: Dictionary = candidates[i]
 		candidates[i] = candidates[j]
 		candidates[j] = temp
 
-	var parent := PackedInt32Array()
+	var parent: PackedInt32Array = PackedInt32Array()
 	parent.resize(comp_count)
 	for i in range(comp_count):
 		parent[i] = i
 
 	var find := func(a: int) -> int:
-		var root := a
+		var root: int = a
 		while parent[root] != root:
 			root = parent[root]
 		while parent[a] != a:
-			var next := parent[a]
+			var next: int = parent[a]
 			parent[a] = root
 			a = next
 		return root
 
 	var union := func(a: int, b: int) -> void:
-		var ra := find.call(a)
-		var rb := find.call(b)
+		var ra: int = find.call(a)
+		var rb: int = find.call(b)
 		if ra != rb:
 			parent[rb] = ra
 
-	var placed := 0
+	var placed: int = 0
 
-	for c in candidates:
-		var x := int(c["x"])
-		var z := int(c["z"])
-		var idx := z * n + x
+	for i in range(candidates.size()):
+		var c: Dictionary = candidates[i]
+		var x: int = int(c["x"])
+		var z: int = int(c["z"])
+		var idx: int = z * n + x
 		if _ramp_dir[idx] != RAMP_NONE:
 			continue
 
-		var low := float(c["low"])
-		var low_x := x
-		var low_z := z
+		var low: float = float(c["low"])
+		var low_x: int = x
+		var low_z: int = z
 		match int(c["dir"]):
 			RAMP_EAST:
 				low_x += 1
@@ -379,8 +380,8 @@ func _generate_ramps() -> void:
 		if low_x < 0 or low_x >= n or low_z < 0 or low_z >= n:
 			continue
 
-		var high_comp := comp_id[idx]
-		var low_comp := comp_id[low_z * n + low_x]
+		var high_comp: int = comp_id[idx]
+		var low_comp: int = comp_id[low_z * n + low_x]
 
 		if find.call(high_comp) == find.call(low_comp):
 			continue
@@ -390,14 +391,15 @@ func _generate_ramps() -> void:
 		placed += 1
 		union.call(high_comp, low_comp)
 
-	var extra_budget := max(0, ramp_count - placed)
-	for c in candidates:
+	var extra_budget: int = int(max(0, ramp_count - placed))
+	for i in range(candidates.size()):
 		if extra_budget <= 0:
 			break
 
-		var x := int(c["x"])
-		var z := int(c["z"])
-		var idx := z * n + x
+		var c: Dictionary = candidates[i]
+		var x: int = int(c["x"])
+		var z: int = int(c["z"])
+		var idx: int = z * n + x
 		if _ramp_dir[idx] != RAMP_NONE:
 			continue
 
