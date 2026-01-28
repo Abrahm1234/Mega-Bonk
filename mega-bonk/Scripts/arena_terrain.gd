@@ -44,6 +44,7 @@ class_name BlockyTerrain
 @export_range(0, 64, 1) var ramp_count: int = 18
 @export_range(1, 3, 1) var ramp_step_count: int = 1
 @export var ramp_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+@export_range(1, 64, 1) var min_plateau_cells: int = 3
 
 # -----------------------------
 # Traversal constraints
@@ -72,6 +73,41 @@ const RAMP_EAST := 0
 const RAMP_WEST := 1
 const RAMP_SOUTH := 2
 const RAMP_NORTH := 3
+
+func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
+	match dir:
+		RAMP_EAST:
+			return Vector2i(x + 1, z)
+		RAMP_WEST:
+			return Vector2i(x - 1, z)
+		RAMP_SOUTH:
+			return Vector2i(x, z + 1)
+		RAMP_NORTH:
+			return Vector2i(x, z - 1)
+		_:
+			return Vector2i(x, z)
+
+func _landing_ok(n: int, lx: int, lz: int, exit_dir: int) -> bool:
+	var landing_idx: int = lz * n + lx
+	var h: float = _heights[landing_idx]
+	var fwd: Vector2i = _neighbor_of(lx, lz, exit_dir)
+	if fwd.x < 0 or fwd.x >= n or fwd.y < 0 or fwd.y >= n:
+		return false
+
+	var fwd_h: float = _heights[fwd.y * n + fwd.x]
+	var max_drop: float = float(max_neighbor_steps) * height_step
+	return (h - fwd_h) <= max_drop
+
+func _highside_supported(n: int, x: int, z: int, dir_to_low: int, high_h: float, eps: float) -> bool:
+	for d in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+		if d == dir_to_low:
+			continue
+		var nb: Vector2i = _neighbor_of(x, z, d)
+		if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+			continue
+		if absf(_cell_h(nb.x, nb.y) - high_h) <= eps:
+			return true
+	return false
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -304,28 +340,44 @@ func _generate_ramps() -> void:
 			comp_count += 1
 
 	var candidates: Array[Dictionary] = []
+	var candidates_mid: Array[Dictionary] = []
+	var candidates_relaxed: Array[Dictionary] = []
+	var comp_size: PackedInt32Array = PackedInt32Array()
+	comp_size.resize(comp_count)
+	for i in range(comp_count):
+		comp_size[i] = 0
+	for i in range(n * n):
+		var cid: int = comp_id[i]
+		if cid >= 0:
+			comp_size[cid] += 1
 
 	for z in range(n):
 		for x in range(n):
 			var h0: float = _cell_h(x, z)
+			for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+				var nb: Vector2i = _neighbor_of(x, z, dir)
+				if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+					continue
 
-			if x + 1 < n:
-				var h1: float = _cell_h(x + 1, z)
-				var d: float = absf(h0 - h1)
-				if absf(d - want_delta) <= delta_eps:
-					if h0 > h1:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1 })
-					else:
-						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0 })
+				var h1: float = _cell_h(nb.x, nb.y)
+				var dh: float = h0 - h1
 
-			if z + 1 < n:
-				var h2: float = _cell_h(x, z + 1)
-				var d2: float = absf(h0 - h2)
-				if absf(d2 - want_delta) <= delta_eps:
-					if h0 > h2:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2 })
-					else:
-						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0 })
+				if absf(dh - want_delta) <= delta_eps:
+					candidates_relaxed.append({ "x": x, "z": z, "dir": dir, "low": h1 })
+
+					if _landing_ok(n, nb.x, nb.y, dir) and _highside_supported(n, x, z, dir, h0, delta_eps):
+						candidates_mid.append({ "x": x, "z": z, "dir": dir, "low": h1 })
+
+						var idx0: int = z * n + x
+						var idx1: int = nb.y * n + nb.x
+						var high_comp: int = comp_id[idx0]
+						var low_comp: int = comp_id[idx1]
+						if comp_size[high_comp] < min_plateau_cells:
+							continue
+						if comp_size[low_comp] < min_plateau_cells:
+							continue
+
+						candidates.append({ "x": x, "z": z, "dir": dir, "low": h1 })
 
 	for i in range(candidates.size() - 1, 0, -1):
 		var j: int = rng.randi_range(0, i)
