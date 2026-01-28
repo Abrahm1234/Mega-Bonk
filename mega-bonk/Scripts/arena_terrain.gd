@@ -131,12 +131,16 @@ func _landing_ok(n: int, lx: int, lz: int, exit_dir: int) -> bool:
 	var max_drop: float = float(max_neighbor_steps) * height_step
 	return (h - fwd_h) <= max_drop
 
-func _uphill_supported(n: int, x: int, z: int, dir: int, high_h: float, eps: float) -> bool:
-	var up_dir: int = _opposite_dir(dir)
-	var up: Vector2i = _neighbor_of(x, z, up_dir)
-	if up.x < 0 or up.x >= n or up.y < 0 or up.y >= n:
-		return false
-	return absf(_cell_h(up.x, up.y) - high_h) <= eps
+func _highside_supported(n: int, x: int, z: int, dir_to_low: int, high_h: float, eps: float) -> bool:
+	for d in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+		if d == dir_to_low:
+			continue
+		var nb: Vector2i = _neighbor_of(x, z, d)
+		if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+			continue
+		if absf(_cell_h(nb.x, nb.y) - high_h) <= eps:
+			return true
+	return false
 
 func _dir_from_to(ax: int, az: int, bx: int, bz: int) -> int:
 	if bx == ax + 1 and bz == az:
@@ -277,7 +281,7 @@ func _ensure_each_component_has_incident_ramp(n: int, comp_count: int, comp_id: 
 		min_lvl = mini(min_lvl, levels[i])
 		max_lvl = maxi(max_lvl, levels[i])
 
-	var budget: int = per_level_ramp_budget
+	var budget: int = maxi(per_level_ramp_budget, comp_count * 2)
 
 	for target_c in range(comp_count):
 		if budget <= 0:
@@ -318,7 +322,7 @@ func _ensure_each_component_has_incident_ramp(n: int, comp_count: int, comp_id: 
 					var dh: float = h0 - _heights[nidx]
 					if absf(dh - want_delta) > delta_eps:
 						continue
-					if not _uphill_supported(n, x, z, dir, h0, delta_eps):
+					if not _highside_supported(n, x, z, dir, h0, delta_eps):
 						continue
 
 					seen += 1
@@ -380,7 +384,7 @@ func _ensure_each_component_has_incident_ramp(n: int, comp_count: int, comp_id: 
 						var dir_hi_to_low: int = _opposite_dir(dir_to_hi)
 						var hi_h: float = _heights[hi_idx]
 
-						if not _uphill_supported(n, hi.x, hi.y, dir_hi_to_low, hi_h, delta_eps):
+						if not _highside_supported(n, hi.x, hi.y, dir_hi_to_low, hi_h, delta_eps):
 							continue
 						if _ramp_dir[hi_idx] != RAMP_NONE:
 							continue
@@ -408,9 +412,12 @@ func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
 			if dir == RAMP_NONE:
 				continue
 
+			var prot: int = _ramp_protect[idx]
+
 			var nb: Vector2i = _neighbor_of(x, z, dir)
 			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
 				_ramp_dir[idx] = RAMP_NONE
+				_ramp_protect[idx] = 0
 				continue
 
 			var nidx: int = nb.y * n + nb.x
@@ -426,10 +433,13 @@ func _validate_ramps_move(n: int, want_delta: float, delta_eps: float) -> void:
 				if _ramp_dir[nidx] == RAMP_NONE:
 					_ramp_dir[nidx] = _opposite_dir(dir)
 					_ramp_low[nidx] = h_here
+					_ramp_protect[nidx] = prot
 				_ramp_dir[idx] = RAMP_NONE
+				_ramp_protect[idx] = 0
 				continue
 
 			_ramp_dir[idx] = RAMP_NONE
+			_ramp_protect[idx] = 0
 
 func _edge_matches(ca: Vector4, cb: Vector4, edge_a: int, edge_b: int, eps: float) -> bool:
 	var ea: Vector2 = _edge_pair(ca, edge_a)
@@ -486,19 +496,11 @@ func _prune_unconnected_ramps(n: int, eps: float) -> void:
 				_ramp_protect[idx] = 0
 				continue
 
-			var is_protected: bool = _ramp_protect[idx] != 0
-			if is_protected:
+			if _ramp_protect[idx] != 0:
 				continue
 
-			var up_nb: Vector2i = _neighbor_of(x, z, _opposite_dir(dir))
-			if up_nb.x < 0 or up_nb.x >= n or up_nb.y < 0 or up_nb.y >= n:
-				_ramp_dir[idx] = RAMP_NONE
-				continue
-
-			var c_up: Vector4 = _cell_corners(up_nb.x, up_nb.y)
-			var u_edge: int = _up_edge(dir)
-			var u_opp: int = _down_edge(dir)
-			if not _edge_matches(c_here, c_up, u_edge, u_opp, eps):
+			var high_h: float = _cell_h(x, z)
+			if not _highside_supported(n, x, z, dir, high_h, eps):
 				_ramp_dir[idx] = RAMP_NONE
 
 func _ready() -> void:
@@ -808,7 +810,7 @@ func _generate_ramps() -> void:
 
 				if absf(dh - want_delta) <= delta_eps:
 					candidates_relaxed.append(RampCandidate.new(x, z, dir, h1))
-					if _landing_ok(n, nb.x, nb.y, dir) and _uphill_supported(n, x, z, dir, h0, delta_eps):
+						if _landing_ok(n, nb.x, nb.y, dir) and _highside_supported(n, x, z, dir, h0, delta_eps):
 						candidates_mid.append(RampCandidate.new(x, z, dir, h1))
 						var idx0: int = z * n + x
 						var idx1: int = nb.y * n + nb.x
