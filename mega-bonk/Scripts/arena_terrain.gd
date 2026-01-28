@@ -73,6 +73,18 @@ const RAMP_WEST := 1
 const RAMP_SOUTH := 2
 const RAMP_NORTH := 3
 
+class RampCandidate:
+	var x: int
+	var z: int
+	var dir: int
+	var low: float
+
+	func _init(_x: int, _z: int, _dir: int, _low: float) -> void:
+		x = _x
+		z = _z
+		dir = _dir
+		low = _low
+
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
 		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
@@ -303,7 +315,7 @@ func _generate_ramps() -> void:
 
 			comp_count += 1
 
-	var candidates: Array[Dictionary] = []
+	var candidates: Array[RampCandidate] = []
 
 	for z in range(n):
 		for x in range(n):
@@ -314,22 +326,22 @@ func _generate_ramps() -> void:
 				var d: float = absf(h0 - h1)
 				if absf(d - want_delta) <= delta_eps:
 					if h0 > h1:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1 })
+						candidates.append(RampCandidate.new(x, z, RAMP_EAST, h1))
 					else:
-						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0 })
+						candidates.append(RampCandidate.new(x + 1, z, RAMP_WEST, h0))
 
 			if z + 1 < n:
 				var h2: float = _cell_h(x, z + 1)
 				var d2: float = absf(h0 - h2)
 				if absf(d2 - want_delta) <= delta_eps:
 					if h0 > h2:
-						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2 })
+						candidates.append(RampCandidate.new(x, z, RAMP_SOUTH, h2))
 					else:
-						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0 })
+						candidates.append(RampCandidate.new(x, z + 1, RAMP_NORTH, h0))
 
 	for i in range(candidates.size() - 1, 0, -1):
 		var j: int = rng.randi_range(0, i)
-		var temp: Dictionary = candidates[i]
+		var temp: RampCandidate = candidates[i]
 		candidates[i] = candidates[j]
 		candidates[j] = temp
 
@@ -357,17 +369,17 @@ func _generate_ramps() -> void:
 	var placed: int = 0
 
 	for i in range(candidates.size()):
-		var c: Dictionary = candidates[i]
-		var x: int = int(c["x"])
-		var z: int = int(c["z"])
+		var c: RampCandidate = candidates[i]
+		var x: int = c.x
+		var z: int = c.z
 		var idx: int = z * n + x
 		if _ramp_dir[idx] != RAMP_NONE:
 			continue
 
-		var low: float = float(c["low"])
+		var low: float = c.low
 		var low_x: int = x
 		var low_z: int = z
-		match int(c["dir"]):
+		match c.dir:
 			RAMP_EAST:
 				low_x += 1
 			RAMP_WEST:
@@ -386,7 +398,7 @@ func _generate_ramps() -> void:
 		if find.call(high_comp) == find.call(low_comp):
 			continue
 
-		_ramp_dir[idx] = int(c["dir"])
+		_ramp_dir[idx] = c.dir
 		_ramp_low[idx] = low
 		placed += 1
 		union.call(high_comp, low_comp)
@@ -396,9 +408,9 @@ func _generate_ramps() -> void:
 		if extra_budget <= 0:
 			break
 
-		var c: Dictionary = candidates[i]
-		var x: int = int(c["x"])
-		var z: int = int(c["z"])
+		var c: RampCandidate = candidates[i]
+		var x: int = c.x
+		var z: int = c.z
 		var idx: int = z * n + x
 		if _ramp_dir[idx] != RAMP_NONE:
 			continue
@@ -406,8 +418,8 @@ func _generate_ramps() -> void:
 		if rng.randf() < 0.35:
 			continue
 
-		_ramp_dir[idx] = int(c["dir"])
-		_ramp_low[idx] = float(c["low"])
+		_ramp_dir[idx] = c.dir
+		_ramp_low[idx] = c.low
 		placed += 1
 		extra_budget -= 1
 
@@ -546,7 +558,11 @@ func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var b := Vector3(_ox + world_size_m, y, _oz)
 	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
 	var d := Vector3(_ox, y, _oz + world_size_m)
-	_add_quad(st, a, b, c, d, Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1), box_color)
+	var u0 := Vector2(0.0, 0.0) * uv_scale
+	var u1 := Vector2(1.0, 0.0) * uv_scale
+	var u2 := Vector2(1.0, 1.0) * uv_scale
+	var u3 := Vector2(0.0, 1.0) * uv_scale
+	_add_quad(st, a, b, c, d, u0, u1, u2, u3, box_color)
 
 func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
 	# West wall (x = _ox)
@@ -584,7 +600,11 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
 	var d := Vector3(_ox, y, _oz + world_size_m)
 	# Flip winding vs floor so normals face inward-ish
-	_add_quad(st, a, d, c, b, Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), box_color)
+	var u0 := Vector2(0.0, 0.0) * uv_scale
+	var u1 := Vector2(0.0, 1.0) * uv_scale
+	var u2 := Vector2(1.0, 1.0) * uv_scale
+	var u3 := Vector2(1.0, 0.0) * uv_scale
+	_add_quad(st, a, d, c, b, u0, u1, u2, u3, box_color)
 
 # -----------------------------
 # Terrain wall helpers (between unequal cells)
