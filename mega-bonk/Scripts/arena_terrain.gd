@@ -206,7 +206,7 @@ func _generate_ramps() -> void:
 						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0, "delta": d2 })
 
 	candidates.sort_custom(func(a, b):
-		return int(b["delta"] * 1000.0) - int(a["delta"] * 1000.0)
+		return a["delta"] > b["delta"]
 	)
 
 	var placed := 0
@@ -294,13 +294,17 @@ func _build_mesh_and_collision() -> void:
 			var c := Vector3(x1, c0.z, z1)
 			var d := Vector3(x0, c0.w, z1)
 
+			var cell_color := terrain_color
+			if _ramp_dir[z * n + x] != RAMP_NONE:
+				cell_color = ramp_color
+
 			_add_quad(
 				st, a, b, c, d,
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top,
-				_ramp_dir[z * n + x] == RAMP_NONE ? terrain_color : ramp_color
+				cell_color
 			)
 
 	var eps := 0.0001
