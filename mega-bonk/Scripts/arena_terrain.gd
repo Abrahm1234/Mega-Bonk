@@ -1,354 +1,328 @@
 extends Node3D
 class_name BlockyTerrain
 
-@export var size_x: int = 256
-@export var size_z: int = 256
-@export var cell_size: float = 2.0
+# -----------------------------
+# Arena size (14x14)
+# -----------------------------
+@export_range(2, 128, 1) var cells_per_side: int = 14
+@export var world_size_m: float = 256.0  # total arena width/depth in meters
 
-# Voxel look
+# -----------------------------
+# Heightmap (low-res noise)
+# -----------------------------
+@export var noise_seed: int = 1234
+@export var noise_frequency: float = 0.12
+@export var noise_octaves: int = 3
+@export var noise_lacunarity: float = 2.0
+@export var noise_gain: float = 0.5
+
+@export var height_scale: float = 26.0
 @export var height_step: float = 2.0
 @export var min_height: float = -10.0
+@export var max_height: float = 60.0
 
-# Box / world bounds
+# Optional: make the map chunkier by sampling the same value for blocks of cells.
+# 1 = true 14x14 detail. 2 = 7x7 “macro” feel, etc.
+@export_range(1, 8, 1) var block_size_cells: int = 1
+
+# Optional shaping (similar to your previous arena shaping)
+@export var center_flat_radius_m: float = 55.0
+@export_range(0.0, 1.0, 0.01) var center_flat_strength: float = 0.75
+@export_range(0.0, 1.0, 0.01) var edge_ramp_strength: float = 0.35
+
+# -----------------------------
+# Containing box
+# -----------------------------
 @export var outer_floor_height: float = -40.0
 @export var box_height: float = 80.0
 @export var build_ceiling: bool = false
 
-# Low-res arena noise (macro shapes)
-@export var arena_lr_cells: int = 32
-@export var arena_noise_seed: int = 1234
-@export var arena_noise_frequency: float = 0.08
-@export var arena_noise_octaves: int = 3
-@export var arena_noise_lacunarity: float = 2.0
-@export var arena_noise_gain: float = 0.5
-@export var arena_height_scale: float = 26.0
+# -----------------------------
+# Visuals
+# -----------------------------
+@export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+@export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
 
-# Arena shaping / readability
-@export var center_flat_radius_m: float = 55.0
-@export var center_flat_strength: float = 0.75  # 0..1
-@export var outer_ramp_strength: float = 0.35   # 0..1
+@onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
+@onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
 
-# Make hills chunkier (horizontal block size)
-@export var macro_block_size_m: float = 8.0
-@export var use_nearest_upsample: bool = true
-
-# Optional slope control (can flatten if too aggressive)
-@export var max_step_per_cell: float = 0.0      # set 0 to disable
-@export var step_clamp_passes: int = 0
-
-# 1-step ramp rule
-@export var enable_step_ramps: bool = true
-
-@onready var mesh_instance: MeshInstance3D = $TerrainBody/TerrainMesh
-@onready var collision_shape: CollisionShape3D = $TerrainBody/TerrainCollision
-
-var heights: PackedFloat32Array
+var _cell_size: float
 var _ox: float
 var _oz: float
+var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
 
 func _ready() -> void:
+	if mesh_instance == null or collision_shape == null:
+		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
+		return
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh_instance.material_override = mat
+
 	generate()
 
+func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
+		generate()
+
 func generate() -> void:
-	_ox = -float(size_x) * cell_size * 0.5
-	_oz = -float(size_z) * cell_size * 0.5
+	var n: int = max(2, cells_per_side)
+	_cell_size = world_size_m / float(n)
+
+	# Center the arena around (0,0) in XZ
+	_ox = -world_size_m * 0.5
+	_oz = -world_size_m * 0.5
+
 	_generate_heights()
-	_build_blocky_mesh_and_collision()
+	_build_mesh_and_collision()
 
 # -----------------------------
-# HEIGHTS
+# Height generation (14x14)
 # -----------------------------
 func _generate_heights() -> void:
-	heights = PackedFloat32Array()
-	heights.resize(size_x * size_z)
-
-	var lr: int = max(2, arena_lr_cells)
-	var lr_grid: PackedFloat32Array = PackedFloat32Array()
-	lr_grid.resize(lr * lr)
+	var n: int = max(2, cells_per_side)
+	_heights = PackedFloat32Array()
+	_heights.resize(n * n)
 
 	var noise := FastNoiseLite.new()
-	noise.seed = arena_noise_seed
-	noise.frequency = arena_noise_frequency
+	noise.seed = noise_seed
+	noise.frequency = noise_frequency
 	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	noise.fractal_octaves = arena_noise_octaves
-	noise.fractal_lacunarity = arena_noise_lacunarity
-	noise.fractal_gain = arena_noise_gain
+	noise.fractal_octaves = noise_octaves
+	noise.fractal_lacunarity = noise_lacunarity
+	noise.fractal_gain = noise_gain
 
-	for gz in range(lr):
-		for gx in range(lr):
-			var n: float = noise.get_noise_2d(float(gx), float(gz))
-			n = signf(n) * pow(absf(n), 1.35)
-			lr_grid[gz * lr + gx] = n
+	var half_w: float = world_size_m * 0.5
+	var flat_r: float = maxf(0.0, center_flat_radius_m)
 
-	var cx_cells: float = (float(size_x) - 1.0) * 0.5
-	var cz_cells: float = (float(size_z) - 1.0) * 0.5
-	var flat_r_cells: float = maxf(0.0, center_flat_radius_m / cell_size)
-	var block_cells: int = max(1, int(round(macro_block_size_m / cell_size)))
+	var bs: int = max(1, block_size_cells)
 
-	for z in range(size_z):
-		for x in range(size_x):
-			# Macro chunking (sample the same low-res coord within each macro block)
-			var sx: int = int(floor(float(x) / float(block_cells))) * block_cells
-			var sz: int = int(floor(float(z) / float(block_cells))) * block_cells
+	for z in range(n):
+		for x in range(n):
+			# Optional chunking: force (x,z) to sample on block boundaries
+			var sx: int = int(floor(float(x) / float(bs))) * bs
+			var sz: int = int(floor(float(z) / float(bs))) * bs
 
-			var u: float = float(sx) / maxf(1.0, float(size_x - 1)) * float(lr - 1)
-			var v: float = float(sz) / maxf(1.0, float(size_z - 1)) * float(lr - 1)
+			# Sample noise in cell coordinates (low-res by design: only n x n samples)
+			var v: float = noise.get_noise_2d(float(sx), float(sz))
 
-			var nxy: float
-			if use_nearest_upsample:
-				var gx_i: int = clampi(int(round(u)), 0, lr - 1)
-				var gz_i: int = clampi(int(round(v)), 0, lr - 1)
-				nxy = lr_grid[gz_i * lr + gx_i]
-			else:
-				var x0: int = int(floor(u))
-				var z0: int = int(floor(v))
-				var x1: int = min(x0 + 1, lr - 1)
-				var z1: int = min(z0 + 1, lr - 1)
-				var fu: float = u - float(x0)
-				var fv: float = v - float(z0)
+			# Mild shaping for “arena-like” silhouettes
+			v = signf(v) * pow(absf(v), 1.35)
 
-				var n00: float = lr_grid[z0 * lr + x0]
-				var n10: float = lr_grid[z0 * lr + x1]
-				var n01: float = lr_grid[z1 * lr + x0]
-				var n11: float = lr_grid[z1 * lr + x1]
+			var h: float = v * height_scale
 
-				var nx0: float = lerpf(n00, n10, fu)
-				var nx1: float = lerpf(n01, n11, fu)
-				nxy = lerpf(nx0, nx1, fv)
-
-			# IMPORTANT: heights are around 0, not around outer_floor_height
-			var h: float = nxy * arena_height_scale
-
-			# Center flatten blends toward 0.0 (NOT toward floor_y)
-			if flat_r_cells > 0.0:
-				var dx: float = float(x) - cx_cells
-				var dz: float = float(z) - cz_cells
-				var d: float = sqrt(dx * dx + dz * dz)
-				var t: float = clampf(d / flat_r_cells, 0.0, 1.0)
+			# Center flatten blends toward 0.0
+			if flat_r > 0.0:
+				var px: float = _ox + (float(x) + 0.5) * _cell_size
+				var pz: float = _oz + (float(z) + 0.5) * _cell_size
+				var d: float = sqrt(px * px + pz * pz)
+				var t: float = clampf(d / flat_r, 0.0, 1.0)
 				var flatten: float = lerpf(center_flat_strength, 0.0, t)
 				h = lerpf(h, 0.0, flatten)
 
-			# Raise edges a bit (optional)
-			var dxw: float = absf(float(x) - cx_cells) / maxf(1.0, cx_cells)
-			var dzw: float = absf(float(z) - cz_cells) / maxf(1.0, cz_cells)
-			var edge_t: float = clampf(maxf(dxw, dzw), 0.0, 1.0)
-			h += edge_t * edge_t * arena_height_scale * outer_ramp_strength
+			# Edge ramp raises toward boundaries (helps form “bowl/arena” readability)
+			var pxn: float = absf((_ox + (float(x) + 0.5) * _cell_size)) / maxf(0.001, half_w)
+			var pzn: float = absf((_oz + (float(z) + 0.5) * _cell_size)) / maxf(0.001, half_w)
+			var edge_t: float = clampf(maxf(pxn, pzn), 0.0, 1.0)
+			h += edge_t * edge_t * height_scale * edge_ramp_strength
 
-			h = maxf(h, min_height)
+			# Clamp + quantize (voxel look)
+			h = clampf(h, min_height, minf(max_height, box_height - 0.5))
 			h = _quantize(h, height_step)
-			heights[z * size_x + x] = h
 
-	# Optional: this can “flatten” if too small. Keep disabled first.
-	for _p in range(step_clamp_passes):
-		_apply_step_limit(max_step_per_cell)
-
-func _apply_step_limit(max_step: float) -> void:
-	if max_step <= 0.0:
-		return
-
-	for z in range(size_z):
-		for x in range(size_x):
-			var idx: int = z * size_x + x
-			var h0: float = heights[idx]
-
-			if x + 1 < size_x:
-				var j: int = z * size_x + (x + 1)
-				var h1: float = heights[j]
-				var d: float = h0 - h1
-				if d > max_step:
-					h0 = h1 + max_step
-				elif d < -max_step:
-					h0 = h1 - max_step
-
-			if z + 1 < size_z:
-				var j2: int = (z + 1) * size_x + x
-				var h2: float = heights[j2]
-				var d2: float = h0 - h2
-				if d2 > max_step:
-					h0 = h2 + max_step
-				elif d2 < -max_step:
-					h0 = h2 - max_step
-
-			heights[idx] = _quantize(h0, height_step)
+			_heights[z * n + x] = h
 
 func _quantize(h: float, step: float) -> float:
 	if step <= 0.0:
 		return h
 	return roundf(h / step) * step
 
-func _h(x: int, z: int) -> float:
-	return heights[z * size_x + x]
-
-func _pos(x: int, z: int, y: float) -> Vector3:
-	return Vector3(_ox + float(x) * cell_size, y, _oz + float(z) * cell_size)
+func _cell_h(x: int, z: int) -> float:
+	var n: int = max(2, cells_per_side)
+	return _heights[z * n + x]
 
 # -----------------------------
-# MESH
+# Mesh building
 # -----------------------------
-func _build_blocky_mesh_and_collision() -> void:
+func _build_mesh_and_collision() -> void:
+	var n: int = max(2, cells_per_side)
+
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
-	var step: float = height_step
 
-	for z in range(size_z - 1):
-		for x in range(size_x - 1):
-			var h00: float = _h(x, z)
-			var h10: float = _h(x + 1, z)
-			var h01: float = _h(x, z + 1)
+	# Floor of container
+	_add_floor(st, outer_floor_height, uv_scale_top)
 
-			# Default: flat top quad at h00
-			var a_y: float = h00
-			var b_y: float = h00
-			var c_y: float = h00
-			var d_y: float = h00
+	# Terrain cells (flat tops) + vertical walls where heights differ
+	for z in range(n):
+		for x in range(n):
+			var h: float = _cell_h(x, z)
 
-			var ramp_east: bool = false
-			var ramp_south: bool = false
+			var x0: float = _ox + float(x) * _cell_size
+			var x1: float = x0 + _cell_size
+			var z0: float = _oz + float(z) * _cell_size
+			var z1: float = z0 + _cell_size
 
-			# 1-step ramps: tilt this cell toward a neighbor that is exactly +step higher
-			if enable_step_ramps:
-				if is_equal_approx(h10 - h00, step):
-					# Ramp rises to the east
-					ramp_east = true
-					b_y = h10
-					c_y = h10
-				if is_equal_approx(h01 - h00, step):
-					# Ramp rises to the south
-					ramp_south = true
-					c_y = h01
-					d_y = h01
+			# Top (flat)
+			var a := Vector3(x0, h, z0)
+			var b := Vector3(x1, h, z0)
+			var c := Vector3(x1, h, z1)
+			var d := Vector3(x0, h, z1)
 
 			_add_quad(
-				st,
-				_pos(x,     z,     a_y),
-				_pos(x + 1, z,     b_y),
-				_pos(x + 1, z + 1, c_y),
-				_pos(x,     z + 1, d_y),
+				st, a, b, c, d,
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
-				Vector2(float(x), float(z + 1)) * uv_scale_top
+				Vector2(float(x), float(z + 1)) * uv_scale_top,
+				terrain_color
 			)
 
-			# Walls: only where neighbor is lower AND not replaced by a ramp on that edge
-			var hn: float = _h(x, z - 1) if z > 0 else h00
-			var hs: float = _h(x, z + 1)
-			var hw: float = _h(x - 1, z) if x > 0 else h00
-			var he: float = _h(x + 1, z)
+			# Internal walls (only add walls for edges where THIS cell is higher; avoids duplicates)
+			# East edge
+			if x + 1 < n:
+				var he: float = _cell_h(x + 1, z)
+				if h > he + 0.0001:
+					_add_wall_x_edge(st, x1, z0, z1, he, h, true, uv_scale_wall)
+			# West edge
+			if x - 1 >= 0:
+				var hw: float = _cell_h(x - 1, z)
+				if h > hw + 0.0001:
+					_add_wall_x_edge(st, x0, z0, z1, hw, h, false, uv_scale_wall)
+			# South edge
+			if z + 1 < n:
+				var hs: float = _cell_h(x, z + 1)
+				if h > hs + 0.0001:
+					_add_wall_z_edge(st, z1, x0, x1, hs, h, true, uv_scale_wall)
+			# North edge
+			if z - 1 >= 0:
+				var hn: float = _cell_h(x, z - 1)
+				if h > hn + 0.0001:
+					_add_wall_z_edge(st, z0, x0, x1, hn, h, false, uv_scale_wall)
 
-			# North edge (no ramp handled here)
-			if z > 0 and hn < h00:
-				_add_wall_z(st, x, z, hn, h00, true, uv_scale_wall)
-
-			# West edge (no ramp handled here)
-			if x > 0 and hw < h00:
-				_add_wall_x(st, x, z, hw, h00, true, uv_scale_wall)
-
-			# South edge: skip the wall if this cell ramps south into it
-			if hs < h00 and not ramp_south:
-				_add_wall_z(st, x, z + 1, hs, h00, false, uv_scale_wall)
-
-			# East edge: skip the wall if this cell ramps east into it
-			if he < h00 and not ramp_east:
-				_add_wall_x(st, x + 1, z, he, h00, false, uv_scale_wall)
-
-	_add_box_walls(st, uv_scale_wall)
+	# Container walls (keeps everything “inside a box”)
+	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
 
 	if build_ceiling:
-		_add_ceiling(st)
+		_add_ceiling(st, box_height, uv_scale_top)
 
 	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
 
-func _add_box_walls(st: SurfaceTool, uv_scale_wall: float) -> void:
-	var floor_y: float = minf(outer_floor_height, min_height)
-	var top_y: float = box_height
+# -----------------------------
+# Container primitives
+# -----------------------------
+func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
+	var a := Vector3(_ox, y, _oz)
+	var b := Vector3(_ox + world_size_m, y, _oz)
+	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
+	var d := Vector3(_ox, y, _oz + world_size_m)
+	_add_quad(st, a, b, c, d, Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1), box_color)
 
-	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, 0, floor_y, top_y, true, uv_scale_wall)
-	for x in range(size_x - 1):
-		_add_wall_z_one_sided(st, x, size_z - 1, floor_y, top_y, false, uv_scale_wall)
+func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
+	# West wall (x = _ox)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz), Vector3(_ox, y0, _oz + world_size_m), y1, uv_scale, true)
+	# East wall (x = _ox + world_size_m)
+	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz), y1, uv_scale, true)
+	# North wall (z = _oz)
+	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz), Vector3(_ox, y0, _oz), y1, uv_scale, true)
+	# South wall (z = _oz + world_size_m)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz + world_size_m), y1, uv_scale, true)
 
-	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, 0, z, floor_y, top_y, true, uv_scale_wall)
-	for z in range(size_z - 1):
-		_add_wall_x_one_sided(st, size_x - 1, z, floor_y, top_y, false, uv_scale_wall)
+func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float, uv_scale: float, outward: bool) -> void:
+	var a := p0
+	var b := p1
+	var c := Vector3(p1.x, top_y, p1.z)
+	var d := Vector3(p0.x, top_y, p0.z)
 
-func _add_ceiling(st: SurfaceTool) -> void:
-	var y: float = box_height
-	var a: Vector3 = _pos(0, 0, y)
-	var b: Vector3 = _pos(size_x - 1, 0, y)
-	var c: Vector3 = _pos(size_x - 1, size_z - 1, y)
-	var d: Vector3 = _pos(0, size_z - 1, y)
-	_add_quad(st, a, d, c, b, Vector2(0,0), Vector2(0,1), Vector2(1,1), Vector2(1,0))
+	# Order affects normals; culling is disabled, but keep consistent anyway.
+	if outward:
+		_add_quad(st, b, a, d, c,
+			Vector2(0, a.y * uv_scale), Vector2(1, b.y * uv_scale),
+			Vector2(1, top_y * uv_scale), Vector2(0, top_y * uv_scale),
+			box_color
+		)
+	else:
+		_add_quad(st, a, b, c, d,
+			Vector2(0, a.y * uv_scale), Vector2(1, b.y * uv_scale),
+			Vector2(1, top_y * uv_scale), Vector2(0, top_y * uv_scale),
+			box_color
+		)
+
+func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
+	var a := Vector3(_ox, y, _oz)
+	var b := Vector3(_ox + world_size_m, y, _oz)
+	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
+	var d := Vector3(_ox, y, _oz + world_size_m)
+	# Flip winding vs floor so normals face inward-ish
+	_add_quad(st, a, d, c, b, Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), box_color)
 
 # -----------------------------
-# Geometry helpers
+# Terrain wall helpers (between unequal cells)
 # -----------------------------
-func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
-	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2) -> void:
-	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(ub); st.add_vertex(b)
-	st.set_uv(uc); st.add_vertex(c)
-	st.set_uv(ua); st.add_vertex(a)
-	st.set_uv(uc); st.add_vertex(c)
-	st.set_uv(ud); st.add_vertex(d)
+func _add_wall_x_edge(st: SurfaceTool, x_edge: float, z0: float, z1: float, low_y: float, high_y: float, east: bool, uv_scale: float) -> void:
+	var a := Vector3(x_edge, high_y, z0)
+	var b := Vector3(x_edge, high_y, z1)
+	var c := Vector3(x_edge, low_y, z1)
+	var d := Vector3(x_edge, low_y, z0)
 
-func _add_wall_z(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
-	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, north, uv_scale)
-	_add_wall_z_one_sided(st, x, z_edge, h_low, h_high, not north, uv_scale)
+	# east=true means this is the east face of the taller cell (normal +X)
+	if east:
+		_add_quad(st, a, b, c, d,
+			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
+			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
+			terrain_color
+		)
+	else:
+		# west face (normal -X)
+		_add_quad(st, b, a, d, c,
+			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
+			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
+			terrain_color
+		)
 
-func _add_wall_x(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
-	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, west, uv_scale)
-	_add_wall_x_one_sided(st, x_edge, z, h_low, h_high, not west, uv_scale)
+func _add_wall_z_edge(st: SurfaceTool, z_edge: float, x0: float, x1: float, low_y: float, high_y: float, south: bool, uv_scale: float) -> void:
+	var a := Vector3(x0, high_y, z_edge)
+	var b := Vector3(x1, high_y, z_edge)
+	var c := Vector3(x1, low_y, z_edge)
+	var d := Vector3(x0, low_y, z_edge)
 
-func _add_wall_z_one_sided(st: SurfaceTool, x: int, z_edge: int, h_low: float, h_high: float, north: bool, uv_scale: float) -> void:
-	var step: float = maxf(0.001, height_step)
-	var y0: float = h_low
-	while y0 < h_high - 0.0001:
-		var y1: float = minf(y0 + step, h_high)
+	# south=true means this is the south face of the taller cell (normal +Z)
+	if south:
+		_add_quad(st, b, a, d, c,
+			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
+			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
+			terrain_color
+		)
+	else:
+		# north face (normal -Z)
+		_add_quad(st, a, b, c, d,
+			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
+			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
+			terrain_color
+		)
 
-		var p0: Vector3 = _pos(x,     z_edge, y0)
-		var p1: Vector3 = _pos(x + 1, z_edge, y0)
-		var p2: Vector3 = _pos(x + 1, z_edge, y1)
-		var p3: Vector3 = _pos(x,     z_edge, y1)
+# -----------------------------
+# Quad writer
+# -----------------------------
+func _add_quad(
+	st: SurfaceTool,
+	a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2,
+	color: Color
+) -> void:
+	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+	st.set_color(color); st.set_uv(ub); st.add_vertex(b)
+	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
 
-		var uv0: Vector2 = Vector2(0.0, y0 * uv_scale)
-		var uv1: Vector2 = Vector2(cell_size * uv_scale, y0 * uv_scale)
-		var uv2: Vector2 = Vector2(cell_size * uv_scale, y1 * uv_scale)
-		var uv3: Vector2 = Vector2(0.0, y1 * uv_scale)
-
-		if north:
-			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
-		else:
-			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
-
-		y0 = y1
-
-func _add_wall_x_one_sided(st: SurfaceTool, x_edge: int, z: int, h_low: float, h_high: float, west: bool, uv_scale: float) -> void:
-	var step: float = maxf(0.001, height_step)
-	var y0: float = h_low
-	while y0 < h_high - 0.0001:
-		var y1: float = minf(y0 + step, h_high)
-
-		var p0: Vector3 = _pos(x_edge, z,     y0)
-		var p1: Vector3 = _pos(x_edge, z + 1, y0)
-		var p2: Vector3 = _pos(x_edge, z + 1, y1)
-		var p3: Vector3 = _pos(x_edge, z,     y1)
-
-		var uv0: Vector2 = Vector2(0.0, y0 * uv_scale)
-		var uv1: Vector2 = Vector2(cell_size * uv_scale, y0 * uv_scale)
-		var uv2: Vector2 = Vector2(cell_size * uv_scale, y1 * uv_scale)
-		var uv3: Vector2 = Vector2(0.0, y1 * uv_scale)
-
-		if west:
-			_add_quad(st, p0, p1, p2, p3, uv0, uv1, uv2, uv3)
-		else:
-			_add_quad(st, p1, p0, p3, p2, uv0, uv1, uv2, uv3)
-
-		y0 = y1
+	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
+	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
+	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
