@@ -38,6 +38,14 @@ class_name BlockyTerrain
 @export var build_ceiling: bool = false
 
 # -----------------------------
+# Ramps (Mega Bonk style connectivity)
+# -----------------------------
+@export var enable_ramps: bool = true
+@export_range(0, 64, 1) var ramp_count: int = 18
+@export var ramp_min_delta: float = 4.0
+@export var ramp_color: Color = Color(0.32, 0.68, 0.34, 1.0)
+
+# -----------------------------
 # Visuals
 # -----------------------------
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
@@ -50,6 +58,14 @@ var _cell_size: float
 var _ox: float
 var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
+var _ramp_dir: PackedInt32Array
+var _ramp_low: PackedFloat32Array
+
+const RAMP_NONE := -1
+const RAMP_EAST := 0
+const RAMP_WEST := 1
+const RAMP_SOUTH := 2
+const RAMP_NORTH := 3
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -77,6 +93,7 @@ func generate() -> void:
 	_oz = -world_size_m * 0.5
 
 	_generate_heights()
+	_generate_ramps()
 	_build_mesh_and_collision()
 
 # -----------------------------
@@ -145,6 +162,109 @@ func _cell_h(x: int, z: int) -> float:
 	return _heights[z * n + x]
 
 # -----------------------------
+# Ramp generation (one-cell wedges)
+# -----------------------------
+func _generate_ramps() -> void:
+	var n: int = max(2, cells_per_side)
+	_ramp_dir = PackedInt32Array()
+	_ramp_low = PackedFloat32Array()
+	_ramp_dir.resize(n * n)
+	_ramp_low.resize(n * n)
+
+	for i in range(n * n):
+		_ramp_dir[i] = RAMP_NONE
+		_ramp_low[i] = 0.0
+
+	if not enable_ramps or ramp_count <= 0:
+		return
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(noise_seed) ^ 0x6c8e9cf1
+
+	var candidates: Array = []
+
+	for z in range(n):
+		for x in range(n):
+			var h0 := _cell_h(x, z)
+
+			if x + 1 < n:
+				var h1 := _cell_h(x + 1, z)
+				var d := absf(h0 - h1)
+				if d >= ramp_min_delta:
+					if h0 > h1:
+						candidates.append({ "x": x, "z": z, "dir": RAMP_EAST, "low": h1, "delta": d })
+					else:
+						candidates.append({ "x": x + 1, "z": z, "dir": RAMP_WEST, "low": h0, "delta": d })
+
+			if z + 1 < n:
+				var h2 := _cell_h(x, z + 1)
+				var d2 := absf(h0 - h2)
+				if d2 >= ramp_min_delta:
+					if h0 > h2:
+						candidates.append({ "x": x, "z": z, "dir": RAMP_SOUTH, "low": h2, "delta": d2 })
+					else:
+						candidates.append({ "x": x, "z": z + 1, "dir": RAMP_NORTH, "low": h0, "delta": d2 })
+
+	candidates.sort_custom(func(a, b):
+		return int(b["delta"] * 1000.0) - int(a["delta"] * 1000.0)
+	)
+
+	var placed := 0
+	for c in candidates:
+		if placed >= ramp_count:
+			break
+
+		if rng.randf() < 0.25:
+			continue
+
+		var x := int(c["x"])
+		var z := int(c["z"])
+		var idx := z * n + x
+
+		if _ramp_dir[idx] != RAMP_NONE:
+			continue
+
+		_ramp_dir[idx] = int(c["dir"])
+		_ramp_low[idx] = float(c["low"])
+		placed += 1
+
+func _cell_corners(x: int, z: int) -> Vector4:
+	var n: int = max(2, cells_per_side)
+	var idx := z * n + x
+	var h := _cell_h(x, z)
+
+	var dir := _ramp_dir[idx]
+	if dir == RAMP_NONE:
+		return Vector4(h, h, h, h)
+
+	var low := _ramp_low[idx]
+
+	match dir:
+		RAMP_EAST:
+			return Vector4(h, low, low, h)
+		RAMP_WEST:
+			return Vector4(low, h, h, low)
+		RAMP_SOUTH:
+			return Vector4(h, h, low, low)
+		RAMP_NORTH:
+			return Vector4(low, low, h, h)
+		_:
+			return Vector4(h, h, h, h)
+
+func _edge_pair(c: Vector4, edge: int) -> Vector2:
+	match edge:
+		0:
+			return Vector2(c.y, c.z)
+		1:
+			return Vector2(c.x, c.w)
+		2:
+			return Vector2(c.x, c.y)
+		3:
+			return Vector2(c.w, c.z)
+		_:
+			return Vector2(c.x, c.x)
+
+# -----------------------------
 # Mesh building
 # -----------------------------
 func _build_mesh_and_collision() -> void:
@@ -159,21 +279,20 @@ func _build_mesh_and_collision() -> void:
 	# Floor of container
 	_add_floor(st, outer_floor_height, uv_scale_top)
 
-	# Terrain cells (flat tops) + vertical walls where heights differ
+	# Terrain cells (flat tops unless ramp)
 	for z in range(n):
 		for x in range(n):
-			var h: float = _cell_h(x, z)
-
 			var x0: float = _ox + float(x) * _cell_size
 			var x1: float = x0 + _cell_size
 			var z0: float = _oz + float(z) * _cell_size
 			var z1: float = z0 + _cell_size
 
-			# Top (flat)
-			var a := Vector3(x0, h, z0)
-			var b := Vector3(x1, h, z0)
-			var c := Vector3(x1, h, z1)
-			var d := Vector3(x0, h, z1)
+			var c0 := _cell_corners(x, z)
+
+			var a := Vector3(x0, c0.x, z0)
+			var b := Vector3(x1, c0.y, z0)
+			var c := Vector3(x1, c0.z, z1)
+			var d := Vector3(x0, c0.w, z1)
 
 			_add_quad(
 				st, a, b, c, d,
@@ -181,30 +300,45 @@ func _build_mesh_and_collision() -> void:
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top,
-				terrain_color
+				_ramp_dir[z * n + x] == RAMP_NONE ? terrain_color : ramp_color
 			)
 
-			# Internal walls (only add walls for edges where THIS cell is higher; avoids duplicates)
-			# East edge
+	var eps := 0.0001
+
+	for z in range(n):
+		for x in range(n):
+			var x0: float = _ox + float(x) * _cell_size
+			var x1: float = x0 + _cell_size
+			var z0: float = _oz + float(z) * _cell_size
+			var z1: float = z0 + _cell_size
+
+			var cA := _cell_corners(x, z)
+
 			if x + 1 < n:
-				var he: float = _cell_h(x + 1, z)
-				if h > he + 0.0001:
-					_add_wall_x_edge(st, x1, z0, z1, he, h, true, uv_scale_wall)
-			# West edge
-			if x - 1 >= 0:
-				var hw: float = _cell_h(x - 1, z)
-				if h > hw + 0.0001:
-					_add_wall_x_edge(st, x0, z0, z1, hw, h, false, uv_scale_wall)
-			# South edge
+				var cB := _cell_corners(x + 1, z)
+				var a_e := _edge_pair(cA, 0)
+				var b_w := _edge_pair(cB, 1)
+
+				var top0 := maxf(a_e.x, b_w.x)
+				var top1 := maxf(a_e.y, b_w.y)
+				var bot0 := minf(a_e.x, b_w.x)
+				var bot1 := minf(a_e.y, b_w.y)
+
+				if (top0 - bot0) > eps or (top1 - bot1) > eps:
+					_add_wall_x_between(st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
+
 			if z + 1 < n:
-				var hs: float = _cell_h(x, z + 1)
-				if h > hs + 0.0001:
-					_add_wall_z_edge(st, z1, x0, x1, hs, h, true, uv_scale_wall)
-			# North edge
-			if z - 1 >= 0:
-				var hn: float = _cell_h(x, z - 1)
-				if h > hn + 0.0001:
-					_add_wall_z_edge(st, z0, x0, x1, hn, h, false, uv_scale_wall)
+				var cC := _cell_corners(x, z + 1)
+				var a_s := _edge_pair(cA, 3)
+				var c_n := _edge_pair(cC, 2)
+
+				var top0z := maxf(a_s.x, c_n.x)
+				var top1z := maxf(a_s.y, c_n.y)
+				var bot0z := minf(a_s.x, c_n.x)
+				var bot1z := minf(a_s.y, c_n.y)
+
+				if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
+					_add_wall_z_between(st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
@@ -268,47 +402,31 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 # Terrain wall helpers (between unequal cells)
 # -----------------------------
-func _add_wall_x_edge(st: SurfaceTool, x_edge: float, z0: float, z1: float, low_y: float, high_y: float, east: bool, uv_scale: float) -> void:
-	var a := Vector3(x_edge, high_y, z0)
-	var b := Vector3(x_edge, high_y, z1)
-	var c := Vector3(x_edge, low_y, z1)
-	var d := Vector3(x_edge, low_y, z0)
+func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	var a := Vector3(x_edge, high0, z0)
+	var b := Vector3(x_edge, high1, z1)
+	var c := Vector3(x_edge, low1, z1)
+	var d := Vector3(x_edge, low0, z0)
 
-	# east=true means this is the east face of the taller cell (normal +X)
-	if east:
-		_add_quad(st, a, b, c, d,
-			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
-			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
-			terrain_color
-		)
-	else:
-		# west face (normal -X)
-		_add_quad(st, b, a, d, c,
-			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
-			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
-			terrain_color
-		)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+		Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+		terrain_color
+	)
 
-func _add_wall_z_edge(st: SurfaceTool, z_edge: float, x0: float, x1: float, low_y: float, high_y: float, south: bool, uv_scale: float) -> void:
-	var a := Vector3(x0, high_y, z_edge)
-	var b := Vector3(x1, high_y, z_edge)
-	var c := Vector3(x1, low_y, z_edge)
-	var d := Vector3(x0, low_y, z_edge)
+func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	var a := Vector3(x0, high0, z_edge)
+	var b := Vector3(x1, high1, z_edge)
+	var c := Vector3(x1, low1, z_edge)
+	var d := Vector3(x0, low0, z_edge)
 
-	# south=true means this is the south face of the taller cell (normal +Z)
-	if south:
-		_add_quad(st, b, a, d, c,
-			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
-			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
-			terrain_color
-		)
-	else:
-		# north face (normal -Z)
-		_add_quad(st, a, b, c, d,
-			Vector2(0, high_y * uv_scale), Vector2(1, high_y * uv_scale),
-			Vector2(1, low_y * uv_scale), Vector2(0, low_y * uv_scale),
-			terrain_color
-		)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+		Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+		terrain_color
+	)
 
 # -----------------------------
 # Quad writer
