@@ -102,16 +102,6 @@ func _opposite_dir(dir: int) -> int:
 		_:
 			return dir
 
-func _has_ramp_bridge_x(n: int, x: int, z: int) -> bool:
-	var a: int = z * n + x
-	var b: int = z * n + (x + 1)
-	return _ramp_up_dir[a] == RAMP_EAST or _ramp_up_dir[b] == RAMP_WEST
-
-func _has_ramp_bridge_z(n: int, x: int, z: int) -> bool:
-	var a: int = z * n + x
-	var b: int = (z + 1) * n + x
-	return _ramp_up_dir[a] == RAMP_SOUTH or _ramp_up_dir[b] == RAMP_NORTH
-
 func _low_exit_ok(n: int, lx: int, lz: int, dir_up: int) -> bool:
 	var low_idx: int = lz * n + lx
 	var h: float = _heights[low_idx]
@@ -136,6 +126,80 @@ func _count_ramps() -> int:
 		if _ramp_up_dir[i] != RAMP_NONE:
 			count += 1
 	return count
+
+func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: PackedInt32Array) -> bool:
+	if _ramp_up_dir[a_idx] == dir_a_to_b and levels[b_idx] == levels[a_idx] + want:
+		return true
+	var dir_b_to_a: int = _opposite_dir(dir_a_to_b)
+	if _ramp_up_dir[b_idx] == dir_b_to_a and levels[a_idx] == levels[b_idx] + want:
+		return true
+	return false
+
+func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
+	var comp_id: PackedInt32Array = PackedInt32Array()
+	comp_id.resize(n * n)
+	for i in range(n * n):
+		comp_id[i] = -1
+
+	var queue: Array[int] = []
+	var next_comp: int = 0
+
+	for z in range(n):
+		for x in range(n):
+			var start: int = z * n + x
+			if comp_id[start] != -1:
+				continue
+
+			var level: int = levels[start]
+			var cells: Array[int] = []
+			queue.clear()
+			queue.append(start)
+			comp_id[start] = next_comp
+
+			while queue.size() > 0:
+				var i: int = int(queue.pop_back())
+				cells.append(i)
+				var cx: int = i % n
+				var cz: int = int(float(i) / float(n))
+				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+					var nb: Vector2i = _neighbor_of(cx, cz, dir)
+					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+						continue
+					var ni: int = nb.y * n + nb.x
+					if comp_id[ni] == -1 and levels[ni] == level:
+						comp_id[ni] = next_comp
+						queue.append(ni)
+
+			var min_neighbor: int = 1 << 30
+			var best_low: int = -1
+			var best_dir: int = RAMP_NONE
+			var best_high: int = -1
+
+			for i in cells:
+				var cx: int = i % n
+				var cz: int = int(float(i) / float(n))
+				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+					var nb: Vector2i = _neighbor_of(cx, cz, dir)
+					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+						continue
+					var ni: int = nb.y * n + nb.x
+					if levels[ni] == level:
+						continue
+
+					min_neighbor = mini(min_neighbor, levels[ni])
+
+					if levels[ni] == level + want:
+						if best_low == -1 or i < best_low or (i == best_low and dir < best_dir) or (i == best_low and dir == best_dir and ni < best_high):
+							best_low = i
+							best_dir = dir
+							best_high = ni
+
+			if min_neighbor > level and best_low != -1:
+				if _ramp_up_dir[best_low] == RAMP_NONE:
+					if _ramp_up_dir[best_high] == RAMP_NONE or _ramp_up_dir[best_high] == best_dir:
+						_ramp_up_dir[best_low] = best_dir
+
+			next_comp += 1
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -356,13 +420,9 @@ func _generate_ramps() -> void:
 
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
-	var min_lvl: int = 1 << 30
-	var max_lvl: int = -(1 << 30)
 	for i in range(n * n):
 		var lv: int = _h_to_level(_heights[i])
 		levels[i] = lv
-		min_lvl = mini(min_lvl, lv)
-		max_lvl = maxi(max_lvl, lv)
 
 	var comp_id: PackedInt32Array = PackedInt32Array()
 	comp_id.resize(n * n)
@@ -503,13 +563,20 @@ func _generate_ramps() -> void:
 		for item in cands:
 			var low_idx2: int = int(item[0])
 			var dir_up2: int = int(item[1])
+			var low_level: int = levels[low_idx2]
+			var low_x: int = low_idx2 % n
+			var low_z: int = int(float(low_idx2) / float(n))
+			var high: Vector2i = _neighbor_of(low_x, low_z, dir_up2)
+			var high_idx: int = high.y * n + high.x
 
 			if _ramp_up_dir[low_idx2] != RAMP_NONE:
 				continue
+			if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up2:
+				continue
+			if levels[high_idx] != low_level + want_levels:
+				continue
 
-			var lx: int = low_idx2 % n
-			var lz: int = int(float(low_idx2) / float(n))
-			if not _low_exit_ok(n, lx, lz, dir_up2):
+			if not _low_exit_ok(n, low_x, low_z, dir_up2):
 				continue
 
 			seen += 1
@@ -580,6 +647,8 @@ func _generate_ramps() -> void:
 				if not placed_any:
 					break
 
+	_ensure_basin_escapes(n, want_levels, levels)
+
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
 	var idx: int = z * n + x
@@ -637,6 +706,11 @@ func _build_mesh_and_collision() -> void:
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
 	var ramps_openings: bool = enable_ramps
+	var want_levels: int = maxi(1, ramp_step_count)
+	var levels: PackedInt32Array = PackedInt32Array()
+	levels.resize(n * n)
+	for i in range(n * n):
+		levels[i] = _h_to_level(_heights[i])
 
 	# Floor of container
 	_add_floor(st, outer_floor_height, uv_scale_top)
@@ -682,7 +756,9 @@ func _build_mesh_and_collision() -> void:
 			var cA := _cell_corners(x, z)
 
 			if x + 1 < n:
-				if (not ramps_openings) or (not _has_ramp_bridge_x(n, x, z)):
+				var idx_a: int = z * n + x
+				var idx_b: int = z * n + (x + 1)
+				if (not ramps_openings) or (not _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
 					var cB := _cell_corners(x + 1, z)
 					var a_e := _edge_pair(cA, 0)
 					var b_w := _edge_pair(cB, 1)
@@ -696,7 +772,9 @@ func _build_mesh_and_collision() -> void:
 						_add_wall_x_between(st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
 
 			if z + 1 < n:
-				if (not ramps_openings) or (not _has_ramp_bridge_z(n, x, z)):
+				var idx_c: int = z * n + x
+				var idx_d: int = (z + 1) * n + x
+				if (not ramps_openings) or (not _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels)):
 					var cC := _cell_corners(x, z + 1)
 					var a_s := _edge_pair(cA, 3)
 					var c_n := _edge_pair(cC, 2)
