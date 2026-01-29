@@ -809,9 +809,14 @@ func _generate_ramps() -> void:
 				var dh: float = h0 - h1
 
 				if absf(dh - want_delta) <= delta_eps:
+					# loosest pool: only “right height delta”
 					candidates_relaxed.append(RampCandidate.new(x, z, dir, h1))
-						if _landing_ok(n, nb.x, nb.y, dir) and _highside_supported(n, x, z, dir, h0, delta_eps):
+
+					# mid pool: additionally requires landing + high-side support
+					if _landing_ok(n, nb.x, nb.y, dir) and _highside_supported(n, x, z, dir, h0, delta_eps):
 						candidates_mid.append(RampCandidate.new(x, z, dir, h1))
+
+						# strict pool: additionally requires both plateaus meet min size
 						var idx0: int = z * n + x
 						var idx1: int = nb.y * n + nb.x
 						var high_comp: int = comp_id[idx0]
@@ -820,6 +825,7 @@ func _generate_ramps() -> void:
 							continue
 						if comp_size[low_comp] < min_plateau_cells:
 							continue
+
 						candidates.append(RampCandidate.new(x, z, dir, h1))
 
 	for i in range(candidates.size() - 1, 0, -1):
