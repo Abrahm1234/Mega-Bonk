@@ -38,20 +38,16 @@ class_name BlockyTerrain
 @export var build_ceiling: bool = false
 
 # -----------------------------
-# Ramps (separate wedge instances)
+# Ramps (procedural in terrain mesh)
 # -----------------------------
 @export var enable_ramps: bool = true
 @export_range(1, 3, 1) var ramp_step_count: int = 1
-@export var ramp_scene: PackedScene
-@export var ramp_model_cell_size_m: float = 1.0
-@export var ramp_model_rise_m: float = 1.0
-@export var ramp_y_epsilon: float = 0.02
 @export_range(0, 8, 1) var extra_ramps_per_component: int = 0
-@export var ramp_model_up_is_south: bool = true
 @export_range(0, 4, 1) var walk_up_steps_without_ramp: int = 0
 @export_range(0, 4, 1) var walk_down_steps_without_ramp: int = 4
 @export_range(0, 4, 1) var pit_fill_passes: int = 2
 @export_range(0, 512, 1) var per_level_ramp_budget: int = 96
+@export var ramp_color: Color = Color(1.0, 0.0, 1.0, 1.0)
 
 # -----------------------------
 # Traversal constraints
@@ -73,7 +69,6 @@ var _ox: float
 var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
 var _ramp_up_dir: PackedInt32Array
-var _ramp_nodes: Array = []
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -106,38 +101,6 @@ func _opposite_dir(dir: int) -> int:
 			return RAMP_SOUTH
 		_:
 			return dir
-
-func _clear_ramps() -> void:
-	for node in _ramp_nodes:
-		if is_instance_valid(node):
-			node.queue_free()
-	_ramp_nodes.clear()
-
-func _dir_to_yaw(dir_up: int) -> float:
-	if ramp_model_up_is_south:
-		match dir_up:
-			RAMP_SOUTH:
-				return 0.0
-			RAMP_EAST:
-				return deg_to_rad(-90.0)
-			RAMP_WEST:
-				return deg_to_rad(90.0)
-			RAMP_NORTH:
-				return deg_to_rad(180.0)
-			_:
-				return 0.0
-
-	match dir_up:
-		RAMP_EAST:
-			return 0.0
-		RAMP_SOUTH:
-			return deg_to_rad(90.0)
-		RAMP_NORTH:
-			return deg_to_rad(-90.0)
-		RAMP_WEST:
-			return deg_to_rad(180.0)
-		_:
-			return 0.0
 
 func _has_ramp_bridge_x(n: int, x: int, z: int) -> bool:
 	var a: int = z * n + x
@@ -204,9 +167,7 @@ func generate() -> void:
 	_fill_pits()
 	_generate_ramps()
 	_build_mesh_and_collision()
-	_spawn_ramps()
-	var ramp_slots: int = _count_ramps()
-	print("Ramp slots:", ramp_slots, "  Spawned nodes:", _ramp_nodes.size(), "  ramp_scene null:", ramp_scene == null)
+	print("Ramp slots:", _count_ramps())
 
 # -----------------------------
 # Height generation (14x14)
@@ -387,8 +348,6 @@ func _generate_ramps() -> void:
 	_ramp_up_dir.resize(n * n)
 	for i in range(n * n):
 		_ramp_up_dir[i] = RAMP_NONE
-
-	_clear_ramps()
 
 	if not enable_ramps:
 		return
@@ -622,8 +581,36 @@ func _generate_ramps() -> void:
 					break
 
 func _cell_corners(x: int, z: int) -> Vector4:
-	var h := _cell_h(x, z)
-	return Vector4(h, h, h, h)
+	var n: int = max(2, cells_per_side)
+	var idx: int = z * n + x
+	var low_h: float = _heights[idx]
+
+	if not enable_ramps:
+		return Vector4(low_h, low_h, low_h, low_h)
+
+	var dir_up: int = _ramp_up_dir[idx]
+	if dir_up == RAMP_NONE:
+		return Vector4(low_h, low_h, low_h, low_h)
+
+	var nb: Vector2i = _neighbor_of(x, z, dir_up)
+	if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+		return Vector4(low_h, low_h, low_h, low_h)
+
+	var high_h: float = _heights[nb.y * n + nb.x]
+	if high_h <= low_h:
+		return Vector4(low_h, low_h, low_h, low_h)
+
+	match dir_up:
+		RAMP_EAST:
+			return Vector4(low_h, high_h, high_h, low_h)
+		RAMP_WEST:
+			return Vector4(high_h, low_h, low_h, high_h)
+		RAMP_SOUTH:
+			return Vector4(low_h, low_h, high_h, high_h)
+		RAMP_NORTH:
+			return Vector4(high_h, high_h, low_h, low_h)
+		_:
+			return Vector4(low_h, low_h, low_h, low_h)
 
 func _edge_pair(c: Vector4, edge: int) -> Vector2:
 	match edge:
@@ -649,7 +636,7 @@ func _build_mesh_and_collision() -> void:
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
-	var ramps_openings: bool = enable_ramps and (ramp_scene != null)
+	var ramps_openings: bool = enable_ramps
 
 	# Floor of container
 	_add_floor(st, outer_floor_height, uv_scale_top)
@@ -669,13 +656,18 @@ func _build_mesh_and_collision() -> void:
 			var c := Vector3(x1, c0.z, z1)
 			var d := Vector3(x0, c0.w, z1)
 
+			var idx: int = z * n + x
+			var top_col: Color = terrain_color
+			if enable_ramps and _ramp_up_dir[idx] != RAMP_NONE:
+				top_col = ramp_color
+
 			_add_quad(
 				st, a, b, c, d,
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top,
-				terrain_color
+				top_col
 			)
 
 	var eps := 0.0001
@@ -727,52 +719,6 @@ func _build_mesh_and_collision() -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-
-func _spawn_ramps() -> void:
-	if ramp_scene == null:
-		if enable_ramps:
-			push_warning("BlockyTerrain: Enable Ramps is ON but Ramp Scene is not set. No ramps will be spawned.")
-		return
-
-	var n: int = max(2, cells_per_side)
-	var want_levels: int = maxi(1, ramp_step_count)
-
-	for z in range(n):
-		for x in range(n):
-			var low_idx: int = z * n + x
-			var dir_up: int = _ramp_up_dir[low_idx]
-			if dir_up == RAMP_NONE:
-				continue
-
-			var hi: Vector2i = _neighbor_of(x, z, dir_up)
-			var hi_idx: int = hi.y * n + hi.x
-
-			var low_h: float = _heights[low_idx]
-			var high_h: float = _heights[hi_idx]
-			var rise: float = high_h - low_h
-			if rise <= 0.0:
-				continue
-
-			var inst: Node3D = ramp_scene.instantiate()
-			add_child(inst)
-			_ramp_nodes.append(inst)
-
-			var low_center_x: float = _ox + (float(x) + 0.5) * _cell_size
-			var low_center_z: float = _oz + (float(z) + 0.5) * _cell_size
-			var high_center_x: float = _ox + (float(hi.x) + 0.5) * _cell_size
-			var high_center_z: float = _oz + (float(hi.y) + 0.5) * _cell_size
-			var px: float = (low_center_x + high_center_x) * 0.5
-			var pz: float = (low_center_z + high_center_z) * 0.5
-			inst.global_position = Vector3(px, low_h + ramp_y_epsilon, pz)
-			inst.rotation.y = _dir_to_yaw(dir_up)
-
-			var sx: float = _cell_size / maxf(0.0001, ramp_model_cell_size_m)
-			var sz: float = _cell_size / maxf(0.0001, ramp_model_cell_size_m)
-
-			var model_rise_total: float = maxf(0.0001, ramp_model_rise_m * float(want_levels))
-			var sy: float = rise / model_rise_total
-
-			inst.scale = Vector3(sx, sy, sz)
 
 # -----------------------------
 # Container primitives
