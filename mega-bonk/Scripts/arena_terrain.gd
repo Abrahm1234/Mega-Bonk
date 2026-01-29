@@ -166,6 +166,14 @@ func _low_exit_ok(n: int, lx: int, lz: int, dir_up: int) -> bool:
 
 	return false
 
+func _count_ramps() -> int:
+	var n: int = max(2, cells_per_side)
+	var count: int = 0
+	for i in range(n * n):
+		if _ramp_up_dir[i] != RAMP_NONE:
+			count += 1
+	return count
+
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
 		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
@@ -197,6 +205,8 @@ func generate() -> void:
 	_generate_ramps()
 	_build_mesh_and_collision()
 	_spawn_ramps()
+	var ramp_slots: int = _count_ramps()
+	print("Ramp slots:", ramp_slots, "  Spawned nodes:", _ramp_nodes.size(), "  ramp_scene null:", ramp_scene == null)
 
 # -----------------------------
 # Height generation (14x14)
@@ -442,151 +452,174 @@ func _generate_ramps() -> void:
 
 			comp_count += 1
 
-	var comp_cells: Array = []
-	var comp_level: Array = []
-	comp_cells.resize(comp_count)
-	comp_level.resize(comp_count)
+	var edge_candidates: Dictionary = {}
+	var low_to_high: Array = []
+	low_to_high.resize(comp_count)
 	for i in range(comp_count):
-		comp_cells[i] = PackedInt32Array()
-		comp_level[i] = 0
+		low_to_high[i] = []
 
-	for i in range(n * n):
-		var cid: int = comp_id[i]
-		var arr: PackedInt32Array = comp_cells[cid]
-		arr.append(i)
-		comp_cells[cid] = arr
-		comp_level[cid] = levels[i]
+	var dirs: Array = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var cid: int = comp_id[idx]
 
-	var has_down: PackedByteArray = PackedByteArray()
-	has_down.resize(comp_count)
-	var has_in: PackedByteArray = PackedByteArray()
-	has_in.resize(comp_count)
-	for i in range(comp_count):
-		has_down[i] = 0
-		has_in[i] = 0
+			for d in dirs:
+				var nb: Vector2i = _neighbor_of(x, z, d)
+				if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+					continue
+
+				var nb_idx: int = nb.y * n + nb.x
+				var nb_cid: int = comp_id[nb_idx]
+				if nb_cid == cid:
+					continue
+
+				var dh: int = levels[nb_idx] - levels[idx]
+				if abs(dh) != want_levels:
+					continue
+
+				var low_cid: int
+				var high_cid: int
+				var low_idx: int
+				var dir_up: int
+
+				if dh == want_levels:
+					low_cid = cid
+					high_cid = nb_cid
+					low_idx = idx
+					dir_up = d
+				else:
+					low_cid = nb_cid
+					high_cid = cid
+					low_idx = nb_idx
+					dir_up = _opposite_dir(d)
+
+				var key: int = low_cid * comp_count + high_cid
+				var list: Array = edge_candidates.get(key, [])
+				list.append([low_idx, dir_up])
+				edge_candidates[key] = list
+
+				var neighs: Array = low_to_high[low_cid]
+				if not neighs.has(high_cid):
+					neighs.append(high_cid)
+					low_to_high[low_cid] = neighs
+
+	var cx0: int = int(n / 2)
+	var cz0: int = int(n / 2)
+	var best_idx: int = cz0 * n + cx0
+	var best_lv: int = levels[best_idx]
+
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			var xx: int = cx0 + dx
+			var zz: int = cz0 + dz
+			if xx < 0 or xx >= n or zz < 0 or zz >= n:
+				continue
+			var ii: int = zz * n + xx
+			if levels[ii] < best_lv:
+				best_lv = levels[ii]
+				best_idx = ii
+
+	var root_cid: int = comp_id[best_idx]
 
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-	rng.seed = int(noise_seed) ^ 0x51f2a9d3
+	rng.seed = int(noise_seed) ^ 0x6d2b79f5
 
-	var try_place_low := func(lx: int, lz: int, dir_up: int) -> bool:
-		var low_idx: int = lz * n + lx
-		if _ramp_up_dir[low_idx] != RAMP_NONE:
-			return false
-		var hi: Vector2i = _neighbor_of(lx, lz, dir_up)
-		if hi.x < 0 or hi.x >= n or hi.y < 0 or hi.y >= n:
-			return false
-		var hi_idx: int = hi.y * n + hi.x
-		if (levels[hi_idx] - levels[low_idx]) != want_levels:
-			return false
-		if not _low_exit_ok(n, lx, lz, dir_up):
-			return false
+	var reachable: PackedByteArray = PackedByteArray()
+	reachable.resize(comp_count)
+	for i in range(comp_count):
+		reachable[i] = 0
+	reachable[root_cid] = 1
 
-		_ramp_up_dir[low_idx] = dir_up
-		return true
+	var q: Array[int] = []
+	q.append(root_cid)
 
 	var budget: int = maxi(per_level_ramp_budget, comp_count * 4)
 
-	for L in range(max_lvl, min_lvl + want_levels - 1, -1):
-		for cid in range(comp_count):
+	var place_from_candidates := func(cands: Array) -> bool:
+		var picked_low: int = -1
+		var picked_dir: int = RAMP_NONE
+		var seen: int = 0
+
+		for item in cands:
+			var low_idx2: int = int(item[0])
+			var dir_up2: int = int(item[1])
+
+			if _ramp_up_dir[low_idx2] != RAMP_NONE:
+				continue
+
+			var lx: int = low_idx2 % n
+			var lz: int = int(float(low_idx2) / float(n))
+			if not _low_exit_ok(n, lx, lz, dir_up2):
+				continue
+
+			seen += 1
+			if rng.randi_range(1, seen) == 1:
+				picked_low = low_idx2
+				picked_dir = dir_up2
+
+		if picked_low == -1:
+			return false
+
+		_ramp_up_dir[picked_low] = picked_dir
+		return true
+
+	while q.size() > 0 and budget > 0:
+		var low_cid2: int = int(q.pop_front())
+		var neighs2: Array = low_to_high[low_cid2]
+
+		for high_cid2 in neighs2:
 			if budget <= 0:
 				break
-			if int(comp_level[cid]) != L:
+
+			var hc: int = int(high_cid2)
+			if reachable[hc] != 0:
 				continue
-			if has_down[cid] != 0:
+
+			var key2: int = low_cid2 * comp_count + hc
+			if not edge_candidates.has(key2):
 				continue
 
-			var cells: PackedInt32Array = comp_cells[cid]
-			var picked_hidx: int = -1
-			var picked_dir: int = RAMP_NONE
-			var seen: int = 0
-
-			for cell_idx in cells:
-				var hi_idx: int = int(cell_idx)
-				var hx: int = hi_idx % n
-				var hz: int = int(float(hi_idx) / float(n))
-
-				for dir_to_low in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-					var low: Vector2i = _neighbor_of(hx, hz, dir_to_low)
-					if low.x < 0 or low.x >= n or low.y < 0 or low.y >= n:
-						continue
-
-					var low_idx: int = low.y * n + low.x
-					if (levels[hi_idx] - levels[low_idx]) != want_levels:
-						continue
-
-					var dir_up: int = _opposite_dir(dir_to_low)
-					if _ramp_up_dir[low_idx] != RAMP_NONE:
-						continue
-					if not _low_exit_ok(n, low.x, low.y, dir_up):
-						continue
-
-					seen += 1
-					if rng.randi_range(1, seen) == 1:
-						picked_hidx = low_idx
-						picked_dir = dir_up
-
-			if picked_hidx != -1 and picked_dir != RAMP_NONE:
-				var lx: int = picked_hidx % n
-				var lz: int = int(float(picked_hidx) / float(n))
-				if try_place_low.call(lx, lz, picked_dir):
-					has_down[cid] = 1
-					var low_cid: int = comp_id[picked_hidx]
-					has_in[low_cid] = 1
-					budget -= 1
+			var cands2: Array = edge_candidates[key2]
+			if place_from_candidates.call(cands2):
+				reachable[hc] = 1
+				q.append(hc)
+				budget -= 1
 
 	if extra_ramps_per_component > 0 and budget > 0:
-		for L in range(max_lvl, min_lvl + want_levels - 1, -1):
-			for cid in range(comp_count):
-				if budget <= 0:
-					break
-				if int(comp_level[cid]) != L:
-					continue
+		for low_cid3 in range(comp_count):
+			if budget <= 0:
+				break
+			if reachable[low_cid3] == 0:
+				continue
 
-				var extras_left: int = extra_ramps_per_component
-				while extras_left > 0 and budget > 0:
-					var picked_low_idx: int = -1
-					var picked_dir_up: int = RAMP_NONE
-					var seen2: int = 0
+			var neighs3: Array = low_to_high[low_cid3]
+			var extras_left: int = extra_ramps_per_component
 
-					var cells2: PackedInt32Array = comp_cells[cid]
-					for cell_idx2 in cells2:
-						var hi_idx2: int = int(cell_idx2)
-						var hx2: int = hi_idx2 % n
-						var hz2: int = int(float(hi_idx2) / float(n))
+			while extras_left > 0 and budget > 0:
+				var placed_any: bool = false
 
-						for dir_to_low2 in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-							var low2: Vector2i = _neighbor_of(hx2, hz2, dir_to_low2)
-							if low2.x < 0 or low2.x >= n or low2.y < 0 or low2.y >= n:
-								continue
-
-							var low_idx2: int = low2.y * n + low2.x
-							if (levels[hi_idx2] - levels[low_idx2]) != want_levels:
-								continue
-
-							if _ramp_up_dir[low_idx2] != RAMP_NONE:
-								continue
-
-							var dir_up2: int = _opposite_dir(dir_to_low2)
-							if not _low_exit_ok(n, low2.x, low2.y, dir_up2):
-								continue
-
-							seen2 += 1
-							if rng.randi_range(1, seen2) == 1:
-								picked_low_idx = low_idx2
-								picked_dir_up = dir_up2
-
-					if picked_low_idx == -1:
+				for high_cid3 in neighs3:
+					if budget <= 0 or extras_left <= 0:
 						break
 
-					var lx2: int = picked_low_idx % n
-					var lz2: int = int(float(picked_low_idx) / float(n))
-					if try_place_low.call(lx2, lz2, picked_dir_up):
-						var low_cid2: int = comp_id[picked_low_idx]
-						has_in[low_cid2] = 1
+					var hc3: int = int(high_cid3)
+					if reachable[hc3] == 0:
+						continue
+
+					var key3: int = low_cid3 * comp_count + hc3
+					if not edge_candidates.has(key3):
+						continue
+
+					if place_from_candidates.call(edge_candidates[key3]):
 						extras_left -= 1
 						budget -= 1
-					else:
-						break
+						placed_any = true
+						if extras_left <= 0:
+							break
+
+				if not placed_any:
+					break
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var h := _cell_h(x, z)
@@ -616,6 +649,7 @@ func _build_mesh_and_collision() -> void:
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
+	var ramps_openings: bool = enable_ramps and (ramp_scene != null)
 
 	# Floor of container
 	_add_floor(st, outer_floor_height, uv_scale_top)
@@ -656,7 +690,7 @@ func _build_mesh_and_collision() -> void:
 			var cA := _cell_corners(x, z)
 
 			if x + 1 < n:
-				if not _has_ramp_bridge_x(n, x, z):
+				if (not ramps_openings) or (not _has_ramp_bridge_x(n, x, z)):
 					var cB := _cell_corners(x + 1, z)
 					var a_e := _edge_pair(cA, 0)
 					var b_w := _edge_pair(cB, 1)
@@ -670,7 +704,7 @@ func _build_mesh_and_collision() -> void:
 						_add_wall_x_between(st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
 
 			if z + 1 < n:
-				if not _has_ramp_bridge_z(n, x, z):
+				if (not ramps_openings) or (not _has_ramp_bridge_z(n, x, z)):
 					var cC := _cell_corners(x, z + 1)
 					var a_s := _edge_pair(cA, 3)
 					var c_n := _edge_pair(cC, 2)
