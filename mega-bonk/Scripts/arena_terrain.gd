@@ -400,7 +400,7 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 					min_neighbor = mini(min_neighbor, levels[ni2])
 
 					if levels[ni2] == level + want:
-						exit_keys.append((i2 << 2) | dir2)
+						exit_keys.append((int(i2) << 2) | int(dir2))
 
 			if min_neighbor > level and not has_escape:
 				exit_keys.sort()
