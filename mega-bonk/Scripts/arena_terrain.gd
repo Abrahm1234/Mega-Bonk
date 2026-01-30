@@ -48,6 +48,10 @@ class_name BlockyTerrain
 @export_range(0, 4, 1) var pit_fill_passes: int = 2
 @export_range(0, 512, 1) var per_level_ramp_budget: int = 96
 @export var ramp_color: Color = Color(1.0, 0.0, 1.0, 1.0)
+@export var auto_raise_unescapable_basins: bool = true
+@export_range(1, 16, 1) var ramp_regen_guard: int = 8
+@export var auto_lower_unreachable_peaks: bool = true
+@export_range(1, 64, 1) var peak_max_cells: int = 4
 
 # -----------------------------
 # Traversal constraints
@@ -69,6 +73,7 @@ var _ox: float
 var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
 var _ramp_up_dir: PackedInt32Array
+var _ramps_need_regen: bool = false
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -169,6 +174,83 @@ func _is_stacked_with_this(down_x: int, down_z: int, up_x: int, up_z: int, dir_u
 	var up_lvl: int = _h_to_level(_cell_h(up_x, up_z))
 	return (down_lvl + want) == up_lvl
 
+func _apply_levels_to_heights(n: int, levels: PackedInt32Array) -> void:
+	var min_lvl: int = _h_to_level(min_height)
+	var max_lvl: int = _h_to_level(minf(max_height, box_height - 0.5))
+	for i in range(n * n):
+		var lv: int = clampi(levels[i], min_lvl, max_lvl)
+		levels[i] = lv
+		_heights[i] = _level_to_h(lv)
+
+func _try_place_ramp_candidate(low_idx: int, dir_up: int, n: int, levels: PackedInt32Array, want_levels: int) -> bool:
+	if _ramp_up_dir[low_idx] != RAMP_NONE:
+		return false
+
+	var low_level: int = levels[low_idx]
+	var low_x: int = low_idx % n
+	var low_z: int = int(float(low_idx) / float(n))
+
+	var high: Vector2i = _neighbor_of(low_x, low_z, dir_up)
+	if high.x < 0 or high.x >= n or high.y < 0 or high.y >= n:
+		return false
+	var high_idx: int = high.y * n + high.x
+	if levels[high_idx] != low_level + want_levels:
+		return false
+
+	if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up:
+		return false
+
+	var dir_down: int = _opposite_dir(dir_up)
+	var dn: Vector2i = _neighbor_of(low_x, low_z, dir_down)
+	if dn.x < 0 or dn.x >= n or dn.y < 0 or dn.y >= n:
+		return false
+	var dn_idx: int = dn.y * n + dn.x
+
+	if _ramp_up_dir[dn_idx] == RAMP_NONE:
+		if levels[dn_idx] != low_level:
+			return false
+	else:
+		if not _is_stacked_with_this(dn.x, dn.y, low_x, low_z, dir_up, want_levels):
+			return false
+
+	for sd in _perp_dirs(dir_up):
+		var nb_side: Vector2i = _neighbor_of(low_x, low_z, sd)
+		if nb_side.x < 0 or nb_side.x >= n or nb_side.y < 0 or nb_side.y >= n:
+			continue
+		var side_idx: int = nb_side.y * n + nb_side.x
+		if _ramp_up_dir[side_idx] != RAMP_NONE:
+			return false
+
+	_ramp_up_dir[low_idx] = dir_up
+	if not _ramp_is_valid_strict(low_x, low_z, dir_up):
+		_ramp_up_dir[low_idx] = RAMP_NONE
+		return false
+
+	return true
+
+func _try_place_any_from_candidates(cands: Array, n: int, levels: PackedInt32Array, want_levels: int, rng: RandomNumberGenerator) -> bool:
+	if cands.is_empty():
+		return false
+
+	var order: Array[int] = []
+	order.resize(cands.size())
+	for i in range(cands.size()):
+		order[i] = i
+	for i in range(order.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		var tmp: int = order[i]
+		order[i] = order[j]
+		order[j] = tmp
+
+	for k in order:
+		var item = cands[k]
+		var low_idx: int = int(item[0])
+		var dir_up: int = int(item[1])
+		if _try_place_ramp_candidate(low_idx, dir_up, n, levels, want_levels):
+			return true
+
+	return false
+
 func _perp_dirs(dir: int) -> Array[int]:
 	if dir == RAMP_EAST or dir == RAMP_WEST:
 		return [RAMP_NORTH, RAMP_SOUTH]
@@ -228,13 +310,7 @@ func _ramp_is_valid_strict(x: int, z: int, _dir_up_unused: int) -> bool:
 		if nb_side.x < 0 or nb_side.x >= n or nb_side.y < 0 or nb_side.y >= n:
 			continue
 		var side_idx: int = nb_side.y * n + nb_side.x
-		if _ramp_up_dir[side_idx] == RAMP_NONE:
-			continue
-		if _ramp_up_dir[side_idx] != dir_up:
-			return false
-		var e0: Vector2 = _cell_edge_dir(x, z, sd)
-		var e1: Vector2 = _cell_edge_dir(nb_side.x, nb_side.y, _opposite_dir(sd))
-		if not _edges_match(e0, e1):
+		if _ramp_up_dir[side_idx] != RAMP_NONE:
 			return false
 
 	return true
@@ -256,7 +332,7 @@ func _prune_ramps_strict() -> void:
 					_ramp_up_dir[idx] = RAMP_NONE
 					changed = true
 
-func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
+func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 	var comp_id: PackedInt32Array = PackedInt32Array()
 	comp_id.resize(n * n)
 	for i in range(n * n):
@@ -264,6 +340,7 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 
 	var queue: Array[int] = []
 	var next_comp: int = 0
+	var raised_any: bool = false
 
 	for z in range(n):
 		for x in range(n):
@@ -278,10 +355,10 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 			comp_id[start] = next_comp
 
 			while queue.size() > 0:
-				var i: int = int(queue.pop_back())
-				cells.append(i)
-				var cx: int = i % n
-				var cz: int = int(float(i) / float(n))
+				var i0: int = int(queue.pop_back())
+				cells.append(i0)
+				var cx: int = i0 % n
+				var cz: int = int(float(i0) / float(n))
 				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
 					var nb: Vector2i = _neighbor_of(cx, cz, dir)
 					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
@@ -292,38 +369,57 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 						queue.append(ni)
 
 			var min_neighbor: int = 1 << 30
-			var best_low: int = -1
-			var best_dir: int = RAMP_NONE
-			var best_high: int = -1
+			var exit_keys: Array[int] = []
+			var has_escape: bool = false
 
-			for i in cells:
-				var cx: int = i % n
-				var cz: int = int(float(i) / float(n))
-				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-					var nb: Vector2i = _neighbor_of(cx, cz, dir)
-					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+			for i1 in cells:
+				if _ramp_up_dir[i1] == RAMP_NONE:
+					continue
+				var rx: int = i1 % n
+				var rz: int = int(float(i1) / float(n))
+				var rdir: int = _ramp_up_dir[i1]
+				var rnb: Vector2i = _neighbor_of(rx, rz, rdir)
+				if rnb.x < 0 or rnb.x >= n or rnb.y < 0 or rnb.y >= n:
+					continue
+				var rni: int = rnb.y * n + rnb.x
+				if levels[rni] == level + want:
+					has_escape = true
+					break
+
+			for i2 in cells:
+				var cx2: int = i2 % n
+				var cz2: int = int(float(i2) / float(n))
+				for dir2 in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+					var nb2: Vector2i = _neighbor_of(cx2, cz2, dir2)
+					if nb2.x < 0 or nb2.x >= n or nb2.y < 0 or nb2.y >= n:
 						continue
-					var ni: int = nb.y * n + nb.x
-					if levels[ni] == level:
+					var ni2: int = nb2.y * n + nb2.x
+					if levels[ni2] == level:
 						continue
 
-					min_neighbor = mini(min_neighbor, levels[ni])
+					min_neighbor = mini(min_neighbor, levels[ni2])
 
-					if levels[ni] == level + want:
-						if best_low == -1 or i < best_low or (i == best_low and dir < best_dir) or (i == best_low and dir == best_dir and ni < best_high):
-							best_low = i
-							best_dir = dir
-							best_high = ni
+					if levels[ni2] == level + want:
+						exit_keys.append((i2 << 2) | dir2)
 
-			if min_neighbor > level and best_low != -1:
-				if _ramp_up_dir[best_low] == RAMP_NONE:
-					var bx: int = best_low % n
-					var bz: int = int(float(best_low) / float(n))
-					_ramp_up_dir[best_low] = best_dir
-					if not _ramp_is_valid_strict(bx, bz, best_dir):
-						_ramp_up_dir[best_low] = RAMP_NONE
+			if min_neighbor > level and not has_escape:
+				exit_keys.sort()
+				var placed: bool = false
+				for key in exit_keys:
+					var low_idx: int = key >> 2
+					var dir_up: int = key & 3
+					if _try_place_ramp_candidate(low_idx, dir_up, n, levels, want):
+						placed = true
+						break
+
+				if not placed and auto_raise_unescapable_basins:
+					for i3 in cells:
+						levels[i3] = levels[i3] + 1
+					raised_any = true
 
 			next_comp += 1
+
+	return raised_any
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -353,7 +449,18 @@ func generate() -> void:
 	_generate_heights()
 	_limit_neighbor_cliffs()
 	_fill_pits()
-	_generate_ramps()
+
+	var guard: int = 0
+	while true:
+		_ramps_need_regen = false
+		_generate_ramps()
+		if not _ramps_need_regen:
+			break
+		guard += 1
+		if guard >= ramp_regen_guard:
+			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
+			break
+
 	_build_mesh_and_collision()
 	print("Ramp slots:", _count_ramps())
 
@@ -545,8 +652,7 @@ func _generate_ramps() -> void:
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
-		var lv: int = _h_to_level(_heights[i])
-		levels[i] = lv
+		levels[i] = _h_to_level(_heights[i])
 
 	var comp_id: PackedInt32Array = PackedInt32Array()
 	comp_id.resize(n * n)
@@ -679,55 +785,6 @@ func _generate_ramps() -> void:
 
 	var budget: int = maxi(per_level_ramp_budget, comp_count * 4)
 
-	var place_from_candidates := func(cands: Array) -> bool:
-		var picked_low: int = -1
-		var picked_dir: int = RAMP_NONE
-		var seen: int = 0
-
-		for item in cands:
-			var low_idx2: int = int(item[0])
-			var dir_up2: int = int(item[1])
-			var low_level: int = levels[low_idx2]
-			var low_x: int = low_idx2 % n
-			var low_z: int = int(float(low_idx2) / float(n))
-			var high: Vector2i = _neighbor_of(low_x, low_z, dir_up2)
-			var high_idx: int = high.y * n + high.x
-
-			if _ramp_up_dir[low_idx2] != RAMP_NONE:
-				continue
-			if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up2:
-				continue
-			if levels[high_idx] != low_level + want_levels:
-				continue
-
-			var dir_down2: int = _opposite_dir(dir_up2)
-			var dn2: Vector2i = _neighbor_of(low_x, low_z, dir_down2)
-			if dn2.x < 0 or dn2.x >= n or dn2.y < 0 or dn2.y >= n:
-				continue
-			var dn_idx2: int = dn2.y * n + dn2.x
-			if _ramp_up_dir[dn_idx2] == RAMP_NONE:
-				if levels[dn_idx2] != levels[low_idx2]:
-					continue
-			else:
-				if not _is_stacked_with_this(dn2.x, dn2.y, low_x, low_z, dir_up2, want_levels):
-					continue
-
-			seen += 1
-			if rng.randi_range(1, seen) == 1:
-				picked_low = low_idx2
-				picked_dir = dir_up2
-
-		if picked_low == -1:
-			return false
-
-		_ramp_up_dir[picked_low] = picked_dir
-		var px: int = picked_low % n
-		var pz: int = int(float(picked_low) / float(n))
-		if not _ramp_is_valid_strict(px, pz, picked_dir):
-			_ramp_up_dir[picked_low] = RAMP_NONE
-			return false
-		return true
-
 	while q.size() > 0 and budget > 0:
 		var low_cid2: int = int(q.pop_front())
 		var neighs2: Array = low_to_high[low_cid2]
@@ -745,7 +802,7 @@ func _generate_ramps() -> void:
 				continue
 
 			var cands2: Array = edge_candidates[key2]
-			if place_from_candidates.call(cands2):
+			if _try_place_any_from_candidates(cands2, n, levels, want_levels, rng):
 				reachable[hc] = 1
 				q.append(hc)
 				budget -= 1
@@ -775,7 +832,7 @@ func _generate_ramps() -> void:
 					if not edge_candidates.has(key3):
 						continue
 
-					if place_from_candidates.call(edge_candidates[key3]):
+					if _try_place_any_from_candidates(edge_candidates[key3], n, levels, want_levels, rng):
 						extras_left -= 1
 						budget -= 1
 						placed_any = true
@@ -786,8 +843,82 @@ func _generate_ramps() -> void:
 					break
 
 	_prune_ramps_strict()
-	_ensure_basin_escapes(n, want_levels, levels)
+
+	var raised: bool = _ensure_basin_escapes(n, want_levels, levels)
+	if raised:
+		_apply_levels_to_heights(n, levels)
+		_limit_neighbor_cliffs()
+		_fill_pits()
+		_ramps_need_regen = true
+		return
+
 	_prune_ramps_strict()
+
+	if auto_lower_unreachable_peaks:
+		var lowered_any: bool = false
+
+		var comp_sz: PackedInt32Array = PackedInt32Array()
+		comp_sz.resize(comp_count)
+		for i in range(comp_count):
+			comp_sz[i] = 0
+
+		var comp_max_nb: PackedInt32Array = PackedInt32Array()
+		comp_max_nb.resize(comp_count)
+		for i in range(comp_count):
+			comp_max_nb[i] = -1 << 30
+
+		for i in range(n * n):
+			comp_sz[comp_id[i]] += 1
+
+		for z2 in range(n):
+			for x2 in range(n):
+				var idx2: int = z2 * n + x2
+				var cid2: int = comp_id[idx2]
+				for d2 in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+					var nbv: Vector2i = _neighbor_of(x2, z2, d2)
+					if nbv.x < 0 or nbv.x >= n or nbv.y < 0 or nbv.y >= n:
+						continue
+					var ni2: int = nbv.y * n + nbv.x
+					if comp_id[ni2] == cid2:
+						continue
+					comp_max_nb[cid2] = maxi(comp_max_nb[cid2], levels[ni2])
+
+		var has_incoming: PackedByteArray = PackedByteArray()
+		has_incoming.resize(comp_count)
+		for i in range(comp_count):
+			has_incoming[i] = 0
+
+		for z3 in range(n):
+			for x3 in range(n):
+				var lowi: int = z3 * n + x3
+				var dir3: int = _ramp_up_dir[lowi]
+				if dir3 == RAMP_NONE:
+					continue
+				var nb3: Vector2i = _neighbor_of(x3, z3, dir3)
+				if nb3.x < 0 or nb3.x >= n or nb3.y < 0 or nb3.y >= n:
+					continue
+				var highi: int = nb3.y * n + nb3.x
+				has_incoming[comp_id[highi]] = 1
+
+		for c in range(comp_count):
+			var lv_c: int = -2147483648
+			for i in range(n * n):
+				if comp_id[i] == c:
+					lv_c = levels[i]
+					break
+
+			if comp_max_nb[c] <= lv_c and has_incoming[c] == 0 and comp_sz[c] <= peak_max_cells:
+				for i in range(n * n):
+					if comp_id[i] == c:
+						levels[i] -= 1
+				lowered_any = true
+
+		if lowered_any:
+			_apply_levels_to_heights(n, levels)
+			_limit_neighbor_cliffs()
+			_fill_pits()
+			_ramps_need_regen = true
+			return
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
