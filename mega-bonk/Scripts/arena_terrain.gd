@@ -135,15 +135,50 @@ func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels:
 		return true
 	return false
 
+func _dir_to_edge(dir: int) -> int:
+	match dir:
+		RAMP_EAST:
+			return 0
+		RAMP_WEST:
+			return 1
+		RAMP_NORTH:
+			return 2
+		RAMP_SOUTH:
+			return 3
+		_:
+			return 0
+
+func _cell_edge_dir(x: int, z: int, dir: int) -> Vector2:
+	return _edge_pair(_cell_corners(x, z), _dir_to_edge(dir))
+
+func _edges_match(a: Vector2, b: Vector2, eps: float = 0.001) -> bool:
+	return absf(a.x - b.x) <= eps and absf(a.y - b.y) <= eps
+
+func _is_flat_edge_at(edge: Vector2, h: float, eps: float = 0.001) -> bool:
+	return absf(edge.x - h) <= eps and absf(edge.y - h) <= eps
+
+func _is_stacked_with_this(down_x: int, down_z: int, up_x: int, up_z: int, dir_up: int, want: int) -> bool:
+	var n: int = max(2, cells_per_side)
+	var down_idx: int = down_z * n + down_x
+	if _ramp_up_dir[down_idx] != dir_up:
+		return false
+	var nn: Vector2i = _neighbor_of(down_x, down_z, dir_up)
+	if nn.x != up_x or nn.y != up_z:
+		return false
+	var down_lvl: int = _h_to_level(_cell_h(down_x, down_z))
+	var up_lvl: int = _h_to_level(_cell_h(up_x, up_z))
+	return (down_lvl + want) == up_lvl
+
 func _perp_dirs(dir: int) -> Array[int]:
 	if dir == RAMP_EAST or dir == RAMP_WEST:
 		return [RAMP_NORTH, RAMP_SOUTH]
 	return [RAMP_EAST, RAMP_WEST]
 
-func _ramp_is_valid_strict(x: int, z: int, dir_up: int) -> bool:
+func _ramp_is_valid_strict(x: int, z: int, _dir_up_unused: int) -> bool:
 	var n: int = max(2, cells_per_side)
 	var idx: int = z * n + x
-	if _ramp_up_dir[idx] == RAMP_NONE:
+	var dir_up: int = _ramp_up_dir[idx]
+	if dir_up == RAMP_NONE:
 		return true
 
 	var low_h: float = _cell_h(x, z)
@@ -152,47 +187,54 @@ func _ramp_is_valid_strict(x: int, z: int, dir_up: int) -> bool:
 		return false
 
 	var high_h: float = _cell_h(nb.x, nb.y)
-	var rise: float = float(maxi(1, ramp_step_count)) * height_step
-	if absf((high_h - low_h) - rise) > 0.001:
+	var want: int = maxi(1, ramp_step_count)
+	var rise_h: float = float(want) * height_step
+	if absf((high_h - low_h) - rise_h) > 0.001:
+		return false
+
+	var top_a: Vector2 = _cell_edge_dir(x, z, dir_up)
+	var top_b: Vector2 = _cell_edge_dir(nb.x, nb.y, _opposite_dir(dir_up))
+	if not _edges_match(top_a, top_b):
 		return false
 
 	var high_idx: int = nb.y * n + nb.x
-	if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up:
+	if _ramp_up_dir[high_idx] != RAMP_NONE:
+		if _ramp_up_dir[high_idx] != dir_up:
+			return false
+		var hi_down: Vector2i = _neighbor_of(nb.x, nb.y, _opposite_dir(dir_up))
+		if hi_down.x != x or hi_down.y != z:
+			return false
+
+	var dir_down: int = _opposite_dir(dir_up)
+	var dn: Vector2i = _neighbor_of(x, z, dir_down)
+	if dn.x < 0 or dn.x >= n or dn.y < 0 or dn.y >= n:
 		return false
 
-	for nd in [RAMP_EAST, RAMP_WEST, RAMP_NORTH, RAMP_SOUTH]:
-		var nx: int = x + (1 if nd == RAMP_EAST else (-1 if nd == RAMP_WEST else 0))
-		var nz: int = z + (1 if nd == RAMP_SOUTH else (-1 if nd == RAMP_NORTH else 0))
-		if nx < 0 or nx >= n or nz < 0 or nz >= n:
-			continue
-		var nidx: int = nz * n + nx
-		var ndir: int = _ramp_up_dir[nidx]
-		if ndir == RAMP_NONE:
-			continue
-		if ndir != dir_up:
-			return false
+	var dn_idx: int = dn.y * n + dn.x
+	var bottom_here: Vector2 = _cell_edge_dir(x, z, dir_down)
+	var bottom_there: Vector2 = _cell_edge_dir(dn.x, dn.y, dir_up)
 
-		var is_perp: bool = _perp_dirs(dir_up).has(nd)
-		if is_perp and absf(_cell_h(nx, nz) - low_h) > 0.001:
+	if _ramp_up_dir[dn_idx] != RAMP_NONE:
+		if not _is_stacked_with_this(dn.x, dn.y, x, z, dir_up, want):
 			return false
-
-		if nd == dir_up and absf(_cell_h(nx, nz) - (low_h + rise)) > 0.001:
+		if not _edges_match(bottom_here, bottom_there):
 			return false
-		if nd == _opposite_dir(dir_up) and absf(_cell_h(nx, nz) - (low_h - rise)) > 0.001:
+	else:
+		if not _is_flat_edge_at(bottom_there, low_h):
 			return false
 
 	for sd in _perp_dirs(dir_up):
-		var sx: int = nb.x + (1 if sd == RAMP_EAST else (-1 if sd == RAMP_WEST else 0))
-		var sz: int = nb.y + (1 if sd == RAMP_SOUTH else (-1 if sd == RAMP_NORTH else 0))
-		if sx < 0 or sx >= n or sz < 0 or sz >= n:
+		var nb_side: Vector2i = _neighbor_of(x, z, sd)
+		if nb_side.x < 0 or nb_side.x >= n or nb_side.y < 0 or nb_side.y >= n:
 			continue
-		var sidx: int = sz * n + sx
-		var sdir: int = _ramp_up_dir[sidx]
-		if sdir == RAMP_NONE:
+		var side_idx: int = nb_side.y * n + nb_side.x
+		if _ramp_up_dir[side_idx] == RAMP_NONE:
 			continue
-		if sdir != dir_up:
+		if _ramp_up_dir[side_idx] != dir_up:
 			return false
-		if absf(_cell_h(sx, sz) - high_h) > 0.001:
+		var e0: Vector2 = _cell_edge_dir(x, z, sd)
+		var e1: Vector2 = _cell_edge_dir(nb_side.x, nb_side.y, _opposite_dir(sd))
+		if not _edges_match(e0, e1):
 			return false
 
 	return true
@@ -273,10 +315,13 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 							best_dir = dir
 							best_high = ni
 
-			if min_neighbor > level and best_low != -1:
-				if _ramp_up_dir[best_low] == RAMP_NONE:
-					if _ramp_up_dir[best_high] == RAMP_NONE or _ramp_up_dir[best_high] == best_dir:
-						_ramp_up_dir[best_low] = best_dir
+		if min_neighbor > level and best_low != -1:
+			if _ramp_up_dir[best_low] == RAMP_NONE:
+				var bx: int = best_low % n
+				var bz: int = int(float(best_low) / float(n))
+				_ramp_up_dir[best_low] = best_dir
+				if not _ramp_is_valid_strict(bx, bz, best_dir):
+					_ramp_up_dir[best_low] = RAMP_NONE
 
 			next_comp += 1
 
@@ -634,10 +679,10 @@ func _generate_ramps() -> void:
 
 	var budget: int = maxi(per_level_ramp_budget, comp_count * 4)
 
-	var place_from_candidates := func(cands: Array) -> bool:
-		var picked_low: int = -1
-		var picked_dir: int = RAMP_NONE
-		var seen: int = 0
+		var place_from_candidates := func(cands: Array) -> bool:
+			var picked_low: int = -1
+			var picked_dir: int = RAMP_NONE
+			var seen: int = 0
 
 		for item in cands:
 			var low_idx2: int = int(item[0])
@@ -655,8 +700,17 @@ func _generate_ramps() -> void:
 			if levels[high_idx] != low_level + want_levels:
 				continue
 
-			if not _low_exit_ok(n, low_x, low_z, dir_up2):
+			var dir_down2: int = _opposite_dir(dir_up2)
+			var dn2: Vector2i = _neighbor_of(low_x, low_z, dir_down2)
+			if dn2.x < 0 or dn2.x >= n or dn2.y < 0 or dn2.y >= n:
 				continue
+			var dn_idx2: int = dn2.y * n + dn2.x
+			if _ramp_up_dir[dn_idx2] == RAMP_NONE:
+				if levels[dn_idx2] != levels[low_idx2]:
+					continue
+			else:
+				if not _is_stacked_with_this(dn2.x, dn2.y, low_x, low_z, dir_up2, want_levels):
+					continue
 
 			seen += 1
 			if rng.randi_range(1, seen) == 1:
@@ -667,6 +721,11 @@ func _generate_ramps() -> void:
 			return false
 
 		_ramp_up_dir[picked_low] = picked_dir
+		var px: int = picked_low % n
+		var pz: int = int(float(picked_low) / float(n))
+		if not _ramp_is_valid_strict(px, pz, picked_dir):
+			_ramp_up_dir[picked_low] = RAMP_NONE
+			return false
 		return true
 
 	while q.size() > 0 and budget > 0:
