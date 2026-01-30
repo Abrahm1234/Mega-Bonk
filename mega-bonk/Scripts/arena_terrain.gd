@@ -135,6 +135,85 @@ func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels:
 		return true
 	return false
 
+func _perp_dirs(dir: int) -> Array[int]:
+	if dir == RAMP_EAST or dir == RAMP_WEST:
+		return [RAMP_NORTH, RAMP_SOUTH]
+	return [RAMP_EAST, RAMP_WEST]
+
+func _ramp_is_valid_strict(x: int, z: int, dir_up: int) -> bool:
+	var n: int = max(2, cells_per_side)
+	var idx: int = z * n + x
+	if _ramp_up_dir[idx] == RAMP_NONE:
+		return true
+
+	var low_h: float = _cell_h(x, z)
+	var nb: Vector2i = _neighbor_of(x, z, dir_up)
+	if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+		return false
+
+	var high_h: float = _cell_h(nb.x, nb.y)
+	var rise: float = float(maxi(1, ramp_step_count)) * height_step
+	if absf((high_h - low_h) - rise) > 0.001:
+		return false
+
+	var high_idx: int = nb.y * n + nb.x
+	if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up:
+		return false
+
+	for nd in [RAMP_EAST, RAMP_WEST, RAMP_NORTH, RAMP_SOUTH]:
+		var nx: int = x + (1 if nd == RAMP_EAST else (-1 if nd == RAMP_WEST else 0))
+		var nz: int = z + (1 if nd == RAMP_SOUTH else (-1 if nd == RAMP_NORTH else 0))
+		if nx < 0 or nx >= n or nz < 0 or nz >= n:
+			continue
+		var nidx: int = nz * n + nx
+		var ndir: int = _ramp_up_dir[nidx]
+		if ndir == RAMP_NONE:
+			continue
+		if ndir != dir_up:
+			return false
+
+		var is_perp: bool = _perp_dirs(dir_up).has(nd)
+		if is_perp and absf(_cell_h(nx, nz) - low_h) > 0.001:
+			return false
+
+		if nd == dir_up and absf(_cell_h(nx, nz) - (low_h + rise)) > 0.001:
+			return false
+		if nd == _opposite_dir(dir_up) and absf(_cell_h(nx, nz) - (low_h - rise)) > 0.001:
+			return false
+
+	for sd in _perp_dirs(dir_up):
+		var sx: int = nb.x + (1 if sd == RAMP_EAST else (-1 if sd == RAMP_WEST else 0))
+		var sz: int = nb.y + (1 if sd == RAMP_SOUTH else (-1 if sd == RAMP_NORTH else 0))
+		if sx < 0 or sx >= n or sz < 0 or sz >= n:
+			continue
+		var sidx: int = sz * n + sx
+		var sdir: int = _ramp_up_dir[sidx]
+		if sdir == RAMP_NONE:
+			continue
+		if sdir != dir_up:
+			return false
+		if absf(_cell_h(sx, sz) - high_h) > 0.001:
+			return false
+
+	return true
+
+func _prune_ramps_strict() -> void:
+	var n: int = max(2, cells_per_side)
+	var changed: bool = true
+	var guard: int = 0
+	while changed and guard < 8:
+		guard += 1
+		changed = false
+		for z in range(n):
+			for x in range(n):
+				var idx: int = z * n + x
+				var dir: int = _ramp_up_dir[idx]
+				if dir == RAMP_NONE:
+					continue
+				if not _ramp_is_valid_strict(x, z, dir):
+					_ramp_up_dir[idx] = RAMP_NONE
+					changed = true
+
 func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 	var comp_id: PackedInt32Array = PackedInt32Array()
 	comp_id.resize(n * n)
@@ -404,7 +483,7 @@ func _fill_pits() -> void:
 		_heights[i] = _level_to_h(levels[i])
 
 # -----------------------------
-# Ramp generation (separate wedges on low cells)
+# Ramp generation (procedural in terrain mesh)
 # -----------------------------
 func _generate_ramps() -> void:
 	var n: int = max(2, cells_per_side)
@@ -647,7 +726,9 @@ func _generate_ramps() -> void:
 				if not placed_any:
 					break
 
+	_prune_ramps_strict()
 	_ensure_basin_escapes(n, want_levels, levels)
+	_prune_ramps_strict()
 
 func _cell_corners(x: int, z: int) -> Vector4:
 	var n: int = max(2, cells_per_side)
@@ -859,29 +940,65 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	var eps: float = 0.0005
+	var d0: float = absf(high0 - low0)
+	var d1: float = absf(high1 - low1)
+	if d0 <= eps and d1 <= eps:
+		return
+
 	var a := Vector3(x_edge, high0, z0)
 	var b := Vector3(x_edge, high1, z1)
 	var c := Vector3(x_edge, low1, z1)
 	var d := Vector3(x_edge, low0, z0)
 
-	_add_quad(st, a, b, c, d,
-		Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-		Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
-		terrain_color
-	)
+	if d0 > eps and d1 > eps:
+		_add_quad(st, a, b, c, d,
+			Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+			Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+			terrain_color
+		)
+		return
+
+	st.set_color(terrain_color)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+
+	st.set_color(terrain_color)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
 
 func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	var eps: float = 0.0005
+	var d0: float = absf(high0 - low0)
+	var d1: float = absf(high1 - low1)
+	if d0 <= eps and d1 <= eps:
+		return
+
 	var a := Vector3(x0, high0, z_edge)
 	var b := Vector3(x1, high1, z_edge)
 	var c := Vector3(x1, low1, z_edge)
 	var d := Vector3(x0, low0, z_edge)
 
-	_add_quad(st, a, b, c, d,
-		Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-		Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
-		terrain_color
-	)
+	if d0 > eps and d1 > eps:
+		_add_quad(st, a, b, c, d,
+			Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+			Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+			terrain_color
+		)
+		return
+
+	st.set_color(terrain_color)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+
+	st.set_color(terrain_color)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
 
 # -----------------------------
 # Quad writer
