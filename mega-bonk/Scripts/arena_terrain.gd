@@ -865,7 +865,7 @@ func _generate_ramps() -> void:
 		var comp_max_nb: PackedInt32Array = PackedInt32Array()
 		comp_max_nb.resize(comp_count)
 		for i in range(comp_count):
-			comp_max_nb[i] = -1 << 30
+			comp_max_nb[i] = -(1 << 30)
 
 		for i in range(n * n):
 			comp_sz[comp_id[i]] += 1
