@@ -15,6 +15,9 @@ class_name BlockyTerrain
 @export var noise_octaves: int = 3
 @export var noise_lacunarity: float = 2.0
 @export var noise_gain: float = 0.5
+@export var randomize_seed_on_start: bool = true
+@export var randomize_seed_on_regen_key: bool = false
+@export var print_seed: bool = true
 
 @export var height_scale: float = 26.0
 @export var height_step: float = 2.0
@@ -432,10 +435,24 @@ func _ready() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh_instance.material_override = mat
 
+	if randomize_seed_on_start:
+		var rng := RandomNumberGenerator.new()
+		rng.randomize()
+		noise_seed = rng.randi()
+
+	if print_seed:
+		print("Noise seed:", noise_seed)
+
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
+		if randomize_seed_on_regen_key:
+			var rng := RandomNumberGenerator.new()
+			rng.randomize()
+			noise_seed = rng.randi()
+			if print_seed:
+				print("Noise seed:", noise_seed)
 		generate()
 
 func generate() -> void:
