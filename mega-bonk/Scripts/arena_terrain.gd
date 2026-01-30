@@ -55,6 +55,8 @@ class_name BlockyTerrain
 @export_range(1, 16, 1) var ramp_regen_guard: int = 8
 @export var auto_lower_unreachable_peaks: bool = true
 @export_range(1, 64, 1) var peak_max_cells: int = 4
+@export var auto_fix_global_access: bool = true
+@export_range(1, 64, 1) var global_fix_passes: int = 24
 
 # -----------------------------
 # Traversal constraints
@@ -253,6 +255,182 @@ func _try_place_any_from_candidates(cands: Array, n: int, levels: PackedInt32Arr
 			return true
 
 	return false
+
+const FIX_NONE := 0
+const FIX_PLACED := 1
+const FIX_LEVELS := 2
+
+func _pick_root_idx_from_levels(n: int, levels: PackedInt32Array) -> int:
+	var cx0: int = n >> 1
+	var cz0: int = n >> 1
+	var best_idx: int = cz0 * n + cx0
+	var best_lv: int = levels[best_idx]
+
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			var xx: int = cx0 + dx
+			var zz: int = cz0 + dz
+			if xx < 0 or xx >= n or zz < 0 or zz >= n:
+				continue
+			var ii: int = zz * n + xx
+			if levels[ii] < best_lv:
+				best_lv = levels[ii]
+				best_idx = ii
+
+	return best_idx
+
+func _can_move_edge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: PackedInt32Array) -> bool:
+	var da: int = levels[b_idx] - levels[a_idx]
+	if da == 0:
+		return true
+
+	if abs(da) == want and _is_ramp_bridge(a_idx, b_idx, dir_a_to_b, want, levels):
+		return true
+
+	if da > 0:
+		return da <= maxi(0, walk_up_steps_without_ramp)
+	return (-da) <= maxi(0, walk_down_steps_without_ramp)
+
+func _reach_from_root(n: int, root_idx: int, want: int, levels: PackedInt32Array) -> PackedByteArray:
+	var seen: PackedByteArray = PackedByteArray()
+	seen.resize(n * n)
+	for i in range(n * n):
+		seen[i] = 0
+
+	var q: Array[int] = []
+	q.append(root_idx)
+	seen[root_idx] = 1
+
+	var dirs: Array = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+	while q.size() > 0:
+		var cur: int = int(q.pop_front())
+		var cx: int = cur % n
+		var cz: int = int(float(cur) / float(n))
+
+		for d in dirs:
+			var nb: Vector2i = _neighbor_of(cx, cz, d)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				continue
+			var ni: int = nb.y * n + nb.x
+			if seen[ni] != 0:
+				continue
+			if _can_move_edge(cur, ni, d, want, levels):
+				seen[ni] = 1
+				q.append(ni)
+
+	return seen
+
+func _can_reach_root(n: int, root_idx: int, want: int, levels: PackedInt32Array) -> PackedByteArray:
+	var good: PackedByteArray = PackedByteArray()
+	good.resize(n * n)
+	for i in range(n * n):
+		good[i] = 0
+
+	var q: Array[int] = []
+	q.append(root_idx)
+	good[root_idx] = 1
+
+	var dirs: Array = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+	while q.size() > 0:
+		var cur: int = int(q.pop_front())
+		var cx: int = cur % n
+		var cz: int = int(float(cur) / float(n))
+
+		for d in dirs:
+			var nb: Vector2i = _neighbor_of(cx, cz, d)
+			if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+				continue
+			var ni: int = nb.y * n + nb.x
+			if good[ni] != 0:
+				continue
+
+			var dir_nb_to_cur: int = _opposite_dir(d)
+			if _can_move_edge(ni, cur, dir_nb_to_cur, want, levels):
+				good[ni] = 1
+				q.append(ni)
+
+	return good
+
+func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, rng: RandomNumberGenerator) -> int:
+	if not auto_fix_global_access:
+		return FIX_NONE
+
+	var flags: int = FIX_NONE
+	var root_idx: int = _pick_root_idx_from_levels(n, levels)
+
+	for _pass in range(global_fix_passes):
+		var reach: PackedByteArray = _reach_from_root(n, root_idx, want, levels)
+		var any_unreach: bool = false
+		for i in range(n * n):
+			if reach[i] == 0:
+				any_unreach = true
+				break
+
+		if any_unreach:
+			var cands: Array = []
+			var dirs: Array = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+
+			for i in range(n * n):
+				if reach[i] == 0:
+					continue
+				var x: int = i % n
+				var z: int = int(float(i) / float(n))
+				for d in dirs:
+					var nb: Vector2i = _neighbor_of(x, z, d)
+					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+						continue
+					var j: int = nb.y * n + nb.x
+					if reach[j] != 0:
+						continue
+					if levels[j] == levels[i] + want:
+						cands.append([i, d])
+
+			if not cands.is_empty():
+				if _try_place_any_from_candidates(cands, n, levels, want, rng):
+					flags |= FIX_PLACED
+					_prune_ramps_strict()
+					continue
+
+			for i in range(n * n):
+				if reach[i] == 0:
+					levels[i] -= 1
+			return flags | FIX_LEVELS
+
+		var good: PackedByteArray = _can_reach_root(n, root_idx, want, levels)
+		var reach2: PackedByteArray = _reach_from_root(n, root_idx, want, levels)
+		var trap_cells: Array[int] = []
+		for i in range(n * n):
+			if reach2[i] != 0 and good[i] == 0:
+				trap_cells.append(i)
+
+		if trap_cells.is_empty():
+			return flags
+
+		var exit_cands: Array = []
+		var dirs2: Array = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+
+		for i in trap_cells:
+			var x2: int = i % n
+			var z2: int = int(float(i) / float(n))
+			for d2 in dirs2:
+				var nb2: Vector2i = _neighbor_of(x2, z2, d2)
+				if nb2.x < 0 or nb2.x >= n or nb2.y < 0 or nb2.y >= n:
+					continue
+				var j2: int = nb2.y * n + nb2.x
+				if good[j2] != 0 and levels[j2] == levels[i] + want:
+					exit_cands.append([i, d2])
+
+		if not exit_cands.is_empty():
+			if _try_place_any_from_candidates(exit_cands, n, levels, want, rng):
+				flags |= FIX_PLACED
+				_prune_ramps_strict()
+				continue
+
+		for i in trap_cells:
+			levels[i] += 1
+		return flags | FIX_LEVELS
+
+	return flags
 
 func _perp_dirs(dir: int) -> Array[int]:
 	if dir == RAMP_EAST or dir == RAMP_WEST:
@@ -870,6 +1048,16 @@ func _generate_ramps() -> void:
 		return
 
 	_prune_ramps_strict()
+
+	var fix_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
+	if (fix_flags & FIX_LEVELS) != 0:
+		_apply_levels_to_heights(n, levels)
+		_limit_neighbor_cliffs()
+		_fill_pits()
+		_ramps_need_regen = true
+		return
+	elif (fix_flags & FIX_PLACED) != 0:
+		_prune_ramps_strict()
 
 	if auto_lower_unreachable_peaks:
 		var lowered_any: bool = false
