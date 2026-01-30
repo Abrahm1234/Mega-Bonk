@@ -296,34 +296,34 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> void:
 			var best_dir: int = RAMP_NONE
 			var best_high: int = -1
 
-			for i in cells:
-				var cx: int = i % n
-				var cz: int = int(float(i) / float(n))
-				for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-					var nb: Vector2i = _neighbor_of(cx, cz, dir)
-					if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
-						continue
-					var ni: int = nb.y * n + nb.x
-					if levels[ni] == level:
-						continue
+				for i in cells:
+					var cx: int = i % n
+					var cz: int = int(float(i) / float(n))
+					for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+						var nb: Vector2i = _neighbor_of(cx, cz, dir)
+						if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
+							continue
+						var ni: int = nb.y * n + nb.x
+						if levels[ni] == level:
+							continue
 
-					min_neighbor = mini(min_neighbor, levels[ni])
+						min_neighbor = mini(min_neighbor, levels[ni])
 
-					if levels[ni] == level + want:
-						if best_low == -1 or i < best_low or (i == best_low and dir < best_dir) or (i == best_low and dir == best_dir and ni < best_high):
-							best_low = i
-							best_dir = dir
-							best_high = ni
+						if levels[ni] == level + want:
+							if best_low == -1 or i < best_low or (i == best_low and dir < best_dir) or (i == best_low and dir == best_dir and ni < best_high):
+								best_low = i
+								best_dir = dir
+								best_high = ni
 
-		if min_neighbor > level and best_low != -1:
-			if _ramp_up_dir[best_low] == RAMP_NONE:
-				var bx: int = best_low % n
-				var bz: int = int(float(best_low) / float(n))
-				_ramp_up_dir[best_low] = best_dir
-				if not _ramp_is_valid_strict(bx, bz, best_dir):
-					_ramp_up_dir[best_low] = RAMP_NONE
+				if min_neighbor > level and best_low != -1:
+					if _ramp_up_dir[best_low] == RAMP_NONE:
+						var bx: int = best_low % n
+						var bz: int = int(float(best_low) / float(n))
+						_ramp_up_dir[best_low] = best_dir
+						if not _ramp_is_valid_strict(bx, bz, best_dir):
+							_ramp_up_dir[best_low] = RAMP_NONE
 
-			next_comp += 1
+				next_comp += 1
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
@@ -647,8 +647,8 @@ func _generate_ramps() -> void:
 					neighs.append(high_cid)
 					low_to_high[low_cid] = neighs
 
-	var cx0: int = int(n / 2)
-	var cz0: int = int(n / 2)
+	var cx0: int = n >> 1
+	var cz0: int = n >> 1
 	var best_idx: int = cz0 * n + cx0
 	var best_lv: int = levels[best_idx]
 
@@ -679,10 +679,10 @@ func _generate_ramps() -> void:
 
 	var budget: int = maxi(per_level_ramp_budget, comp_count * 4)
 
-		var place_from_candidates := func(cands: Array) -> bool:
-			var picked_low: int = -1
-			var picked_dir: int = RAMP_NONE
-			var seen: int = 0
+	var place_from_candidates := func(cands: Array) -> bool:
+		var picked_low: int = -1
+		var picked_dir: int = RAMP_NONE
+		var seen: int = 0
 
 		for item in cands:
 			var low_idx2: int = int(item[0])
