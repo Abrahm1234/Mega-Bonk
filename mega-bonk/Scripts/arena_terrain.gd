@@ -80,8 +80,11 @@ class_name BlockyTerrain
 @export var glb_unit_tile_size: float = 1.0
 @export var tile_pivot_is_center: bool = true
 @export var ramp_yaw_offset_deg: float = 0.0
+@export var flip_ramp_visual_direction: bool = true
 @export var tile_column_base_height: float = -40.0
 @export var max_column_levels: int = 128
+@export var glb_render_top_only: bool = true
+@export var procedural_visual_walls_only_when_glb: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -1282,7 +1285,11 @@ func _build_glb_tile_visuals() -> void:
 
 			var col_levels: int = top_level - base_level
 			if col_levels > 0:
-				cube_count += mini(col_levels, max_column_levels)
+				if glb_render_top_only:
+					if not is_ramp_low_cell:
+						cube_count += 1
+				else:
+					cube_count += mini(col_levels, max_column_levels)
 
 			if is_ramp_low_cell:
 				ramp_count += 1
@@ -1317,21 +1324,37 @@ func _build_glb_tile_visuals() -> void:
 			var col_levels: int = top_level - base_level
 			col_levels = clampi(col_levels, 0, max_column_levels)
 
-			for k in range(col_levels):
-				var lv: int = base_level + k
-				var y_bottom: float = _level_to_h(lv)
+			if glb_render_top_only:
+				if not is_ramp_low_cell and col_levels > 0:
+					var lv_top: int = top_level - 1
+					var y_bottom: float = _level_to_h(lv_top)
 
-				var pos := Vector3(center_x, y_bottom, center_z)
-				if tile_pivot_is_center:
-					pos.y += height_step * 0.5
+					var pos := Vector3(center_x, y_bottom, center_z)
+					if tile_pivot_is_center:
+						pos.y += height_step * 0.5
 
-				var cube_basis := Basis().scaled(cube_scale)
-				var cube_t := Transform3D(cube_basis, pos) * cube_fix
-				cubes_mm.set_instance_transform(ci, cube_t)
-				ci += 1
+					var cube_basis := Basis().scaled(cube_scale)
+					var cube_t := Transform3D(cube_basis, pos) * cube_fix
+					cubes_mm.set_instance_transform(ci, cube_t)
+					ci += 1
+			else:
+				for k in range(col_levels):
+					var lv: int = base_level + k
+					var y_bottom: float = _level_to_h(lv)
+
+					var pos := Vector3(center_x, y_bottom, center_z)
+					if tile_pivot_is_center:
+						pos.y += height_step * 0.5
+
+					var cube_basis := Basis().scaled(cube_scale)
+					var cube_t := Transform3D(cube_basis, pos) * cube_fix
+					cubes_mm.set_instance_transform(ci, cube_t)
+					ci += 1
 
 			if is_ramp_low_cell:
 				var dir_up: int = _ramp_up_dir[idx]
+				if flip_ramp_visual_direction:
+					dir_up = _opposite_dir(dir_up)
 				var yaw: float = _yaw_for_ramp_dir_up(dir_up) + yaw_offset
 
 				var y_low: float = _heights[idx]
@@ -1351,8 +1374,11 @@ func _build_glb_tile_visuals() -> void:
 func _build_mesh_and_collision() -> void:
 	var n: int = max(2, cells_per_side)
 
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_vis := SurfaceTool.new()
+	st_vis.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var st_col := SurfaceTool.new()
+	st_col.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
@@ -1364,9 +1390,11 @@ func _build_mesh_and_collision() -> void:
 		levels[i] = _h_to_level(_heights[i])
 
 	# Floor of container
-	_add_floor(st, outer_floor_height, uv_scale_top)
+	_add_floor(st_vis, outer_floor_height, uv_scale_top)
+	_add_floor(st_col, outer_floor_height, uv_scale_top)
 
 	# Terrain cells (flat tops unless ramp)
+	var hide_visual_tops: bool = use_glb_tiles and procedural_visual_walls_only_when_glb
 	for z in range(n):
 		for x in range(n):
 			var x0: float = _ox + float(x) * _cell_size
@@ -1387,13 +1415,23 @@ func _build_mesh_and_collision() -> void:
 				top_col = ramp_color
 
 			_add_quad(
-				st, a, b, c, d,
+				st_col, a, b, c, d,
 				Vector2(float(x), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z)) * uv_scale_top,
 				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
 				Vector2(float(x), float(z + 1)) * uv_scale_top,
 				top_col
 			)
+
+			if not hide_visual_tops:
+				_add_quad(
+					st_vis, a, b, c, d,
+					Vector2(float(x), float(z)) * uv_scale_top,
+					Vector2(float(x + 1), float(z)) * uv_scale_top,
+					Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
+					Vector2(float(x), float(z + 1)) * uv_scale_top,
+					top_col
+				)
 
 	var eps := 0.0001
 
@@ -1420,7 +1458,8 @@ func _build_mesh_and_collision() -> void:
 					var bot1 := minf(a_e.y, b_w.y)
 
 					if (top0 - bot0) > eps or (top1 - bot1) > eps:
-						_add_wall_x_between(st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
+						_add_wall_x_between(st_vis, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
+						_add_wall_x_between(st_col, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
@@ -1436,18 +1475,25 @@ func _build_mesh_and_collision() -> void:
 					var bot1z := minf(a_s.y, c_n.y)
 
 					if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
-						_add_wall_z_between(st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall)
+						_add_wall_z_between(st_vis, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall)
+						_add_wall_z_between(st_col, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall)
 
 	# Container walls (keeps everything “inside a box”)
-	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
+	_add_box_walls(st_vis, outer_floor_height, box_height, uv_scale_wall)
+	_add_box_walls(st_col, outer_floor_height, box_height, uv_scale_wall)
 
 	if build_ceiling:
-		_add_ceiling(st, box_height, uv_scale_top)
+		_add_ceiling(st_vis, box_height, uv_scale_top)
+		_add_ceiling(st_col, box_height, uv_scale_top)
 
-	st.generate_normals()
-	var mesh: ArrayMesh = st.commit()
-	mesh_instance.mesh = mesh
-	collision_shape.shape = mesh.create_trimesh_shape()
+	st_vis.generate_normals()
+	var mesh_vis: ArrayMesh = st_vis.commit()
+
+	st_col.generate_normals()
+	var mesh_col: ArrayMesh = st_col.commit()
+
+	mesh_instance.mesh = mesh_vis
+	collision_shape.shape = mesh_col.create_trimesh_shape()
 
 # -----------------------------
 # Container primitives
