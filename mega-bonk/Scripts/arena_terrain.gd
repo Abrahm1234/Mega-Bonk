@@ -81,6 +81,7 @@ class_name BlockyTerrain
 @export var tile_pivot_is_center: bool = true
 @export var ramp_yaw_offset_deg: float = 0.0
 @export var flip_ramp_visual_direction: bool = true
+@export_enum("east (+X):0", "west (-X):1", "south (+Z):2", "north (-Z):3") var ramp_mesh_up_points_to_at_yaw0: int = 0
 @export var tile_column_base_height: float = -40.0
 @export var max_column_levels: int = 128
 @export var glb_render_top_only: bool = true
@@ -1199,7 +1200,7 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 # GLB visuals (MultiMesh)
 # -----------------------------
-func _yaw_for_ramp_dir_up(dir_up: int) -> float:
+func _yaw_for_world_dir(dir_up: int) -> float:
 	match dir_up:
 		RAMP_EAST:
 			return 0.0
@@ -1355,7 +1356,8 @@ func _build_glb_tile_visuals() -> void:
 				var dir_up: int = _ramp_up_dir[idx]
 				if flip_ramp_visual_direction:
 					dir_up = _opposite_dir(dir_up)
-				var yaw: float = _yaw_for_ramp_dir_up(dir_up) + yaw_offset
+				var base_yaw: float = _yaw_for_world_dir(ramp_mesh_up_points_to_at_yaw0)
+				var yaw: float = (_yaw_for_world_dir(dir_up) - base_yaw) + yaw_offset
 
 				var y_low: float = _heights[idx]
 				var ramp_pos := Vector3(center_x, y_low, center_z)
