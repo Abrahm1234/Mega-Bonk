@@ -89,6 +89,8 @@ class_name BlockyTerrain
 @export var disp_scale_ramp: float = 0.06
 @export var tex_scale: float = 0.1
 @export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
+@export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.1
+@export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.03
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -647,6 +649,8 @@ func _ready() -> void:
 		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
 		sm.set_shader_parameter("tex_scale", tex_scale)
 		sm.set_shader_parameter("tex_strength", tex_strength)
+		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
+		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
@@ -1405,22 +1409,23 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 				wall_col
 			)
 		else:
-			_add_quad(st, a, b, c, d,
+			_add_quad_uv2(st, a, b, c, d,
 				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
 				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
@@ -1446,22 +1451,23 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 				wall_col
 			)
 		else:
-			_add_quad(st, a, b, c, d,
+			_add_quad_uv2(st, a, b, c, d,
 				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
 				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 # -----------------------------
 # Quad writer
@@ -1497,7 +1503,13 @@ func _add_quad_grid(
 			var uv11 := (ua.lerp(ub, s1)).lerp(ud.lerp(uc, s1), t1)
 			var uv01 := (ua.lerp(ub, s0)).lerp(ud.lerp(uc, s0), t1)
 
-			_add_quad(st, p00, p10, p11, p01, uv00, uv10, uv11, uv01, color)
+			_add_quad_uv2(
+				st,
+				p00, p10, p11, p01,
+				uv00, uv10, uv11, uv01,
+				Vector2(s0, t0), Vector2(s1, t0), Vector2(s1, t1), Vector2(s0, t1),
+				color
+			)
 
 func _add_cell_top_grid(
 	st: SurfaceTool,
@@ -1544,7 +1556,13 @@ func _add_cell_top_grid(
 			var uc := Vector2(float(cell_x) + s1, float(cell_z) + t1) * uv_scale
 			var ud := Vector2(float(cell_x) + s0, float(cell_z) + t1) * uv_scale
 
-			_add_quad(st, a, b, c, d, ua, ub, uc, ud, color)
+			_add_quad_uv2(
+				st,
+				a, b, c, d,
+				ua, ub, uc, ud,
+				Vector2(s0, t0), Vector2(s1, t0), Vector2(s1, t1), Vector2(s0, t1),
+				color
+			)
 
 func _add_quad(
 	st: SurfaceTool,
@@ -1559,3 +1577,18 @@ func _add_quad(
 	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
 	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
 	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+
+func _add_quad_uv2(
+	st: SurfaceTool,
+	a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2,
+	ua2: Vector2, ub2: Vector2, uc2: Vector2, ud2: Vector2,
+	color: Color
+) -> void:
+	st.set_color(color); st.set_uv(ua); st.set_uv2(ua2); st.add_vertex(a)
+	st.set_color(color); st.set_uv(ub); st.set_uv2(ub2); st.add_vertex(b)
+	st.set_color(color); st.set_uv(uc); st.set_uv2(uc2); st.add_vertex(c)
+
+	st.set_color(color); st.set_uv(ua); st.set_uv2(ua2); st.add_vertex(a)
+	st.set_color(color); st.set_uv(uc); st.set_uv2(uc2); st.add_vertex(c)
+	st.set_color(color); st.set_uv(ud); st.set_uv2(ud2); st.add_vertex(d)

@@ -26,6 +26,8 @@ uniform sampler2D normal_ramp : repeat_enable, filter_linear;
 
 uniform float tex_scale = 0.1;
 uniform float tex_strength = 1.0;
+uniform float seam_lock_width = 0.1;
+uniform float seam_lock_soft = 0.03;
 
 vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
 	vec3 an = abs(n);
@@ -62,7 +64,12 @@ void vertex() {
 		+ disp_strength_ramp * is_ramp
 		+ disp_strength_wall * is_wall;
 
-	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box);
+	float edge_dist = min(
+		min(UV2.x, 1.0 - UV2.x),
+		min(UV2.y, 1.0 - UV2.y)
+	);
+	float seam_mask = smoothstep(seam_lock_width, seam_lock_width + seam_lock_soft, edge_dist);
+	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box) * seam_mask;
 	VERTEX.y += disp;
 }
 
