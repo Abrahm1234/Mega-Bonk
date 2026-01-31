@@ -652,7 +652,7 @@ func _ready() -> void:
 		sm.set_shader_parameter("tex_strength", tex_strength)
 		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
 		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
-		sm.set_shader_parameter("debug_vertex_colors", debug_vertex_colors ? 1.0 : 0.0)
+		sm.set_shader_parameter("debug_vertex_colors", float(debug_vertex_colors))
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
