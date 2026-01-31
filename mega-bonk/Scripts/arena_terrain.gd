@@ -1209,6 +1209,24 @@ func _yaw_for_ramp_dir_up(dir_up: int) -> float:
 		_:
 			return 0.0
 
+func _fit_mesh(mesh: Mesh, pivot_is_center: bool) -> Dictionary:
+	var aabb: AABB = mesh.get_aabb()
+
+	var size: Vector3 = aabb.size
+	size.x = maxf(size.x, 0.0001)
+	size.y = maxf(size.y, 0.0001)
+	size.z = maxf(size.z, 0.0001)
+
+	var pivot: Vector3 = aabb.position + Vector3(size.x * 0.5, 0.0, size.z * 0.5)
+	if pivot_is_center:
+		pivot.y = aabb.position.y + size.y * 0.5
+	else:
+		pivot.y = aabb.position.y
+
+	var fix: Transform3D = Transform3D(Basis(), -pivot)
+
+	return {"size": size, "fix": fix}
+
 func _build_glb_tile_visuals() -> void:
 	if cubes_mmi == null or ramps_mmi == null:
 		push_error("Missing nodes: Visuals/CubesMM and Visuals/RampsMM (MultiMeshInstance3D).")
@@ -1231,9 +1249,26 @@ func _build_glb_tile_visuals() -> void:
 	var want_levels: int = maxi(1, ramp_step_count)
 	var rise_h: float = float(want_levels) * height_step
 
-	var scale_xz: float = _cell_size / maxf(0.0001, glb_unit_tile_size)
-	var scale_y_cube: float = height_step / maxf(0.0001, glb_unit_tile_size)
-	var scale_y_ramp: float = rise_h / maxf(0.0001, glb_unit_tile_size)
+	var cube_fit := _fit_mesh(glb_cube_mesh, tile_pivot_is_center)
+	var ramp_fit := _fit_mesh(glb_ramp_mesh, tile_pivot_is_center)
+
+	var cube_size: Vector3 = cube_fit["size"]
+	var ramp_size: Vector3 = ramp_fit["size"]
+
+	var cube_fix: Transform3D = cube_fit["fix"]
+	var ramp_fix: Transform3D = ramp_fit["fix"]
+
+	var cube_scale := Vector3(
+		_cell_size / cube_size.x,
+		height_step / cube_size.y,
+		_cell_size / cube_size.z
+	)
+
+	var ramp_scale := Vector3(
+		_cell_size / ramp_size.x,
+		rise_h / ramp_size.y,
+		_cell_size / ramp_size.z
+	)
 
 	var cube_count: int = 0
 	var ramp_count: int = 0
@@ -1290,8 +1325,9 @@ func _build_glb_tile_visuals() -> void:
 				if tile_pivot_is_center:
 					pos.y += height_step * 0.5
 
-				var basis := Basis().scaled(Vector3(scale_xz, scale_y_cube, scale_xz))
-				cubes_mm.set_instance_transform(ci, Transform3D(basis, pos))
+				var cube_basis := Basis().scaled(cube_scale)
+				var cube_t := Transform3D(cube_basis, pos) * cube_fix
+				cubes_mm.set_instance_transform(ci, cube_t)
 				ci += 1
 
 			if is_ramp_low_cell:
@@ -1303,8 +1339,10 @@ func _build_glb_tile_visuals() -> void:
 				if tile_pivot_is_center:
 					ramp_pos.y += rise_h * 0.5
 
-				var ramp_basis := Basis(Vector3.UP, yaw).scaled(Vector3(scale_xz, scale_y_ramp, scale_xz))
-				ramps_mm.set_instance_transform(ri, Transform3D(ramp_basis, ramp_pos))
+				var rot := Basis(Vector3.UP, yaw)
+				var ramp_basis := rot.scaled(ramp_scale)
+				var ramp_t := Transform3D(ramp_basis, ramp_pos) * ramp_fix
+				ramps_mm.set_instance_transform(ri, ramp_t)
 				ri += 1
 
 # -----------------------------
