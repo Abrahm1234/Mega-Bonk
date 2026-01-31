@@ -1224,6 +1224,7 @@ func _build_mesh_and_collision() -> void:
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_uv2(Vector2.ZERO)
 
 	var uv_scale_top: float = 0.08
 	var uv_scale_wall: float = 0.08
