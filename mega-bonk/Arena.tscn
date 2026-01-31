@@ -1,9 +1,7 @@
-[gd_scene load_steps=7 format=3 uid="uid://cyo3li77q1lbt"]
+[gd_scene load_steps=5 format=3 uid="uid://cyo3li77q1lbt"]
 
 [ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://Scripts/arena_terrain.gd" id="1"]
 [ext_resource type="Script" uid="uid://c5fqv7m0847vy" path="res://Scripts/free_camera.gd" id="2_u45fm"]
-[ext_resource type="ArrayMesh" uid="uid://ddcrurdf00pf7" path="res://tiles/terrain_cube.res" id="2_uj4qe"]
-[ext_resource type="ArrayMesh" uid="uid://d0ki6qfxw8ggg" path="res://tiles/wedge.res" id="3_jycnn"]
 
 [sub_resource type="StandardMaterial3D" id="2"]
 albedo_color = Color(0.32, 0.68, 0.34, 1)
@@ -15,10 +13,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.9783936, 0)
 script = ExtResource("1")
 height_scale = 100.0
 height_step = 12.0
-use_glb_tiles = false
-glb_cube_mesh = ExtResource("2_uj4qe")
-glb_ramp_mesh = ExtResource("3_jycnn")
-ramp_yaw_offset_deg = 270.0
+top_subdiv = 8
+wall_subdiv = 8
 
 [node name="TerrainBody" type="StaticBody3D" parent="."]
 
@@ -31,12 +27,6 @@ material_override = SubResource("2")
 transform = Transform3D(0.7503439, -0.6606659, -0.02246192, 0.002432795, -0.031219212, 0.9995095, -0.6610432, -0.75003046, -0.021817878, 87.832275, 336.62012, 98.21031)
 shadow_enabled = true
 directional_shadow_max_distance = 8192.0
-
-[node name="Visuals" type="Node3D" parent="."]
-
-[node name="CubesMM" type="MultiMeshInstance3D" parent="Visuals"]
-
-[node name="RampsMM" type="MultiMeshInstance3D" parent="Visuals"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_u45fm")
