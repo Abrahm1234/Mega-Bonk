@@ -71,7 +71,7 @@ class_name BlockyTerrain
 @export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
 @export var use_rock_shader: bool = true
 @export_range(1, 16, 1) var top_subdiv: int = 4
-@export_range(1, 16, 1) var wall_subdiv: int = 2
+@export_range(1, 16, 1) var wall_subdiv: int = 8
 @export var noise_top_tex: Texture2D
 @export var noise_wall_tex: Texture2D
 @export var noise_ramp_tex: Texture2D
@@ -89,8 +89,8 @@ class_name BlockyTerrain
 @export var disp_scale_ramp: float = 0.06
 @export var tex_scale: float = 0.1
 @export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
-@export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.1
-@export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.03
+@export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.18
+@export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -682,6 +682,10 @@ func _unhandled_input(e: InputEvent) -> void:
 func generate() -> void:
 	var n: int = max(2, cells_per_side)
 	_cell_size = world_size_m / float(n)
+	if use_rock_shader and mesh_instance != null:
+		var sm := mesh_instance.material_override as ShaderMaterial
+		if sm != null:
+			sm.set_shader_parameter("cell_size", _cell_size)
 
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
