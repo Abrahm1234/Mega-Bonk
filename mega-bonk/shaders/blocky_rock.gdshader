@@ -29,15 +29,20 @@ uniform float tex_strength = 1.0;
 uniform float seam_lock_width = 0.18;
 uniform float seam_lock_soft = 0.06;
 uniform float cell_size = 1.0;
+uniform float debug_vertex_colors = 0.0;
+
+vec2 wrap_uv(vec2 uv) {
+	return fract(uv);
+}
 
 vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
 	vec3 an = abs(n);
-	vec3 w = pow(an, vec3(8.0));
+	vec3 w = pow(an, vec3(10.0));
 	w /= (w.x + w.y + w.z + 1e-6);
 
-	vec2 uvx = p.zy * scale;
-	vec2 uvy = p.xz * scale;
-	vec2 uvz = p.xy * scale;
+	vec2 uvx = wrap_uv(p.zy * scale);
+	vec2 uvy = wrap_uv(p.xz * scale);
+	vec2 uvz = wrap_uv(p.xy * scale);
 
 	vec4 cx = texture(tex, uvx);
 	vec4 cy = texture(tex, uvy);
@@ -100,8 +105,9 @@ void vertex() {
 	float seam_mask = smoothstep(seam_lock_width, seam_lock_width + seam_lock_soft, edge_dist);
 	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box) * seam_mask;
 	vec3 dir_top = vec3(0.0, 1.0, 0.0);
-	vec3 dir_nrm = normalize(NORMAL);
-	vec3 dir = dir_top * is_top + dir_nrm * (is_wall + is_ramp);
+	vec3 dir_wall = normalize(vec3(NORMAL.x, NORMAL.y * 0.15, NORMAL.z));
+	vec3 dir_ramp = normalize(mix(dir_top, normalize(NORMAL), 0.65));
+	vec3 dir = dir_top * is_top + dir_ramp * is_ramp + dir_wall * is_wall;
 	VERTEX += dir * disp;
 }
 
@@ -115,16 +121,14 @@ void fragment() {
 	vec3 p = v_world_pos;
 	vec3 nrm = normalize(v_world_nrm);
 
-	vec3 base = COLOR.rgb;
-
 	vec3 at = triplanar_sample(albedo_top, p, nrm, tex_scale).rgb;
 	vec3 aw = triplanar_sample(albedo_wall, p, nrm, tex_scale).rgb;
 	vec3 ar = triplanar_sample(albedo_ramp, p, nrm, tex_scale).rgb;
 
-	vec3 albedo = at * is_top + ar * is_ramp + aw * is_wall;
-	vec3 mixed = base * mix(vec3(1.0), albedo, tex_strength);
-
-	ALBEDO = mix(base, mixed, 1.0 - is_box);
+	vec3 albedo_tex = at * is_top + ar * is_ramp + aw * is_wall;
+	vec3 surf_albedo = mix(vec3(1.0), albedo_tex, tex_strength);
+	surf_albedo = mix(surf_albedo, COLOR.rgb, debug_vertex_colors);
+	ALBEDO = mix(surf_albedo, COLOR.rgb, is_box);
 
 	vec3 nt = triplanar_sample(normal_top, p, nrm, tex_scale).xyz * 2.0 - 1.0;
 	vec3 nw = triplanar_sample(normal_wall, p, nrm, tex_scale).xyz * 2.0 - 1.0;

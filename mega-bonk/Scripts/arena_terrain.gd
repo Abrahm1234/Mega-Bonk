@@ -70,8 +70,8 @@ class_name BlockyTerrain
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
 @export var use_rock_shader: bool = true
-@export_range(1, 16, 1) var top_subdiv: int = 4
-@export_range(1, 16, 1) var wall_subdiv: int = 8
+@export_range(1, 64, 1) var top_subdiv: int = 4
+@export_range(1, 128, 1) var wall_subdiv: int = 8
 @export var noise_top_tex: Texture2D
 @export var noise_wall_tex: Texture2D
 @export var noise_ramp_tex: Texture2D
@@ -91,6 +91,7 @@ class_name BlockyTerrain
 @export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
 @export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.18
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
+@export var debug_vertex_colors: bool = false
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -651,6 +652,7 @@ func _ready() -> void:
 		sm.set_shader_parameter("tex_strength", tex_strength)
 		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
 		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
+		sm.set_shader_parameter("debug_vertex_colors", debug_vertex_colors ? 1.0 : 0.0)
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
