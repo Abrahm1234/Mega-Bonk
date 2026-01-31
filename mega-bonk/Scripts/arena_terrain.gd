@@ -69,6 +69,28 @@ class_name BlockyTerrain
 # -----------------------------
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
+@export var use_rock_shader: bool = true
+@export_range(1, 16, 1) var top_subdiv: int = 4
+@export_range(1, 16, 1) var wall_subdiv: int = 2
+@export var noise_top_tex: Texture2D
+@export var noise_wall_tex: Texture2D
+@export var noise_ramp_tex: Texture2D
+@export var albedo_top_tex: Texture2D
+@export var albedo_wall_tex: Texture2D
+@export var albedo_ramp_tex: Texture2D
+@export var normal_top_tex: Texture2D
+@export var normal_wall_tex: Texture2D
+@export var normal_ramp_tex: Texture2D
+@export_range(0.0, 2.0, 0.01) var disp_strength_top: float = 0.4
+@export_range(0.0, 2.0, 0.01) var disp_strength_wall: float = 0.2
+@export_range(0.0, 2.0, 0.01) var disp_strength_ramp: float = 0.3
+@export var disp_scale_top: float = 0.06
+@export var disp_scale_wall: float = 0.08
+@export var disp_scale_ramp: float = 0.06
+@export var tex_scale: float = 0.1
+@export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
+@export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.1
+@export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.03
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -607,11 +629,35 @@ func _ready() -> void:
 		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
 		return
 
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.vertex_color_use_as_albedo = true
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh_instance.material_override = mat
+	if use_rock_shader:
+		var sm := ShaderMaterial.new()
+		sm.shader = load("res://shaders/blocky_rock.gdshader")
+		sm.set_shader_parameter("noise_top", noise_top_tex)
+		sm.set_shader_parameter("noise_wall", noise_wall_tex)
+		sm.set_shader_parameter("noise_ramp", noise_ramp_tex)
+		sm.set_shader_parameter("disp_strength_top", disp_strength_top)
+		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
+		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
+		sm.set_shader_parameter("disp_scale_top", disp_scale_top)
+		sm.set_shader_parameter("disp_scale_wall", disp_scale_wall)
+		sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
+		sm.set_shader_parameter("albedo_top", albedo_top_tex)
+		sm.set_shader_parameter("albedo_wall", albedo_wall_tex)
+		sm.set_shader_parameter("albedo_ramp", albedo_ramp_tex)
+		sm.set_shader_parameter("normal_top", normal_top_tex)
+		sm.set_shader_parameter("normal_wall", normal_wall_tex)
+		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
+		sm.set_shader_parameter("tex_scale", tex_scale)
+		sm.set_shader_parameter("tex_strength", tex_strength)
+		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
+		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
+		mesh_instance.material_override = sm
+	else:
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.vertex_color_use_as_albedo = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mesh_instance.material_override = mat
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
@@ -1201,22 +1247,18 @@ func _build_mesh_and_collision() -> void:
 
 			var c0 := _cell_corners(x, z)
 
-			var a := Vector3(x0, c0.x, z0)
-			var b := Vector3(x1, c0.y, z0)
-			var c := Vector3(x1, c0.z, z1)
-			var d := Vector3(x0, c0.w, z1)
-
 			var idx: int = z * n + x
-			var top_col: Color = terrain_color
-			if enable_ramps and _ramp_up_dir[idx] != RAMP_NONE:
-				top_col = ramp_color
+			var is_ramp: bool = enable_ramps and _ramp_up_dir[idx] != RAMP_NONE
+			var top_col: Color = ramp_color if is_ramp else terrain_color
+			top_col.a = 0.5 if is_ramp else 0.0
 
-			_add_quad(
-				st, a, b, c, d,
-				Vector2(float(x), float(z)) * uv_scale_top,
-				Vector2(float(x + 1), float(z)) * uv_scale_top,
-				Vector2(float(x + 1), float(z + 1)) * uv_scale_top,
-				Vector2(float(x), float(z + 1)) * uv_scale_top,
+			_add_cell_top_grid(
+				st,
+				x, z,
+				x0, x1, z0, z1,
+				c0,
+				top_subdiv,
+				uv_scale_top,
 				top_col
 			)
 
@@ -1245,7 +1287,9 @@ func _build_mesh_and_collision() -> void:
 					var bot1 := minf(a_e.y, b_w.y)
 
 					if (top0 - bot0) > eps or (top1 - bot1) > eps:
-						_add_wall_x_between(st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall)
+						_add_wall_x_between(
+							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv
+						)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
@@ -1261,7 +1305,9 @@ func _build_mesh_and_collision() -> void:
 					var bot1z := minf(a_s.y, c_n.y)
 
 					if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
-						_add_wall_z_between(st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall)
+						_add_wall_z_between(
+							st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
+						)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
@@ -1286,7 +1332,9 @@ func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var u1 := Vector2(1.0, 0.0) * uv_scale
 	var u2 := Vector2(1.0, 1.0) * uv_scale
 	var u3 := Vector2(0.0, 1.0) * uv_scale
-	_add_quad(st, a, b, c, d, u0, u1, u2, u3, box_color)
+	var bc := box_color
+	bc.a = 0.25
+	_add_quad(st, a, b, c, d, u0, u1, u2, u3, bc)
 
 func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
 	# West wall (x = _ox)
@@ -1304,18 +1352,20 @@ func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float
 	var c := Vector3(p1.x, top_y, p1.z)
 	var d := Vector3(p0.x, top_y, p0.z)
 
+	var bc := box_color
+	bc.a = 0.25
 	# Order affects normals; culling is disabled, but keep consistent anyway.
 	if outward:
 		_add_quad(st, b, a, d, c,
 			Vector2(0, a.y * uv_scale), Vector2(1, b.y * uv_scale),
 			Vector2(1, top_y * uv_scale), Vector2(0, top_y * uv_scale),
-			box_color
+			bc
 		)
 	else:
 		_add_quad(st, a, b, c, d,
 			Vector2(0, a.y * uv_scale), Vector2(1, b.y * uv_scale),
 			Vector2(1, top_y * uv_scale), Vector2(0, top_y * uv_scale),
-			box_color
+			bc
 		)
 
 func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
@@ -1328,13 +1378,15 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var u1 := Vector2(0.0, 1.0) * uv_scale
 	var u2 := Vector2(1.0, 1.0) * uv_scale
 	var u3 := Vector2(1.0, 0.0) * uv_scale
-	_add_quad(st, a, d, c, b, u0, u1, u2, u3, box_color)
+	var bc := box_color
+	bc.a = 0.25
+	_add_quad(st, a, d, c, b, u0, u1, u2, u3, bc)
 
 # -----------------------------
 # Terrain wall helpers (between unequal cells)
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -1345,27 +1397,38 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	var b := Vector3(x_edge, high1, z1)
 	var c := Vector3(x_edge, low1, z1)
 	var d := Vector3(x_edge, low0, z0)
+	var wall_col := terrain_color
+	wall_col.a = 1.0
 
 	if d0 > eps and d1 > eps:
-		_add_quad(st, a, b, c, d,
-			Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-			Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
-			terrain_color
-		)
+		if subdiv > 1:
+			_add_quad_grid(st, a, b, c, d,
+				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				subdiv, subdiv,
+				wall_col
+			)
+		else:
+			_add_quad_uv2(st, a, b, c, d,
+				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+				wall_col
+			)
 		return
 
-	st.set_color(terrain_color)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_color(wall_col)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
-	st.set_color(terrain_color)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
+	st.set_color(wall_col)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float) -> void:
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -1376,28 +1439,131 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	var b := Vector3(x1, high1, z_edge)
 	var c := Vector3(x1, low1, z_edge)
 	var d := Vector3(x0, low0, z_edge)
+	var wall_col := terrain_color
+	wall_col.a = 1.0
 
 	if d0 > eps and d1 > eps:
-		_add_quad(st, a, b, c, d,
-			Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-			Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
-			terrain_color
-		)
+		if subdiv > 1:
+			_add_quad_grid(st, a, b, c, d,
+				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				subdiv, subdiv,
+				wall_col
+			)
+		else:
+			_add_quad_uv2(st, a, b, c, d,
+				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
+				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+				wall_col
+			)
 		return
 
-	st.set_color(terrain_color)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
+	st.set_color(wall_col)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
-	st.set_color(terrain_color)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.add_vertex(d)
+	st.set_color(wall_col)
+	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 # -----------------------------
 # Quad writer
 # -----------------------------
+func _bilinear_height(h00: float, h10: float, h11: float, h01: float, s: float, t: float) -> float:
+	return lerpf(lerpf(h00, h10, s), lerpf(h01, h11, s), t)
+
+func _add_quad_grid(
+	st: SurfaceTool,
+	a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2,
+	sub_u: int, sub_v: int,
+	color: Color
+) -> void:
+	var su: int = maxi(1, sub_u)
+	var sv: int = maxi(1, sub_v)
+
+	for vy in range(sv):
+		var t0 := float(vy) / float(sv)
+		var t1 := float(vy + 1) / float(sv)
+
+		for ux in range(su):
+			var s0 := float(ux) / float(su)
+			var s1 := float(ux + 1) / float(su)
+
+			var p00 := (a.lerp(b, s0)).lerp(d.lerp(c, s0), t0)
+			var p10 := (a.lerp(b, s1)).lerp(d.lerp(c, s1), t0)
+			var p11 := (a.lerp(b, s1)).lerp(d.lerp(c, s1), t1)
+			var p01 := (a.lerp(b, s0)).lerp(d.lerp(c, s0), t1)
+
+			var uv00 := (ua.lerp(ub, s0)).lerp(ud.lerp(uc, s0), t0)
+			var uv10 := (ua.lerp(ub, s1)).lerp(ud.lerp(uc, s1), t0)
+			var uv11 := (ua.lerp(ub, s1)).lerp(ud.lerp(uc, s1), t1)
+			var uv01 := (ua.lerp(ub, s0)).lerp(ud.lerp(uc, s0), t1)
+
+			_add_quad_uv2(
+				st,
+				p00, p10, p11, p01,
+				uv00, uv10, uv11, uv01,
+				Vector2(s0, t0), Vector2(s1, t0), Vector2(s1, t1), Vector2(s0, t1),
+				color
+			)
+
+func _add_cell_top_grid(
+	st: SurfaceTool,
+	cell_x: int, cell_z: int,
+	x0: float, x1: float, z0: float, z1: float,
+	corners: Vector4,
+	subdiv: int,
+	uv_scale: float,
+	color: Color
+) -> void:
+	var sdiv: int = maxi(1, subdiv)
+
+	var h00 := corners.x
+	var h10 := corners.y
+	var h11 := corners.z
+	var h01 := corners.w
+
+	for iz in range(sdiv):
+		var t0 := float(iz) / float(sdiv)
+		var t1 := float(iz + 1) / float(sdiv)
+
+		var pz0 := lerpf(z0, z1, t0)
+		var pz1 := lerpf(z0, z1, t1)
+
+		for ix in range(sdiv):
+			var s0 := float(ix) / float(sdiv)
+			var s1 := float(ix + 1) / float(sdiv)
+
+			var px0 := lerpf(x0, x1, s0)
+			var px1 := lerpf(x0, x1, s1)
+
+			var y00 := _bilinear_height(h00, h10, h11, h01, s0, t0)
+			var y10 := _bilinear_height(h00, h10, h11, h01, s1, t0)
+			var y11 := _bilinear_height(h00, h10, h11, h01, s1, t1)
+			var y01 := _bilinear_height(h00, h10, h11, h01, s0, t1)
+
+			var a := Vector3(px0, y00, pz0)
+			var b := Vector3(px1, y10, pz0)
+			var c := Vector3(px1, y11, pz1)
+			var d := Vector3(px0, y01, pz1)
+
+			var ua := Vector2(float(cell_x) + s0, float(cell_z) + t0) * uv_scale
+			var ub := Vector2(float(cell_x) + s1, float(cell_z) + t0) * uv_scale
+			var uc := Vector2(float(cell_x) + s1, float(cell_z) + t1) * uv_scale
+			var ud := Vector2(float(cell_x) + s0, float(cell_z) + t1) * uv_scale
+
+			_add_quad_uv2(
+				st,
+				a, b, c, d,
+				ua, ub, uc, ud,
+				Vector2(s0, t0), Vector2(s1, t0), Vector2(s1, t1), Vector2(s0, t1),
+				color
+			)
+
 func _add_quad(
 	st: SurfaceTool,
 	a: Vector3, b: Vector3, c: Vector3, d: Vector3,
@@ -1411,3 +1577,18 @@ func _add_quad(
 	st.set_color(color); st.set_uv(ua); st.add_vertex(a)
 	st.set_color(color); st.set_uv(uc); st.add_vertex(c)
 	st.set_color(color); st.set_uv(ud); st.add_vertex(d)
+
+func _add_quad_uv2(
+	st: SurfaceTool,
+	a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2,
+	ua2: Vector2, ub2: Vector2, uc2: Vector2, ud2: Vector2,
+	color: Color
+) -> void:
+	st.set_color(color); st.set_uv(ua); st.set_uv2(ua2); st.add_vertex(a)
+	st.set_color(color); st.set_uv(ub); st.set_uv2(ub2); st.add_vertex(b)
+	st.set_color(color); st.set_uv(uc); st.set_uv2(uc2); st.add_vertex(c)
+
+	st.set_color(color); st.set_uv(ua); st.set_uv2(ua2); st.add_vertex(a)
+	st.set_color(color); st.set_uv(uc); st.set_uv2(uc2); st.add_vertex(c)
+	st.set_color(color); st.set_uv(ud); st.set_uv2(ud2); st.add_vertex(d)
