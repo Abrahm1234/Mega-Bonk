@@ -30,6 +30,10 @@ uniform float seam_lock_width = 0.18;
 uniform float seam_lock_soft = 0.06;
 uniform float cell_size = 1.0;
 uniform float debug_vertex_colors = 0.0;
+const float SURF_TOP = 0.0;
+const float SURF_WALL = 0.55;
+const float SURF_RAMP = 0.8;
+const float SURF_BOX = 1.0;
 
 vec2 wrap_uv(vec2 uv) {
 	return fract(uv);
@@ -71,13 +75,33 @@ float hash21(vec2 p) {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-void vertex() {
-	float kind = COLOR.a;
+vec4 surf_flags(float a) {
+	float d_top = abs(a - SURF_TOP);
+	float d_wall = abs(a - SURF_WALL);
+	float d_ramp = abs(a - SURF_RAMP);
+	float d_box = abs(a - SURF_BOX);
+	vec4 flags = vec4(1.0, 0.0, 0.0, 0.0);
+	float min_d = d_top;
+	if (d_wall < min_d) {
+		min_d = d_wall;
+		flags = vec4(0.0, 1.0, 0.0, 0.0);
+	}
+	if (d_ramp < min_d) {
+		min_d = d_ramp;
+		flags = vec4(0.0, 0.0, 1.0, 0.0);
+	}
+	if (d_box < min_d) {
+		flags = vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	return flags;
+}
 
-	float is_box = step(0.12, kind) * (1.0 - step(0.45, kind));
-	float is_ramp = step(0.45, kind) * (1.0 - step(0.75, kind));
-	float is_wall = step(0.75, kind);
-	float is_top = 1.0 - is_box - is_ramp - is_wall;
+void vertex() {
+	vec4 flags = surf_flags(COLOR.a);
+	float is_top = flags.x;
+	float is_wall = flags.y;
+	float is_ramp = flags.z;
+	float is_box = flags.w;
 
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_world_nrm = normalize(MODEL_NORMAL_MATRIX * NORMAL);
@@ -112,11 +136,11 @@ void vertex() {
 }
 
 void fragment() {
-	float kind = COLOR.a;
-	float is_box = step(0.12, kind) * (1.0 - step(0.45, kind));
-	float is_ramp = step(0.45, kind) * (1.0 - step(0.75, kind));
-	float is_wall = step(0.75, kind);
-	float is_top = 1.0 - is_box - is_ramp - is_wall;
+	vec4 flags = surf_flags(COLOR.a);
+	float is_top = flags.x;
+	float is_wall = flags.y;
+	float is_ramp = flags.z;
+	float is_box = flags.w;
 
 	vec3 p = v_world_pos;
 	vec3 nrm = normalize(v_world_nrm);

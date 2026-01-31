@@ -87,7 +87,7 @@ class_name BlockyTerrain
 @export var disp_scale_top: float = 0.06
 @export var disp_scale_wall: float = 0.08
 @export var disp_scale_ramp: float = 0.06
-@export var tex_scale: float = 0.1
+@export var tiles_per_cell: float = 1.0
 @export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
 @export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.18
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
@@ -108,6 +108,10 @@ const RAMP_EAST := 0
 const RAMP_WEST := 1
 const RAMP_SOUTH := 2
 const RAMP_NORTH := 3
+const SURF_TOP := 0.0
+const SURF_WALL := 0.55
+const SURF_RAMP := 0.8
+const SURF_BOX := 1.0
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 	match dir:
@@ -648,7 +652,6 @@ func _ready() -> void:
 		sm.set_shader_parameter("normal_top", normal_top_tex)
 		sm.set_shader_parameter("normal_wall", normal_wall_tex)
 		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
-		sm.set_shader_parameter("tex_scale", tex_scale)
 		sm.set_shader_parameter("tex_strength", tex_strength)
 		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
 		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
@@ -688,6 +691,7 @@ func generate() -> void:
 		var sm := mesh_instance.material_override as ShaderMaterial
 		if sm != null:
 			sm.set_shader_parameter("cell_size", _cell_size)
+			sm.set_shader_parameter("tex_scale", tiles_per_cell / maxf(_cell_size, 0.001))
 
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
@@ -1257,7 +1261,7 @@ func _build_mesh_and_collision() -> void:
 			var idx: int = z * n + x
 			var is_ramp: bool = enable_ramps and _ramp_up_dir[idx] != RAMP_NONE
 			var top_col: Color = ramp_color if is_ramp else terrain_color
-			top_col.a = 0.5 if is_ramp else 0.0
+			top_col.a = SURF_RAMP if is_ramp else SURF_TOP
 
 			_add_cell_top_grid(
 				st,
@@ -1340,7 +1344,7 @@ func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var u2 := Vector2(1.0, 1.0) * uv_scale
 	var u3 := Vector2(0.0, 1.0) * uv_scale
 	var bc := box_color
-	bc.a = 0.25
+	bc.a = SURF_BOX
 	_add_quad(st, a, b, c, d, u0, u1, u2, u3, bc)
 
 func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
@@ -1360,7 +1364,7 @@ func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float
 	var d := Vector3(p0.x, top_y, p0.z)
 
 	var bc := box_color
-	bc.a = 0.25
+	bc.a = SURF_BOX
 	# Order affects normals; culling is disabled, but keep consistent anyway.
 	if outward:
 		_add_quad(st, b, a, d, c,
@@ -1386,7 +1390,7 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var u2 := Vector2(1.0, 1.0) * uv_scale
 	var u3 := Vector2(1.0, 0.0) * uv_scale
 	var bc := box_color
-	bc.a = 0.25
+	bc.a = SURF_BOX
 	_add_quad(st, a, d, c, b, u0, u1, u2, u3, bc)
 
 # -----------------------------
@@ -1405,7 +1409,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	var c := Vector3(x_edge, low1, z1)
 	var d := Vector3(x_edge, low0, z0)
 	var wall_col := terrain_color
-	wall_col.a = 1.0
+	wall_col.a = SURF_WALL
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -1447,7 +1451,7 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	var c := Vector3(x1, low1, z_edge)
 	var d := Vector3(x0, low0, z_edge)
 	var wall_col := terrain_color
-	wall_col.a = 1.0
+	wall_col.a = SURF_WALL
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
