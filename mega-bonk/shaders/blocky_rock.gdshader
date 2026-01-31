@@ -26,8 +26,9 @@ uniform sampler2D normal_ramp : repeat_enable, filter_linear;
 
 uniform float tex_scale = 0.1;
 uniform float tex_strength = 1.0;
-uniform float seam_lock_width = 0.1;
-uniform float seam_lock_soft = 0.03;
+uniform float seam_lock_width = 0.18;
+uniform float seam_lock_soft = 0.06;
+uniform float cell_size = 1.0;
 
 vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
 	vec3 an = abs(n);
@@ -44,6 +45,27 @@ vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
 	return cx * w.x + cy * w.y + cz * w.z;
 }
 
+float fbm_triplanar(sampler2D tex, vec3 p, vec3 n, float base_scale) {
+	float sum = 0.0;
+	float amp = 0.6;
+	float sc = base_scale;
+	for (int i = 0; i < 3; i++) {
+		sum += triplanar_sample(tex, p, n, sc).r * amp;
+		sc *= 2.0;
+		amp *= 0.5;
+	}
+	return sum;
+}
+
+float ridged(float x) {
+	x = abs(x * 2.0 - 1.0);
+	return 1.0 - x;
+}
+
+float hash21(vec2 p) {
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
 void vertex() {
 	float kind = COLOR.a;
 
@@ -55,9 +77,16 @@ void vertex() {
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_world_nrm = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 
-	float nt = triplanar_sample(noise_top, v_world_pos, v_world_nrm, disp_scale_top).r;
-	float nw = triplanar_sample(noise_wall, v_world_pos, v_world_nrm, disp_scale_wall).r;
-	float nr = triplanar_sample(noise_ramp, v_world_pos, v_world_nrm, disp_scale_ramp).r;
+	vec2 cell = floor(v_world_pos.xz / max(cell_size, 1e-3));
+	float rnd = hash21(cell);
+	vec3 pvar = v_world_pos + vec3(rnd * 7.31, rnd * 3.17, rnd * 5.83);
+
+	float nt = fbm_triplanar(noise_top, pvar, v_world_nrm, disp_scale_top);
+	float nw = fbm_triplanar(noise_wall, pvar, v_world_nrm, disp_scale_wall);
+	float nr = fbm_triplanar(noise_ramp, pvar, v_world_nrm, disp_scale_ramp);
+	nt = ridged(nt);
+	nw = ridged(nw);
+	nr = ridged(nr);
 
 	float n = nt * is_top + nr * is_ramp + nw * is_wall;
 	float strength = disp_strength_top * is_top
@@ -70,7 +99,10 @@ void vertex() {
 	);
 	float seam_mask = smoothstep(seam_lock_width, seam_lock_width + seam_lock_soft, edge_dist);
 	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box) * seam_mask;
-	VERTEX.y += disp;
+	vec3 dir_top = vec3(0.0, 1.0, 0.0);
+	vec3 dir_nrm = normalize(NORMAL);
+	vec3 dir = dir_top * is_top + dir_nrm * (is_wall + is_ramp);
+	VERTEX += dir * disp;
 }
 
 void fragment() {
