@@ -70,8 +70,23 @@ class_name BlockyTerrain
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
 
+# -----------------------------
+# GLB Tile Visuals (MultiMesh)
+# -----------------------------
+@export var use_glb_tiles: bool = true
+@export var show_procedural_mesh: bool = false # keep collision, hide procedural render
+@export var glb_cube_mesh: Mesh
+@export var glb_ramp_mesh: Mesh
+@export var glb_unit_tile_size: float = 1.0
+@export var tile_pivot_is_center: bool = true
+@export var ramp_yaw_offset_deg: float = 0.0
+@export var tile_column_base_height: float = -40.0
+@export var max_column_levels: int = 128
+
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
+@onready var cubes_mmi: MultiMeshInstance3D = get_node_or_null("Visuals/CubesMM")
+@onready var ramps_mmi: MultiMeshInstance3D = get_node_or_null("Visuals/RampsMM")
 
 var _cell_size: float
 var _ox: float
@@ -621,6 +636,11 @@ func _ready() -> void:
 	if print_seed:
 		print("Noise seed:", noise_seed)
 
+	if use_glb_tiles and not show_procedural_mesh:
+		mesh_instance.visible = false
+
+	tile_column_base_height = outer_floor_height
+
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -658,6 +678,9 @@ func generate() -> void:
 
 	_build_mesh_and_collision()
 	print("Ramp slots:", _count_ramps())
+
+	if use_glb_tiles:
+		_build_glb_tile_visuals()
 
 # -----------------------------
 # Height generation (14x14)
@@ -1169,6 +1192,120 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 			return Vector2(c.w, c.z)
 		_:
 			return Vector2(c.x, c.x)
+
+# -----------------------------
+# GLB visuals (MultiMesh)
+# -----------------------------
+func _yaw_for_ramp_dir_up(dir_up: int) -> float:
+	match dir_up:
+		RAMP_EAST:
+			return 0.0
+		RAMP_WEST:
+			return PI
+		RAMP_SOUTH:
+			return PI * 0.5
+		RAMP_NORTH:
+			return -PI * 0.5
+		_:
+			return 0.0
+
+func _build_glb_tile_visuals() -> void:
+	if cubes_mmi == null or ramps_mmi == null:
+		push_error("Missing nodes: Visuals/CubesMM and Visuals/RampsMM (MultiMeshInstance3D).")
+		return
+
+	if glb_cube_mesh == null or glb_ramp_mesh == null:
+		push_warning("Assign glb_cube_mesh and glb_ramp_mesh in the Inspector (the .tres Mesh saved from your GLBs).")
+		return
+
+	var n: int = max(2, cells_per_side)
+
+	var base_h: float = _quantize(tile_column_base_height, height_step)
+	var base_level: int = _h_to_level(base_h)
+
+	var levels := PackedInt32Array()
+	levels.resize(n * n)
+	for i in range(n * n):
+		levels[i] = _h_to_level(_heights[i])
+
+	var want_levels: int = maxi(1, ramp_step_count)
+	var rise_h: float = float(want_levels) * height_step
+
+	var scale_xz: float = _cell_size / maxf(0.0001, glb_unit_tile_size)
+	var scale_y_cube: float = height_step / maxf(0.0001, glb_unit_tile_size)
+	var scale_y_ramp: float = rise_h / maxf(0.0001, glb_unit_tile_size)
+
+	var cube_count: int = 0
+	var ramp_count: int = 0
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var top_level: int = levels[idx]
+
+			var is_ramp_low_cell: bool = enable_ramps and _ramp_up_dir[idx] != RAMP_NONE
+
+			var col_levels: int = top_level - base_level
+			if col_levels > 0:
+				cube_count += mini(col_levels, max_column_levels)
+
+			if is_ramp_low_cell:
+				ramp_count += 1
+
+	var cubes_mm := MultiMesh.new()
+	cubes_mm.transform_format = MultiMesh.TRANSFORM_3D
+	cubes_mm.mesh = glb_cube_mesh
+	cubes_mm.instance_count = cube_count
+	cubes_mmi.multimesh = cubes_mm
+
+	var ramps_mm := MultiMesh.new()
+	ramps_mm.transform_format = MultiMesh.TRANSFORM_3D
+	ramps_mm.mesh = glb_ramp_mesh
+	ramps_mm.instance_count = ramp_count
+	ramps_mmi.multimesh = ramps_mm
+
+	var ci: int = 0
+	var ri: int = 0
+
+	var yaw_offset: float = deg_to_rad(ramp_yaw_offset_deg)
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+
+			var center_x: float = _ox + (float(x) + 0.5) * _cell_size
+			var center_z: float = _oz + (float(z) + 0.5) * _cell_size
+
+			var top_level: int = levels[idx]
+			var is_ramp_low_cell: bool = enable_ramps and _ramp_up_dir[idx] != RAMP_NONE
+
+			var col_levels: int = top_level - base_level
+			col_levels = clampi(col_levels, 0, max_column_levels)
+
+			for k in range(col_levels):
+				var lv: int = base_level + k
+				var y_bottom: float = _level_to_h(lv)
+
+				var pos := Vector3(center_x, y_bottom, center_z)
+				if tile_pivot_is_center:
+					pos.y += height_step * 0.5
+
+				var basis := Basis().scaled(Vector3(scale_xz, scale_y_cube, scale_xz))
+				cubes_mm.set_instance_transform(ci, Transform3D(basis, pos))
+				ci += 1
+
+			if is_ramp_low_cell:
+				var dir_up: int = _ramp_up_dir[idx]
+				var yaw: float = _yaw_for_ramp_dir_up(dir_up) + yaw_offset
+
+				var y_low: float = _heights[idx]
+				var ramp_pos := Vector3(center_x, y_low, center_z)
+				if tile_pivot_is_center:
+					ramp_pos.y += rise_h * 0.5
+
+				var ramp_basis := Basis(Vector3.UP, yaw).scaled(Vector3(scale_xz, scale_y_ramp, scale_xz))
+				ramps_mm.set_instance_transform(ri, Transform3D(ramp_basis, ramp_pos))
+				ri += 1
 
 # -----------------------------
 # Mesh building

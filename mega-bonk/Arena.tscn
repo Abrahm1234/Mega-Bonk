@@ -26,6 +26,12 @@ transform = Transform3D(0.7503439, -0.6606659, -0.02246192, 0.002432795, -0.0312
 shadow_enabled = true
 directional_shadow_max_distance = 8192.0
 
+[node name="Visuals" type="Node3D" parent="."]
+
+[node name="CubesMM" type="MultiMeshInstance3D" parent="Visuals"]
+
+[node name="RampsMM" type="MultiMeshInstance3D" parent="Visuals"]
+
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_u45fm")
 
