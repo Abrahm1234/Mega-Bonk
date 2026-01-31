@@ -1,13 +1,27 @@
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque;
 
-uniform sampler2D disp_noise : repeat_enable, filter_linear;
-uniform float disp_strength = 0.5;
-uniform float disp_scale = 0.03;
+uniform sampler2D noise_top : repeat_enable, filter_linear;
+uniform sampler2D noise_wall : repeat_enable, filter_linear;
+uniform sampler2D noise_ramp : repeat_enable, filter_linear;
 
-uniform sampler2D rock_albedo : repeat_enable, filter_linear;
-uniform sampler2D rock_normal : repeat_enable, filter_linear;
-uniform float tex_scale = 0.08;
+uniform float disp_strength_top = 0.35;
+uniform float disp_strength_wall = 0.2;
+uniform float disp_strength_ramp = 0.25;
+
+uniform float disp_scale_top = 0.06;
+uniform float disp_scale_wall = 0.08;
+uniform float disp_scale_ramp = 0.06;
+
+uniform sampler2D albedo_top : repeat_enable, filter_linear;
+uniform sampler2D albedo_wall : repeat_enable, filter_linear;
+uniform sampler2D albedo_ramp : repeat_enable, filter_linear;
+
+uniform sampler2D normal_top : repeat_enable, filter_linear;
+uniform sampler2D normal_wall : repeat_enable, filter_linear;
+uniform sampler2D normal_ramp : repeat_enable, filter_linear;
+
+uniform float tex_scale = 0.1;
 uniform float tex_strength = 1.0;
 
 vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
@@ -26,23 +40,55 @@ vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
 }
 
 void vertex() {
-	vec3 p = VERTEX;
-	float n = texture(disp_noise, p.xz * disp_scale).r;
-	float disp = (n * 2.0 - 1.0) * disp_strength;
+	float kind = COLOR.a;
+
+	float is_box = step(0.12, kind) * (1.0 - step(0.45, kind));
+	float is_ramp = step(0.45, kind) * (1.0 - step(0.75, kind));
+	float is_wall = step(0.75, kind);
+	float is_top = 1.0 - is_box - is_ramp - is_wall;
+
+	vec3 p = (WORLD_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 nrm = normalize((WORLD_NORMAL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+
+	float nt = triplanar_sample(noise_top, p, nrm, disp_scale_top).r;
+	float nw = triplanar_sample(noise_wall, p, nrm, disp_scale_wall).r;
+	float nr = triplanar_sample(noise_ramp, p, nrm, disp_scale_ramp).r;
+
+	float n = nt * is_top + nr * is_ramp + nw * is_wall;
+	float strength = disp_strength_top * is_top
+		+ disp_strength_ramp * is_ramp
+		+ disp_strength_wall * is_wall;
+
+	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box);
 	VERTEX.y += disp;
 }
 
 void fragment() {
-	vec3 nrm = normalize(NORMAL);
-	vec3 p = VERTEX;
+	float kind = COLOR.a;
+	float is_box = step(0.12, kind) * (1.0 - step(0.45, kind));
+	float is_ramp = step(0.45, kind) * (1.0 - step(0.75, kind));
+	float is_wall = step(0.75, kind);
+	float is_top = 1.0 - is_box - is_ramp - is_wall;
+
+	vec3 p = (WORLD_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 nrm = normalize((WORLD_NORMAL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+
 	vec3 base = COLOR.rgb;
 
-	vec3 rock = triplanar_sample(rock_albedo, p, nrm, tex_scale).rgb;
-	vec3 mixed = base * mix(vec3(1.0), rock, tex_strength);
+	vec3 at = triplanar_sample(albedo_top, p, nrm, tex_scale).rgb;
+	vec3 aw = triplanar_sample(albedo_wall, p, nrm, tex_scale).rgb;
+	vec3 ar = triplanar_sample(albedo_ramp, p, nrm, tex_scale).rgb;
 
-	ALBEDO = mixed;
+	vec3 albedo = at * is_top + ar * is_ramp + aw * is_wall;
+	vec3 mixed = base * mix(vec3(1.0), albedo, tex_strength);
 
-	vec3 tn = triplanar_sample(rock_normal, p, nrm, tex_scale).xyz * 2.0 - 1.0;
+	ALBEDO = mix(base, mixed, 1.0 - is_box);
+
+	vec3 nt = triplanar_sample(normal_top, p, nrm, tex_scale).xyz * 2.0 - 1.0;
+	vec3 nw = triplanar_sample(normal_wall, p, nrm, tex_scale).xyz * 2.0 - 1.0;
+	vec3 nr = triplanar_sample(normal_ramp, p, nrm, tex_scale).xyz * 2.0 - 1.0;
+
+	vec3 tn = nt * is_top + nr * is_ramp + nw * is_wall;
 	NORMAL_MAP = normalize(tn);
 	NORMAL_MAP_DEPTH = 1.0;
 }
