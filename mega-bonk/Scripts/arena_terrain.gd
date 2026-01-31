@@ -69,6 +69,14 @@ class_name BlockyTerrain
 # -----------------------------
 @export var terrain_color: Color = Color(0.32, 0.68, 0.34, 1.0)
 @export var box_color: Color = Color(0.12, 0.12, 0.12, 1.0)
+@export var use_rock_shader: bool = true
+@export var disp_noise_tex: Texture2D
+@export var rock_albedo_tex: Texture2D
+@export var rock_normal_tex: Texture2D
+@export_range(0.0, 2.0, 0.01) var disp_strength: float = 0.4
+@export var disp_scale: float = 0.03
+@export var tex_scale: float = 0.08
+@export_range(0.0, 1.0, 0.01) var tex_strength: float = 1.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -607,11 +615,23 @@ func _ready() -> void:
 		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
 		return
 
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.vertex_color_use_as_albedo = true
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh_instance.material_override = mat
+	if use_rock_shader:
+		var sm := ShaderMaterial.new()
+		sm.shader = load("res://shaders/blocky_rock.gdshader")
+		sm.set_shader_parameter("disp_noise", disp_noise_tex)
+		sm.set_shader_parameter("disp_strength", disp_strength)
+		sm.set_shader_parameter("disp_scale", disp_scale)
+		sm.set_shader_parameter("rock_albedo", rock_albedo_tex)
+		sm.set_shader_parameter("rock_normal", rock_normal_tex)
+		sm.set_shader_parameter("tex_scale", tex_scale)
+		sm.set_shader_parameter("tex_strength", tex_strength)
+		mesh_instance.material_override = sm
+	else:
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.vertex_color_use_as_albedo = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mesh_instance.material_override = mat
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
