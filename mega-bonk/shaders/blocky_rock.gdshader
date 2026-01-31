@@ -1,6 +1,9 @@
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque;
 
+varying vec3 v_world_pos;
+varying vec3 v_world_nrm;
+
 uniform sampler2D noise_top : repeat_enable, filter_linear;
 uniform sampler2D noise_wall : repeat_enable, filter_linear;
 uniform sampler2D noise_ramp : repeat_enable, filter_linear;
@@ -47,12 +50,12 @@ void vertex() {
 	float is_wall = step(0.75, kind);
 	float is_top = 1.0 - is_box - is_ramp - is_wall;
 
-	vec3 p = (WORLD_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	vec3 nrm = normalize((WORLD_NORMAL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_world_nrm = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 
-	float nt = triplanar_sample(noise_top, p, nrm, disp_scale_top).r;
-	float nw = triplanar_sample(noise_wall, p, nrm, disp_scale_wall).r;
-	float nr = triplanar_sample(noise_ramp, p, nrm, disp_scale_ramp).r;
+	float nt = triplanar_sample(noise_top, v_world_pos, v_world_nrm, disp_scale_top).r;
+	float nw = triplanar_sample(noise_wall, v_world_pos, v_world_nrm, disp_scale_wall).r;
+	float nr = triplanar_sample(noise_ramp, v_world_pos, v_world_nrm, disp_scale_ramp).r;
 
 	float n = nt * is_top + nr * is_ramp + nw * is_wall;
 	float strength = disp_strength_top * is_top
@@ -70,8 +73,8 @@ void fragment() {
 	float is_wall = step(0.75, kind);
 	float is_top = 1.0 - is_box - is_ramp - is_wall;
 
-	vec3 p = (WORLD_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	vec3 nrm = normalize((WORLD_NORMAL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	vec3 p = v_world_pos;
+	vec3 nrm = normalize(v_world_nrm);
 
 	vec3 base = COLOR.rgb;
 
