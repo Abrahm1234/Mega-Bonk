@@ -120,6 +120,8 @@ void vertex() {
 void fragment() {
 	if (debug_show_vertex_color) {
 		ALBEDO = COLOR.rgb;
+		METALLIC = 0.0;
+		ROUGHNESS = 1.0;
 	} else {
 		float is_top  = decode_is(v_tag, TAG_TOP);
 		float is_wall = decode_is(v_tag, TAG_WALL);
