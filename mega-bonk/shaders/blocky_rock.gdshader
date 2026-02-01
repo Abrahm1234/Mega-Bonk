@@ -102,8 +102,10 @@ void vertex() {
 	float rnd = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
 	vec3 p = world_p0 + vec3(rnd * 19.0, rnd * 7.0, rnd * 23.0);
 
-	float n = fbm_noise(is_top > 0.5 ? noise_top : (is_wall > 0.5 ? noise_wall : noise_ramp),
-	                    p, world_n0, disp_scale);
+	float n_top = fbm_noise(noise_top, p, world_n0, disp_scale);
+	float n_wall = fbm_noise(noise_wall, p, world_n0, disp_scale);
+	float n_ramp = fbm_noise(noise_ramp, p, world_n0, disp_scale);
+	float n = n_top * is_top + n_wall * is_wall + n_ramp * is_ramp;
 
 	float disp = (n * 2.0 - 1.0) * disp_strength;
 
