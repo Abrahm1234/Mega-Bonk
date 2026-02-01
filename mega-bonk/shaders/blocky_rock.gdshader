@@ -96,7 +96,7 @@ void vertex() {
 	                 + disp_scale_ramp * is_ramp;
 
 	vec3 world_p0 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	vec3 world_n0 = normalize((MODEL_NORMAL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	vec3 world_n0 = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 
 	vec2 cell = floor(world_p0.xz / max(cell_size, 1e-5));
 	float rnd = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
