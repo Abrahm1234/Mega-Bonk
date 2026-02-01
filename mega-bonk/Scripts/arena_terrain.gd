@@ -59,6 +59,18 @@ class_name BlockyTerrain
 @export_range(1, 64, 1) var global_fix_passes: int = 24
 
 # -----------------------------
+# Tunnels (separate mesh under the terrain shell)
+# -----------------------------
+@export var enable_tunnels: bool = true
+@export_range(0, 6, 1) var tunnel_count: int = 2
+@export_range(1, 3, 1) var tunnel_radius_cells: int = 1
+@export_range(6, 128, 1) var tunnel_min_len_cells: int = 10
+@export var tunnel_floor_y: float = -22.0
+@export var tunnel_height: float = 8.0
+@export var tunnel_color: Color = Color(0.16, 0.18, 0.20, 1.0)
+@export var tunnel_carve_surface_holes: bool = true
+
+# -----------------------------
 # Traversal constraints
 # -----------------------------
 @export_range(1, 4, 1) var max_neighbor_steps: int = 1
@@ -104,6 +116,11 @@ var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
 var _ramp_up_dir: PackedInt32Array
 var _ramps_need_regen: bool = false
+var _tunnel_mask: PackedByteArray
+var _tunnel_hole_mask: PackedByteArray
+var _tunnel_entrance_dir: PackedInt32Array
+var _tunnel_mesh_instance: MeshInstance3D
+var _tunnel_collision_shape: CollisionShape3D
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -679,6 +696,8 @@ func _ready() -> void:
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mesh_instance.material_override = mat
 
+	_ensure_tunnel_nodes()
+
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
 		rng.randomize()
@@ -715,6 +734,10 @@ func generate() -> void:
 	_limit_neighbor_cliffs()
 	_fill_pits()
 
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(noise_seed) ^ 0x9e3779b9
+	_generate_tunnels_layout(n, rng)
+
 	var guard: int = 0
 	while true:
 		_ramps_need_regen = false
@@ -727,6 +750,7 @@ func generate() -> void:
 			break
 
 	_build_mesh_and_collision()
+	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
@@ -794,6 +818,198 @@ func _quantize(h: float, step: float) -> float:
 func _cell_h(x: int, z: int) -> float:
 	var n: int = max(2, cells_per_side)
 	return _heights[z * n + x]
+
+func _idx2(x: int, z: int, n: int) -> int:
+	return z * n + x
+
+func _in_bounds(x: int, z: int, n: int) -> bool:
+	return x >= 0 and x < n and z >= 0 and z < n
+
+func _shuffle_dirs(rng: RandomNumberGenerator, dirs: Array[int]) -> void:
+	for i in range(dirs.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		var tmp: int = dirs[i]
+		dirs[i] = dirs[j]
+		dirs[j] = tmp
+
+func _pick_edgeish_cell(n: int, rng: RandomNumberGenerator) -> Vector2i:
+	var side: int = rng.randi_range(0, 3)
+	var p := Vector2i(1, 1)
+	match side:
+		0:
+			p = Vector2i(rng.randi_range(1, n - 2), 0)
+		1:
+			p = Vector2i(rng.randi_range(1, n - 2), n - 1)
+		2:
+			p = Vector2i(0, rng.randi_range(1, n - 2))
+		3:
+			p = Vector2i(n - 1, rng.randi_range(1, n - 2))
+
+	if p.x == 0:
+		p.x = 1
+	if p.x == n - 1:
+		p.x = n - 2
+	if p.y == 0:
+		p.y = 1
+	if p.y == n - 1:
+		p.y = n - 2
+	return p
+
+func _bfs_path(start: Vector2i, goal: Vector2i, n: int, rng: RandomNumberGenerator) -> Array[Vector2i]:
+	var start_i: int = _idx2(start.x, start.y, n)
+	var goal_i: int = _idx2(goal.x, goal.y, n)
+
+	var came := PackedInt32Array()
+	came.resize(n * n)
+	for i in range(n * n):
+		came[i] = -1
+
+	var q: Array[int] = []
+	q.append(start_i)
+	came[start_i] = start_i
+
+	var dirs: Array[int] = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+
+	while q.size() > 0:
+		var cur: int = int(q.pop_front())
+		if cur == goal_i:
+			break
+
+		var cx: int = cur % n
+		var cz: int = int(float(cur) / float(n))
+
+		_shuffle_dirs(rng, dirs)
+		for d in dirs:
+			var nb: Vector2i = _neighbor_of(cx, cz, d)
+			if not _in_bounds(nb.x, nb.y, n):
+				continue
+			var ni: int = _idx2(nb.x, nb.y, n)
+			if came[ni] != -1:
+				continue
+			came[ni] = cur
+			q.append(ni)
+
+	if came[goal_i] == -1:
+		return []
+
+	var path: Array[Vector2i] = []
+	var cur2: int = goal_i
+	while cur2 != start_i:
+		path.append(Vector2i(cur2 % n, int(float(cur2) / float(n))))
+		cur2 = came[cur2]
+	path.append(start)
+	path.reverse()
+	return path
+
+func _mark_tunnel_cell(x: int, z: int, n: int) -> void:
+	var i: int = _idx2(x, z, n)
+	_tunnel_mask[i] = 1
+
+func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
+	_tunnel_mask = PackedByteArray()
+	_tunnel_mask.resize(n * n)
+	_tunnel_hole_mask = PackedByteArray()
+	_tunnel_hole_mask.resize(n * n)
+	_tunnel_entrance_dir = PackedInt32Array()
+	_tunnel_entrance_dir.resize(n * n)
+
+	for i in range(n * n):
+		_tunnel_mask[i] = 0
+		_tunnel_hole_mask[i] = 0
+		_tunnel_entrance_dir[i] = RAMP_NONE
+
+	if not enable_tunnels or tunnel_count <= 0:
+		return
+
+	var tries: int = 0
+	var built: int = 0
+
+	while built < tunnel_count and tries < tunnel_count * 12:
+		tries += 1
+
+		var a: Vector2i = _pick_edgeish_cell(n, rng)
+		var b: Vector2i = _pick_edgeish_cell(n, rng)
+
+		var manhattan: int = abs(a.x - b.x) + abs(a.y - b.y)
+		if manhattan < maxi(6, n - 2):
+			continue
+
+		var path: Array[Vector2i] = _bfs_path(a, b, n, rng)
+		if path.size() < tunnel_min_len_cells:
+			continue
+
+		for p in path:
+			_mark_tunnel_cell(p.x, p.y, n)
+
+		var r: int = maxi(0, tunnel_radius_cells)
+		if r > 0 and path.size() > 6:
+			for pi in range(2, path.size() - 2):
+				var p2: Vector2i = path[pi]
+				for dz in range(-r, r + 1):
+					for dx in range(-r, r + 1):
+						if abs(dx) + abs(dz) > r:
+							continue
+						var xx: int = p2.x + dx
+						var zz: int = p2.y + dz
+						if _in_bounds(xx, zz, n):
+							_mark_tunnel_cell(xx, zz, n)
+
+		var a_idx: int = _idx2(a.x, a.y, n)
+		var b_idx: int = _idx2(b.x, b.y, n)
+
+		_tunnel_hole_mask[a_idx] = 1
+		_tunnel_hole_mask[b_idx] = 1
+
+		if path.size() >= 2:
+			var p1: Vector2i = path[1]
+			_tunnel_entrance_dir[a_idx] = _dir_from_to(a, p1)
+
+			var p_lastm1: Vector2i = path[path.size() - 2]
+			_tunnel_entrance_dir[b_idx] = _dir_from_to(b, p_lastm1)
+
+		built += 1
+
+func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
+	var dx: int = b.x - a.x
+	var dz: int = b.y - a.y
+	if dx == 1 and dz == 0:
+		return RAMP_EAST
+	if dx == -1 and dz == 0:
+		return RAMP_WEST
+	if dx == 0 and dz == 1:
+		return RAMP_SOUTH
+	if dx == 0 and dz == -1:
+		return RAMP_NORTH
+	return RAMP_EAST
+
+func _ensure_tunnel_nodes() -> void:
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body == null:
+		return
+
+	var tunnel_body: StaticBody3D = terrain_body.get_node_or_null("TunnelBody") as StaticBody3D
+	if tunnel_body == null:
+		tunnel_body = StaticBody3D.new()
+		tunnel_body.name = "TunnelBody"
+		terrain_body.add_child(tunnel_body)
+
+	_tunnel_mesh_instance = tunnel_body.get_node_or_null("TunnelMesh") as MeshInstance3D
+	if _tunnel_mesh_instance == null:
+		_tunnel_mesh_instance = MeshInstance3D.new()
+		_tunnel_mesh_instance.name = "TunnelMesh"
+		tunnel_body.add_child(_tunnel_mesh_instance)
+
+	_tunnel_collision_shape = tunnel_body.get_node_or_null("TunnelCollision") as CollisionShape3D
+	if _tunnel_collision_shape == null:
+		_tunnel_collision_shape = CollisionShape3D.new()
+		_tunnel_collision_shape.name = "TunnelCollision"
+		tunnel_body.add_child(_tunnel_collision_shape)
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tunnel_mesh_instance.material_override = mat
 
 # -----------------------------
 # Cliff limiter (enforces max neighbor delta)
@@ -1271,6 +1487,11 @@ func _build_mesh_and_collision() -> void:
 			var z0: float = _oz + float(z) * _cell_size
 			var z1: float = z0 + _cell_size
 
+			if enable_tunnels and tunnel_carve_surface_holes:
+				var hole_idx: int = z * n + x
+				if _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[hole_idx] != 0:
+					continue
+
 			var c0 := _cell_corners(x, z)
 
 			var idx: int = z * n + x
@@ -1346,6 +1567,165 @@ func _build_mesh_and_collision() -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+
+func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
+	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
+		return
+	var a := Vector3(x_edge, y_top0, z0)
+	var b := Vector3(x_edge, y_top1, z1)
+	var c := Vector3(x_edge, y_bot, z1)
+	var d := Vector3(x_edge, y_bot, z0)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, y_top0 * uv_scale), Vector2(1, y_top1 * uv_scale),
+		Vector2(1, y_bot * uv_scale), Vector2(0, y_bot * uv_scale),
+		color
+	)
+
+func _add_wall_z_colored(st: SurfaceTool, z_edge: float, x0: float, x1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
+	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
+		return
+	var a := Vector3(x0, y_top0, z_edge)
+	var b := Vector3(x1, y_top1, z_edge)
+	var c := Vector3(x1, y_bot, z_edge)
+	var d := Vector3(x0, y_bot, z_edge)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, y_top0 * uv_scale), Vector2(1, y_top1 * uv_scale),
+		Vector2(1, y_bot * uv_scale), Vector2(0, y_bot * uv_scale),
+		color
+	)
+
+func _build_tunnel_mesh(n: int) -> void:
+	_ensure_tunnel_nodes()
+	if _tunnel_mesh_instance == null or _tunnel_collision_shape == null:
+		return
+
+	if not enable_tunnels or _tunnel_mask.size() != n * n:
+		_tunnel_mesh_instance.mesh = null
+		_tunnel_collision_shape.shape = null
+		return
+
+	var floor_y: float = tunnel_floor_y
+	var ceil_y: float = tunnel_floor_y + maxf(1.0, tunnel_height)
+	var uv_scale: float = 0.08
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = _idx2(x, z, n)
+			if _tunnel_mask[idx] == 0:
+				continue
+
+			var x0: float = _ox + float(x) * _cell_size
+			var x1: float = x0 + _cell_size
+			var z0: float = _oz + float(z) * _cell_size
+			var z1: float = z0 + _cell_size
+
+			var is_entrance: bool = (_tunnel_entrance_dir[idx] != RAMP_NONE)
+
+			_add_quad(
+				st,
+				Vector3(x0, floor_y, z0),
+				Vector3(x1, floor_y, z0),
+				Vector3(x1, floor_y, z1),
+				Vector3(x0, floor_y, z1),
+				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
+				tunnel_color
+			)
+
+			if not is_entrance:
+				_add_quad(
+					st,
+					Vector3(x0, ceil_y, z1),
+					Vector3(x1, ceil_y, z1),
+					Vector3(x1, ceil_y, z0),
+					Vector3(x0, ceil_y, z0),
+					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
+					tunnel_color
+				)
+
+			var top_corners: Vector4 = _cell_corners(x, z)
+			var top_e: Vector2 = _edge_pair(top_corners, 0)
+			var top_w: Vector2 = _edge_pair(top_corners, 1)
+			var top_n: Vector2 = _edge_pair(top_corners, 2)
+			var top_s: Vector2 = _edge_pair(top_corners, 3)
+
+			var wall_top_for_corridor0: float = ceil_y
+			var wall_top_for_corridor1: float = ceil_y
+
+			if x + 1 >= n or _tunnel_mask[_idx2(x + 1, z, n)] == 0:
+				if is_entrance:
+					_add_wall_x_colored(st, x1, z0, z1, top_e.x, top_e.y, floor_y, uv_scale, tunnel_color)
+				else:
+					_add_wall_x_colored(st, x1, z0, z1, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
+
+			if x - 1 < 0 or _tunnel_mask[_idx2(x - 1, z, n)] == 0:
+				if is_entrance:
+					_add_wall_x_colored(st, x0, z1, z0, top_w.y, top_w.x, floor_y, uv_scale, tunnel_color)
+				else:
+					_add_wall_x_colored(st, x0, z1, z0, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
+
+			if z + 1 >= n or _tunnel_mask[_idx2(x, z + 1, n)] == 0:
+				if is_entrance:
+					_add_wall_z_colored(st, z1, x0, x1, top_s.x, top_s.y, floor_y, uv_scale, tunnel_color)
+				else:
+					_add_wall_z_colored(st, z1, x0, x1, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
+
+			if z - 1 < 0 or _tunnel_mask[_idx2(x, z - 1, n)] == 0:
+				if is_entrance:
+					_add_wall_z_colored(st, z0, x1, x0, top_n.y, top_n.x, floor_y, uv_scale, tunnel_color)
+				else:
+					_add_wall_z_colored(st, z0, x1, x0, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
+
+			if is_entrance:
+				var dir: int = _tunnel_entrance_dir[idx]
+				match dir:
+					RAMP_EAST:
+						var tw: Vector2 = _edge_pair(top_corners, 1)
+						_add_quad(st,
+							Vector3(x0, tw.x, z0),
+							Vector3(x0, tw.y, z1),
+							Vector3(x1, floor_y, z1),
+							Vector3(x1, floor_y, z0),
+							Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0),
+							tunnel_color
+						)
+					RAMP_WEST:
+						var te: Vector2 = _edge_pair(top_corners, 0)
+						_add_quad(st,
+							Vector3(x1, te.x, z0),
+							Vector3(x1, te.y, z1),
+							Vector3(x0, floor_y, z1),
+							Vector3(x0, floor_y, z0),
+							Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0),
+							tunnel_color
+						)
+					RAMP_SOUTH:
+						var tn: Vector2 = _edge_pair(top_corners, 2)
+						_add_quad(st,
+							Vector3(x0, tn.x, z0),
+							Vector3(x1, tn.y, z0),
+							Vector3(x1, floor_y, z1),
+							Vector3(x0, floor_y, z1),
+							Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+							tunnel_color
+						)
+					RAMP_NORTH:
+						var ts: Vector2 = _edge_pair(top_corners, 3)
+						_add_quad(st,
+							Vector3(x0, ts.x, z1),
+							Vector3(x1, ts.y, z1),
+							Vector3(x1, floor_y, z0),
+							Vector3(x0, floor_y, z0),
+							Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+							tunnel_color
+						)
+
+	st.generate_normals()
+	var mesh: ArrayMesh = st.commit()
+	_tunnel_mesh_instance.mesh = mesh
+	_tunnel_collision_shape.shape = mesh.create_trimesh_shape()
 
 func _sync_sun() -> void:
 	var sun := get_node_or_null("SUN") as DirectionalLight3D
