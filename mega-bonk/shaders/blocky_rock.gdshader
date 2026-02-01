@@ -147,7 +147,7 @@ void fragment() {
 			vec3 nr = (texture(normal_ramp, UV).rgb * 2.0 - 1.0) * is_ramp;
 			vec3 nm = normalize(nt + nw + nr);
 
-			NORMAL = normalize(mix(NORMAL, normalize(NORMAL + nm.xyzz * 0.35), normal_strength));
+			NORMAL = normalize(mix(NORMAL, normalize(NORMAL + nm * 0.35), normal_strength));
 		}
 	}
 }
