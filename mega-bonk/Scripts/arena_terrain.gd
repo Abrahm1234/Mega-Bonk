@@ -81,6 +81,7 @@ class_name BlockyTerrain
 @export var normal_top_tex: Texture2D
 @export var normal_wall_tex: Texture2D
 @export var normal_ramp_tex: Texture2D
+@export_range(0.0, 1.0, 0.01) var normal_strength: float = 0.0
 @export_range(0.0, 2.0, 0.01) var disp_strength_top: float = 0.4
 @export_range(0.0, 2.0, 0.01) var disp_strength_wall: float = 0.2
 @export_range(0.0, 2.0, 0.01) var disp_strength_ramp: float = 0.3
@@ -190,6 +191,19 @@ func _cell_edge_dir(x: int, z: int, dir: int) -> Vector2:
 
 func _edges_match(a: Vector2, b: Vector2, eps: float = 0.001) -> bool:
 	return absf(a.x - b.x) <= eps and absf(a.y - b.y) <= eps
+
+func _ramp_uv(s: float, t: float, ramp_dir: int) -> Vector2:
+	match ramp_dir:
+		RAMP_EAST:
+			return Vector2(t, s)
+		RAMP_WEST:
+			return Vector2(t, 1.0 - s)
+		RAMP_SOUTH:
+			return Vector2(s, t)
+		RAMP_NORTH:
+			return Vector2(s, 1.0 - t)
+		_:
+			return Vector2(s, t)
 
 func _is_flat_edge_at(edge: Vector2, h: float, eps: float = 0.001) -> bool:
 	return absf(edge.x - h) <= eps and absf(edge.y - h) <= eps
@@ -652,10 +666,10 @@ func _ready() -> void:
 		sm.set_shader_parameter("normal_top", normal_top_tex)
 		sm.set_shader_parameter("normal_wall", normal_wall_tex)
 		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
-		sm.set_shader_parameter("tex_strength", tex_strength)
+		sm.set_shader_parameter("normal_strength", normal_strength)
 		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
 		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
-		sm.set_shader_parameter("debug_vertex_colors", float(debug_vertex_colors))
+		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
@@ -691,7 +705,6 @@ func generate() -> void:
 		var sm := mesh_instance.material_override as ShaderMaterial
 		if sm != null:
 			sm.set_shader_parameter("cell_size", _cell_size)
-			sm.set_shader_parameter("tex_scale", tiles_per_cell / maxf(_cell_size, 0.001))
 
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
@@ -1236,8 +1249,8 @@ func _build_mesh_and_collision() -> void:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_uv2(Vector2.ZERO)
 
-	var uv_scale_top: float = 0.08
-	var uv_scale_wall: float = 0.08
+	var uv_scale_top: float = tiles_per_cell
+	var uv_scale_wall: float = tiles_per_cell
 	var ramps_openings: bool = enable_ramps
 	var want_levels: int = maxi(1, ramp_step_count)
 	var levels: PackedInt32Array = PackedInt32Array()
@@ -1410,33 +1423,39 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	var d := Vector3(x_edge, low0, z0)
 	var wall_col := terrain_color
 	wall_col.a = SURF_WALL
+	var ua := Vector2(0.0, 1.0)
+	var ub := Vector2(1.0, 1.0)
+	var uc := Vector2(1.0, 0.0)
+	var ud := Vector2(0.0, 0.0)
+	ua.x *= uv_scale
+	ub.x *= uv_scale
+	uc.x *= uv_scale
+	ud.x *= uv_scale
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				subdiv, subdiv,
 				wall_col
 			)
 		else:
 			_add_quad_uv2(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
@@ -1452,33 +1471,39 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	var d := Vector3(x0, low0, z_edge)
 	var wall_col := terrain_color
 	wall_col.a = SURF_WALL
+	var ua := Vector2(0.0, 1.0)
+	var ub := Vector2(1.0, 1.0)
+	var uc := Vector2(1.0, 0.0)
+	var ud := Vector2(0.0, 0.0)
+	ua.x *= uv_scale
+	ub.x *= uv_scale
+	uc.x *= uv_scale
+	ud.x *= uv_scale
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				subdiv, subdiv,
 				wall_col
 			)
 		else:
 			_add_quad_uv2(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 # -----------------------------
 # Quad writer
@@ -1537,6 +1562,9 @@ func _add_cell_top_grid(
 	var h10 := corners.y
 	var h11 := corners.z
 	var h01 := corners.w
+	var idx: int = cell_z * max(2, cells_per_side) + cell_x
+	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
+	var is_ramp: bool = ramp_dir != RAMP_NONE
 
 	for iz in range(sdiv):
 		var t0 := float(iz) / float(sdiv)
@@ -1562,10 +1590,14 @@ func _add_cell_top_grid(
 			var c := Vector3(px1, y11, pz1)
 			var d := Vector3(px0, y01, pz1)
 
-			var ua := Vector2(float(cell_x) + s0, float(cell_z) + t0) * uv_scale
-			var ub := Vector2(float(cell_x) + s1, float(cell_z) + t0) * uv_scale
-			var uc := Vector2(float(cell_x) + s1, float(cell_z) + t1) * uv_scale
-			var ud := Vector2(float(cell_x) + s0, float(cell_z) + t1) * uv_scale
+			var ua := _ramp_uv(s0, t0, ramp_dir) if is_ramp else Vector2(s0, t0)
+			var ub := _ramp_uv(s1, t0, ramp_dir) if is_ramp else Vector2(s1, t0)
+			var uc := _ramp_uv(s1, t1, ramp_dir) if is_ramp else Vector2(s1, t1)
+			var ud := _ramp_uv(s0, t1, ramp_dir) if is_ramp else Vector2(s0, t1)
+			ua *= uv_scale
+			ub *= uv_scale
+			uc *= uv_scale
+			ud *= uv_scale
 
 			_add_quad_uv2(
 				st,
