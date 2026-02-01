@@ -926,12 +926,19 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 	var tries: int = 0
 	var built: int = 0
+	var tunnel_cells: Array[int] = []
 
 	while built < tunnel_count and tries < tunnel_count * 12:
 		tries += 1
 
-		var a: Vector2i = _pick_edgeish_cell(n, rng)
-		var b: Vector2i = _pick_edgeish_cell(n, rng)
+		var a: Vector2i
+		var b: Vector2i
+		if built == 0 or tunnel_cells.is_empty():
+			a = _pick_edgeish_cell(n, rng)
+		else:
+			var pick_idx: int = tunnel_cells[rng.randi_range(0, tunnel_cells.size() - 1)]
+			a = Vector2i(pick_idx % n, int(float(pick_idx) / float(n)))
+		b = _pick_edgeish_cell(n, rng)
 
 		var manhattan: int = abs(a.x - b.x) + abs(a.y - b.y)
 		if manhattan < maxi(6, n - 2):
@@ -942,7 +949,10 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			continue
 
 		for p in path:
-			_mark_tunnel_cell(p.x, p.y, n)
+			var idx_p: int = _idx2(p.x, p.y, n)
+			if _tunnel_mask[idx_p] == 0:
+				_mark_tunnel_cell(p.x, p.y, n)
+				tunnel_cells.append(idx_p)
 
 		var r: int = maxi(0, tunnel_radius_cells)
 		if r > 0 and path.size() > 6:
@@ -955,18 +965,22 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 						var xx: int = p2.x + dx
 						var zz: int = p2.y + dz
 						if _in_bounds(xx, zz, n):
-							_mark_tunnel_cell(xx, zz, n)
+							var idx_wide: int = _idx2(xx, zz, n)
+							if _tunnel_mask[idx_wide] == 0:
+								_mark_tunnel_cell(xx, zz, n)
+								tunnel_cells.append(idx_wide)
 
 		var a_idx: int = _idx2(a.x, a.y, n)
 		var b_idx: int = _idx2(b.x, b.y, n)
 
-		_tunnel_hole_mask[a_idx] = 1
+		if built == 0:
+			_tunnel_hole_mask[a_idx] = 1
 		_tunnel_hole_mask[b_idx] = 1
 
 		if path.size() >= 2:
-			var p1: Vector2i = path[1]
-			_tunnel_entrance_dir[a_idx] = _dir_from_to(a, p1)
-
+			if built == 0:
+				var p1: Vector2i = path[1]
+				_tunnel_entrance_dir[a_idx] = _dir_from_to(a, p1)
 			var p_lastm1: Vector2i = path[path.size() - 2]
 			_tunnel_entrance_dir[b_idx] = _dir_from_to(b, p_lastm1)
 
@@ -1696,12 +1710,26 @@ func _build_tunnel_mesh(n: int) -> void:
 
 			if is_entrance and tunnel_carve_surface_holes:
 				var top_corners: Vector4 = _cell_corners(x, z)
-				var top_y: float = maxf(maxf(top_corners.x, top_corners.y), maxf(top_corners.z, top_corners.w))
-				if top_y > ceil_y + 0.01:
-					_add_wall_x_colored(st, x0, z0, z1, top_y, top_y, ceil_y, uv_scale, tunnel_color)
-					_add_wall_x_colored(st, x1, z1, z0, top_y, top_y, ceil_y, uv_scale, tunnel_color)
-					_add_wall_z_colored(st, z0, x1, x0, top_y, top_y, ceil_y, uv_scale, tunnel_color)
-					_add_wall_z_colored(st, z1, x0, x1, top_y, top_y, ceil_y, uv_scale, tunnel_color)
+				if not has_w:
+					var top_w: Vector2 = _edge_pair(top_corners, 1)
+					var top_wy: float = maxf(top_w.x, top_w.y)
+					if top_wy > ceil_y + 0.01:
+						_add_wall_x_colored(st, x0, z0, z1, top_wy, top_wy, ceil_y, uv_scale, tunnel_color)
+				if not has_e:
+					var top_e: Vector2 = _edge_pair(top_corners, 0)
+					var top_ey: float = maxf(top_e.x, top_e.y)
+					if top_ey > ceil_y + 0.01:
+						_add_wall_x_colored(st, x1, z1, z0, top_ey, top_ey, ceil_y, uv_scale, tunnel_color)
+				if not has_n:
+					var top_n: Vector2 = _edge_pair(top_corners, 2)
+					var top_ny: float = maxf(top_n.x, top_n.y)
+					if top_ny > ceil_y + 0.01:
+						_add_wall_z_colored(st, z0, x1, x0, top_ny, top_ny, ceil_y, uv_scale, tunnel_color)
+				if not has_s:
+					var top_s: Vector2 = _edge_pair(top_corners, 3)
+					var top_sy: float = maxf(top_s.x, top_s.y)
+					if top_sy > ceil_y + 0.01:
+						_add_wall_z_colored(st, z1, x0, x1, top_sy, top_sy, ceil_y, uv_scale, tunnel_color)
 
 	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
