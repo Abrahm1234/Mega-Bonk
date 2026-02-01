@@ -753,7 +753,6 @@ func generate() -> void:
 			break
 
 	_build_mesh_and_collision()
-	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
@@ -1488,6 +1487,9 @@ func _build_mesh_and_collision() -> void:
 	var uv_scale_wall: float = tiles_per_cell
 	var ramps_openings: bool = enable_ramps
 	var want_levels: int = maxi(1, ramp_step_count)
+	var tunnel_ceil_y: float = tunnel_floor_y + maxf(1.0, tunnel_height)
+	var tunnel_wall_col := terrain_color
+	tunnel_wall_col.a = SURF_WALL
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
@@ -1565,7 +1567,11 @@ func _build_mesh_and_collision() -> void:
 				if enable_tunnels and tunnel_carve_surface_holes:
 					var a_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_a] != 0
 					var b_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_b] != 0
-					if a_is_hole or b_is_hole:
+					if a_is_hole and b_is_hole:
+						continue
+					if a_is_hole != b_is_hole:
+						var edge: Vector2 = _edge_pair(cA, 0) if not a_is_hole else _edge_pair(_cell_corners(x + 1, z), 1)
+						_add_wall_x_colored(st, x1, z0, z1, edge.x, edge.y, tunnel_ceil_y, uv_scale_wall, tunnel_wall_col)
 						continue
 				if (not ramps_openings) or (not _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
 					var cB := _cell_corners(x + 1, z)
@@ -1588,7 +1594,11 @@ func _build_mesh_and_collision() -> void:
 				if enable_tunnels and tunnel_carve_surface_holes:
 					var c_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_c] != 0
 					var d_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_d] != 0
-					if c_is_hole or d_is_hole:
+					if c_is_hole and d_is_hole:
+						continue
+					if c_is_hole != d_is_hole:
+						var edge_z: Vector2 = _edge_pair(cA, 3) if not c_is_hole else _edge_pair(_cell_corners(x, z + 1), 2)
+						_add_wall_z_colored(st, z1, x0, x1, edge_z.x, edge_z.y, tunnel_ceil_y, uv_scale_wall, tunnel_wall_col)
 						continue
 				if (not ramps_openings) or (not _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels)):
 					var cC := _cell_corners(x, z + 1)
@@ -1616,6 +1626,7 @@ func _build_mesh_and_collision() -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+	_build_tunnel_mesh(n)
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
