@@ -1624,6 +1624,11 @@ func _build_tunnel_mesh(n: int) -> void:
 
 			var is_entrance: bool = (_tunnel_entrance_dir[idx] != RAMP_NONE)
 
+			var has_w: bool = (x > 0) and (_tunnel_mask[_idx2(x - 1, z, n)] != 0)
+			var has_e: bool = (x < n - 1) and (_tunnel_mask[_idx2(x + 1, z, n)] != 0)
+			var has_n: bool = (z > 0) and (_tunnel_mask[_idx2(x, z - 1, n)] != 0)
+			var has_s: bool = (z < n - 1) and (_tunnel_mask[_idx2(x, z + 1, n)] != 0)
+
 			_add_quad(
 				st,
 				Vector3(x0, floor_y, z0),
@@ -1645,82 +1650,23 @@ func _build_tunnel_mesh(n: int) -> void:
 					tunnel_color
 				)
 
-			var top_corners: Vector4 = _cell_corners(x, z)
-			var top_e: Vector2 = _edge_pair(top_corners, 0)
-			var top_w: Vector2 = _edge_pair(top_corners, 1)
-			var top_n: Vector2 = _edge_pair(top_corners, 2)
-			var top_s: Vector2 = _edge_pair(top_corners, 3)
+			if not has_w:
+				_add_wall_x_colored(st, x0, z0, z1, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_e:
+				_add_wall_x_colored(st, x1, z1, z0, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_n:
+				_add_wall_z_colored(st, z0, x1, x0, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_s:
+				_add_wall_z_colored(st, z1, x0, x1, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
 
-			var wall_top_for_corridor0: float = ceil_y
-			var wall_top_for_corridor1: float = ceil_y
-
-			if x + 1 >= n or _tunnel_mask[_idx2(x + 1, z, n)] == 0:
-				if is_entrance:
-					_add_wall_x_colored(st, x1, z0, z1, top_e.x, top_e.y, floor_y, uv_scale, tunnel_color)
-				else:
-					_add_wall_x_colored(st, x1, z0, z1, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
-
-			if x - 1 < 0 or _tunnel_mask[_idx2(x - 1, z, n)] == 0:
-				if is_entrance:
-					_add_wall_x_colored(st, x0, z1, z0, top_w.y, top_w.x, floor_y, uv_scale, tunnel_color)
-				else:
-					_add_wall_x_colored(st, x0, z1, z0, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
-
-			if z + 1 >= n or _tunnel_mask[_idx2(x, z + 1, n)] == 0:
-				if is_entrance:
-					_add_wall_z_colored(st, z1, x0, x1, top_s.x, top_s.y, floor_y, uv_scale, tunnel_color)
-				else:
-					_add_wall_z_colored(st, z1, x0, x1, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
-
-			if z - 1 < 0 or _tunnel_mask[_idx2(x, z - 1, n)] == 0:
-				if is_entrance:
-					_add_wall_z_colored(st, z0, x1, x0, top_n.y, top_n.x, floor_y, uv_scale, tunnel_color)
-				else:
-					_add_wall_z_colored(st, z0, x1, x0, wall_top_for_corridor0, wall_top_for_corridor1, floor_y, uv_scale, tunnel_color)
-
-			if is_entrance:
-				var dir: int = _tunnel_entrance_dir[idx]
-				match dir:
-					RAMP_EAST:
-						var tw: Vector2 = _edge_pair(top_corners, 1)
-						_add_quad(st,
-							Vector3(x0, tw.x, z0),
-							Vector3(x0, tw.y, z1),
-							Vector3(x1, floor_y, z1),
-							Vector3(x1, floor_y, z0),
-							Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0),
-							tunnel_color
-						)
-					RAMP_WEST:
-						var te: Vector2 = _edge_pair(top_corners, 0)
-						_add_quad(st,
-							Vector3(x1, te.x, z0),
-							Vector3(x1, te.y, z1),
-							Vector3(x0, floor_y, z1),
-							Vector3(x0, floor_y, z0),
-							Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0),
-							tunnel_color
-						)
-					RAMP_SOUTH:
-						var tn: Vector2 = _edge_pair(top_corners, 2)
-						_add_quad(st,
-							Vector3(x0, tn.x, z0),
-							Vector3(x1, tn.y, z0),
-							Vector3(x1, floor_y, z1),
-							Vector3(x0, floor_y, z1),
-							Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
-							tunnel_color
-						)
-					RAMP_NORTH:
-						var ts: Vector2 = _edge_pair(top_corners, 3)
-						_add_quad(st,
-							Vector3(x0, ts.x, z1),
-							Vector3(x1, ts.y, z1),
-							Vector3(x1, floor_y, z0),
-							Vector3(x0, floor_y, z0),
-							Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
-							tunnel_color
-						)
+			if is_entrance and tunnel_carve_surface_holes:
+				var top_corners: Vector4 = _cell_corners(x, z)
+				var top_y: float = maxf(maxf(top_corners.x, top_corners.y), maxf(top_corners.z, top_corners.w))
+				if top_y > ceil_y + 0.01:
+					_add_wall_x_colored(st, x0, z0, z1, top_y, top_y, ceil_y, uv_scale, tunnel_color)
+					_add_wall_x_colored(st, x1, z1, z0, top_y, top_y, ceil_y, uv_scale, tunnel_color)
+					_add_wall_z_colored(st, z0, x1, x0, top_y, top_y, ceil_y, uv_scale, tunnel_color)
+					_add_wall_z_colored(st, z1, x0, x1, top_y, top_y, ceil_y, uv_scale, tunnel_color)
 
 	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
