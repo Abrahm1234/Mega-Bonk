@@ -120,33 +120,32 @@ void vertex() {
 void fragment() {
 	if (debug_show_vertex_color) {
 		ALBEDO = COLOR.rgb;
-		return;
-	}
+	} else {
+		float is_top  = decode_is(v_tag, TAG_TOP);
+		float is_wall = decode_is(v_tag, TAG_WALL);
+		float is_ramp = decode_is(v_tag, TAG_RAMP);
+		float is_box  = decode_is(v_tag, TAG_BOX);
 
-	float is_top  = decode_is(v_tag, TAG_TOP);
-	float is_wall = decode_is(v_tag, TAG_WALL);
-	float is_ramp = decode_is(v_tag, TAG_RAMP);
-	float is_box  = decode_is(v_tag, TAG_BOX);
+		vec3 a_top  = texture(albedo_top,  UV).rgb;
+		vec3 a_wall = texture(albedo_wall, UV).rgb;
+		vec3 a_ramp = texture(albedo_ramp, UV).rgb;
 
-	vec3 a_top  = texture(albedo_top,  UV).rgb;
-	vec3 a_wall = texture(albedo_wall, UV).rgb;
-	vec3 a_ramp = texture(albedo_ramp, UV).rgb;
+		vec3 albedo = a_top * is_top + a_wall * is_wall + a_ramp * is_ramp;
+		ALBEDO = mix(albedo, vec3(0.08), is_box);
 
-	vec3 albedo = a_top * is_top + a_wall * is_wall + a_ramp * is_ramp;
-	ALBEDO = mix(albedo, vec3(0.08), is_box);
+		vec3 P = (VIEW_MATRIX * vec4(v_world_pos, 1.0)).xyz;
+		vec3 dpx = dFdx(P);
+		vec3 dpy = dFdy(P);
+		vec3 n_view = normalize(cross(dpx, dpy));
+		NORMAL = n_view;
 
-	vec3 P = (VIEW_MATRIX * vec4(v_world_pos, 1.0)).xyz;
-	vec3 dpx = dFdx(P);
-	vec3 dpy = dFdy(P);
-	vec3 n_view = normalize(cross(dpx, dpy));
-	NORMAL = n_view;
+		if (normal_strength > 0.001) {
+			vec3 nt = (texture(normal_top,  UV).rgb * 2.0 - 1.0) * is_top;
+			vec3 nw = (texture(normal_wall, UV).rgb * 2.0 - 1.0) * is_wall;
+			vec3 nr = (texture(normal_ramp, UV).rgb * 2.0 - 1.0) * is_ramp;
+			vec3 nm = normalize(nt + nw + nr);
 
-	if (normal_strength > 0.001) {
-		vec3 nt = (texture(normal_top,  UV).rgb * 2.0 - 1.0) * is_top;
-		vec3 nw = (texture(normal_wall, UV).rgb * 2.0 - 1.0) * is_wall;
-		vec3 nr = (texture(normal_ramp, UV).rgb * 2.0 - 1.0) * is_ramp;
-		vec3 nm = normalize(nt + nw + nr);
-
-		NORMAL = normalize(mix(NORMAL, normalize(NORMAL + nm.xyzz * 0.35), normal_strength));
+			NORMAL = normalize(mix(NORMAL, normalize(NORMAL + nm.xyzz * 0.35), normal_strength));
+		}
 	}
 }
