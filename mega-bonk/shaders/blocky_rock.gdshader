@@ -12,7 +12,7 @@ uniform sampler2D albedo_ramp : repeat_disable;
 uniform sampler2D normal_top  : repeat_disable;
 uniform sampler2D normal_wall : repeat_disable;
 uniform sampler2D normal_ramp : repeat_disable;
-uniform float normal_strength = 0.0;
+uniform float normal_strength = 0.85;
 
 uniform float cell_size = 1.0;
 uniform float disp_strength_top  = 0.40;

@@ -81,7 +81,7 @@ class_name BlockyTerrain
 @export var normal_top_tex: Texture2D
 @export var normal_wall_tex: Texture2D
 @export var normal_ramp_tex: Texture2D
-@export_range(0.0, 1.0, 0.01) var normal_strength: float = 0.0
+@export_range(0.0, 1.0, 0.01) var normal_strength: float = 0.85
 @export_range(0.0, 2.0, 0.01) var disp_strength_top: float = 0.4
 @export_range(0.0, 2.0, 0.01) var disp_strength_wall: float = 0.2
 @export_range(0.0, 2.0, 0.01) var disp_strength_ramp: float = 0.3
@@ -93,6 +93,7 @@ class_name BlockyTerrain
 @export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.18
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 @export var debug_vertex_colors: bool = false
+@export var sun_height: float = 200.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -727,6 +728,7 @@ func generate() -> void:
 
 	_build_mesh_and_collision()
 	print("Ramp slots:", _count_ramps())
+	_sync_sun()
 
 # -----------------------------
 # Height generation (14x14)
@@ -1340,9 +1342,19 @@ func _build_mesh_and_collision() -> void:
 		_add_ceiling(st, box_height, uv_scale_top)
 
 	st.generate_normals()
+	st.generate_tangents()
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+
+func _sync_sun() -> void:
+	var sun := get_node_or_null("SUN") as DirectionalLight3D
+	if sun == null:
+		return
+
+	var center := global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+	sun.global_position = center + Vector3(0.0, sun_height, 0.0)
+	sun.look_at(center, Vector3.UP)
 
 # -----------------------------
 # Container primitives
