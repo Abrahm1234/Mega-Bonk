@@ -1523,6 +1523,11 @@ func _build_mesh_and_collision() -> void:
 			if x + 1 < n:
 				var idx_a: int = z * n + x
 				var idx_b: int = z * n + (x + 1)
+				if enable_tunnels and tunnel_carve_surface_holes:
+					var a_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_a] != 0
+					var b_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_b] != 0
+					if a_is_hole or b_is_hole:
+						continue
 				if (not ramps_openings) or (not _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
 					var cB := _cell_corners(x + 1, z)
 					var a_e := _edge_pair(cA, 0)
@@ -1541,6 +1546,11 @@ func _build_mesh_and_collision() -> void:
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
+				if enable_tunnels and tunnel_carve_surface_holes:
+					var c_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_c] != 0
+					var d_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_d] != 0
+					if c_is_hole or d_is_hole:
+						continue
 				if (not ramps_openings) or (not _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels)):
 					var cC := _cell_corners(x, z + 1)
 					var a_s := _edge_pair(cA, 3)
@@ -1622,7 +1632,7 @@ func _build_tunnel_mesh(n: int) -> void:
 			var z0: float = _oz + float(z) * _cell_size
 			var z1: float = z0 + _cell_size
 
-			var is_entrance: bool = (_tunnel_entrance_dir[idx] != RAMP_NONE)
+			var is_entrance: bool = tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
 
 			var has_w: bool = (x > 0) and (_tunnel_mask[_idx2(x - 1, z, n)] != 0)
 			var has_e: bool = (x < n - 1) and (_tunnel_mask[_idx2(x + 1, z, n)] != 0)
