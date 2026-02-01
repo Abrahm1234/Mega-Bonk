@@ -69,6 +69,9 @@ class_name BlockyTerrain
 @export var tunnel_height: float = 8.0
 @export var tunnel_color: Color = Color(0.16, 0.18, 0.20, 1.0)
 @export var tunnel_carve_surface_holes: bool = true
+@export var tunnel_occluder_enabled: bool = true
+@export var tunnel_occluder_y: float = -14.0
+@export var tunnel_occluder_color: Color = Color(0.08, 0.08, 0.08, 1.0)
 
 # -----------------------------
 # Traversal constraints
@@ -1508,6 +1511,28 @@ func _build_mesh_and_collision() -> void:
 				uv_scale_top,
 				top_col
 			)
+
+	if enable_tunnels and tunnel_occluder_enabled:
+		var occluder_col := tunnel_occluder_color
+		occluder_col.a = SURF_WALL
+		for z in range(n):
+			for x in range(n):
+				var idx_occluder: int = z * n + x
+				if tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_occluder] != 0:
+					continue
+				var x0o: float = _ox + float(x) * _cell_size
+				var x1o: float = x0o + _cell_size
+				var z0o: float = _oz + float(z) * _cell_size
+				var z1o: float = z0o + _cell_size
+				_add_quad(
+					st,
+					Vector3(x0o, tunnel_occluder_y, z0o),
+					Vector3(x1o, tunnel_occluder_y, z0o),
+					Vector3(x1o, tunnel_occluder_y, z1o),
+					Vector3(x0o, tunnel_occluder_y, z1o),
+					Vector2(0, 0) * uv_scale_top, Vector2(1, 0) * uv_scale_top, Vector2(1, 1) * uv_scale_top, Vector2(0, 1) * uv_scale_top,
+					occluder_col
+				)
 
 	var eps := 0.0001
 
