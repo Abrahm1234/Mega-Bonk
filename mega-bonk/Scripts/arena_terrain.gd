@@ -1,5 +1,5 @@
 extends Node3D
-class_name BlockyTerrain
+class_name ArenaBlockyTerrain
 
 # -----------------------------
 # Arena size (14x14)
@@ -707,7 +707,7 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
-		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
+		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
 		return
 
 	if use_rock_shader:
