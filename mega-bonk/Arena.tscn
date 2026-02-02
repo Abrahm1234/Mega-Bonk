@@ -6,7 +6,7 @@
 [ext_resource type="Texture2D" uid="uid://csgye13tt2sjw" path="res://Mesh/Terrain-Meshs/Wall-Meshs/Screenshot 2026-02-01 033929.png" id="3_8qske"]
 [ext_resource type="Texture2D" uid="uid://cf0t5kaupfje5" path="res://Mesh/Terrain-Meshs/Wall-Meshs/ComfyU7_.png" id="3_ml6qp"]
 [ext_resource type="ArrayMesh" uid="uid://ce8aoj315w5t0" path="res://Mesh/Enemy-Meshs/Claw.res" id="5_jycnn"]
-[ext_resource type="ArrayMesh" uid="uid://diu36c3pmnaxd" path="res://Mesh/Terrain-Meshs/Wall-Meshs/wall.res" id="7_8qske"]
+[ext_resource type="ArrayMesh" uid="uid://diu36c3pmnaxd" path="res://Mesh/Terrain-Meshs/Wall-Meshs/Wall1/Wall1.res" id="7_8qske"]
 
 [sub_resource type="StandardMaterial3D" id="2"]
 albedo_color = Color(0.32, 0.68, 0.34, 1)
