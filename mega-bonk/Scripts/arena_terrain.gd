@@ -2107,6 +2107,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	_wall_faces.append(WallFace.new(center, n, width, height, key))
 
 func _rebuild_wall_decor() -> void:
+	print("wall_decor_meshes:", wall_decor_meshes.size(), " wall_faces:", _wall_faces.size())
 	if not enable_wall_decor or wall_decor_meshes.is_empty():
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
@@ -2142,10 +2143,10 @@ func _rebuild_wall_decor() -> void:
 
 		var mm: MultiMesh = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = wall_decor_meshes[v]
 		mm.instance_count = counts[v]
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-		mmi.mesh = wall_decor_meshes[v]
 		mmi.multimesh = mm
 
 		_wall_decor_root.add_child(mmi)
