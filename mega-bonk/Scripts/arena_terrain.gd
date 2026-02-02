@@ -1039,33 +1039,12 @@ func _pick_entrance_dir(n: int, entrance: Vector2i) -> int:
 
 	return best_dir
 
-func _choose_tunnel_base_depth(n: int, entrances: Array[Vector2i]) -> void:
-	var min_wall_bottom: float = INF
-	for e in entrances:
-		for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-			var nb: Vector2i = _neighbor_of(e.x, e.y, dir)
-			if not _in_bounds(nb.x, nb.y, n):
-				continue
-			var ia: int = _idx2(e.x, e.y, n)
-			var ib: int = _idx2(nb.x, nb.y, n)
-			var ha: float = _heights[ia]
-			var hb: float = _heights[ib]
-			min_wall_bottom = minf(min_wall_bottom, minf(ha, hb))
-
-	if min_wall_bottom == INF:
-		return
-
-	var base_ceil: float = min_wall_bottom - tunnel_roof_clearance
-	var base_floor: float = base_ceil - (_tunnel_ceil_resolved - _tunnel_floor_resolved)
-	var min_floor: float = outer_floor_height + 1.0
-	if base_floor < min_floor:
-		base_floor = min_floor
-		base_ceil = base_floor + (_tunnel_ceil_resolved - _tunnel_floor_resolved)
-
-	_tunnel_base_floor_y = base_floor
-	_tunnel_base_ceil_y = base_ceil
-	_tunnel_floor_resolved = base_floor
-	_tunnel_ceil_resolved = base_ceil
+func _choose_tunnel_base_depth(_n: int, _entrances: Array[Vector2i]) -> void:
+	var thickness: float = _tunnel_ceil_resolved - _tunnel_floor_resolved
+	_tunnel_base_floor_y = outer_floor_height + tunnel_floor_clearance_from_box
+	_tunnel_base_ceil_y = _tunnel_base_floor_y + thickness
+	_tunnel_floor_resolved = _tunnel_base_floor_y
+	_tunnel_ceil_resolved = _tunnel_base_ceil_y
 
 func _tunnel_edge_blocked(x: int, z: int, dir: int, n: int, _levels: PackedInt32Array, _ceil_y: float) -> bool:
 	var nb: Vector2i = _neighbor_of(x, z, dir)
@@ -1150,33 +1129,41 @@ func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector
 
 	var cur := entrance
 	var hi: float = start_floor
+	var lo: float = hi - tunnel_ramp_drop
 
-	_tunnel_hole_mask[e_idx] = 1
 	_tunnel_mask[e_idx] = 1
+	if tunnel_carve_surface_holes:
+		_tunnel_hole_mask[e_idx] = 1
 
-	for _i in range(tunnel_ramp_max_steps):
-		var idx: int = _idx2(cur.x, cur.y, n)
-		var lo: float = maxf(_tunnel_base_floor_y, hi - tunnel_ramp_drop)
+	_tunnel_ramp_dir[e_idx] = dir
+	_tunnel_floor_max_y[e_idx] = hi
+	_tunnel_floor_min_y[e_idx] = lo
 
-		_tunnel_ramp_dir[idx] = dir
-		_tunnel_floor_max_y[idx] = hi
-		_tunnel_floor_min_y[idx] = lo
-		_tunnel_mask[idx] = 1
-
+	for _step in range(tunnel_ramp_max_steps):
 		if lo <= _tunnel_base_floor_y + 0.001:
 			break
 
-		var next: Vector2i = _neighbor_of(cur.x, cur.y, dir)
-		if not _in_bounds(next.x, next.y, n):
+		var nb: Vector2i = _neighbor_of(cur.x, cur.y, dir)
+		if not _in_bounds(nb.x, nb.y, n):
 			break
 
-		cur = next
-		hi = lo
+		var mi: int = _idx2(nb.x, nb.y, n)
+		_tunnel_mask[mi] = 1
+		_tunnel_ramp_dir[mi] = dir
+
+		hi -= tunnel_ramp_drop
+		lo -= tunnel_ramp_drop
+		_tunnel_floor_max_y[mi] = hi
+		_tunnel_floor_min_y[mi] = lo
+
+		if tunnel_carve_surface_holes:
+			_tunnel_hole_mask[mi] = 1
+
+		cur = nb
 
 	var end_idx: int = _idx2(cur.x, cur.y, n)
-	_tunnel_ramp_dir[end_idx] = TUNNEL_DIR_NONE
 	_tunnel_set_flat_cell(end_idx, _tunnel_base_floor_y)
-	_tunnel_mask[end_idx] = 1
+	_tunnel_ramp_dir[end_idx] = TUNNEL_DIR_NONE
 	return cur
 
 func _tunnel_corner_floors(idx: int, _n: int) -> PackedFloat32Array:
@@ -1285,12 +1272,14 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	if not enable_tunnels or tunnel_count <= 0:
 		return
 
+	_choose_tunnel_base_depth(n, [])
+
 	var passable := PackedByteArray()
 	passable.resize(n * n)
 	for z in range(n):
 		for x in range(n):
 			var idx: int = _idx2(x, z, n)
-			passable[idx] = 1 if _tunnel_cell_passable(x, z, n, _tunnel_ceil_resolved) else 0
+			passable[idx] = 1 if _tunnel_cell_passable(x, z, n, _tunnel_base_ceil_y) else 0
 
 	var tries: int = 0
 	var built: int = 0
@@ -1324,8 +1313,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 	if entrances.is_empty():
 		return
-
-	_choose_tunnel_base_depth(n, entrances)
 
 	var endpoints: Array[Vector2i] = []
 	for entrance in entrances:
@@ -1364,6 +1351,10 @@ func _ensure_tunnel_nodes() -> void:
 		tunnel_body = StaticBody3D.new()
 		tunnel_body.name = "TunnelBody"
 		terrain_body.add_child(tunnel_body)
+		if terrain_body is CollisionObject3D:
+			var terrain_collision := terrain_body as CollisionObject3D
+			tunnel_body.collision_layer = terrain_collision.collision_layer
+			tunnel_body.collision_mask = terrain_collision.collision_mask
 
 	_tunnel_mesh_instance = tunnel_body.get_node_or_null("TunnelMesh") as MeshInstance3D
 	if _tunnel_mesh_instance == null:
