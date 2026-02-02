@@ -59,6 +59,21 @@ class_name BlockyTerrain
 @export_range(1, 64, 1) var global_fix_passes: int = 24
 
 # -----------------------------
+# Tunnels (separate mesh under the terrain shell)
+# -----------------------------
+@export var enable_tunnels: bool = true
+@export_range(0, 6, 1) var tunnel_count: int = 2
+@export_range(1, 3, 1) var tunnel_radius_cells: int = 1
+@export_range(6, 128, 1) var tunnel_min_len_cells: int = 10
+@export var tunnel_floor_y: float = -22.0
+@export var tunnel_height: float = 8.0
+@export var tunnel_color: Color = Color(0.16, 0.18, 0.20, 1.0)
+@export var tunnel_carve_surface_holes: bool = true
+@export var tunnel_occluder_enabled: bool = true
+@export var tunnel_occluder_y: float = -14.0
+@export var tunnel_occluder_color: Color = Color(0.08, 0.08, 0.08, 1.0)
+
+# -----------------------------
 # Traversal constraints
 # -----------------------------
 @export_range(1, 4, 1) var max_neighbor_steps: int = 1
@@ -81,6 +96,7 @@ class_name BlockyTerrain
 @export var normal_top_tex: Texture2D
 @export var normal_wall_tex: Texture2D
 @export var normal_ramp_tex: Texture2D
+@export_range(0.0, 1.0, 0.01) var normal_strength: float = 0.85
 @export_range(0.0, 2.0, 0.01) var disp_strength_top: float = 0.4
 @export_range(0.0, 2.0, 0.01) var disp_strength_wall: float = 0.2
 @export_range(0.0, 2.0, 0.01) var disp_strength_ramp: float = 0.3
@@ -92,6 +108,7 @@ class_name BlockyTerrain
 @export_range(0.0, 0.5, 0.01) var seam_lock_width: float = 0.18
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 @export var debug_vertex_colors: bool = false
+@export var sun_height: float = 200.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -102,6 +119,11 @@ var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
 var _ramp_up_dir: PackedInt32Array
 var _ramps_need_regen: bool = false
+var _tunnel_mask: PackedByteArray
+var _tunnel_hole_mask: PackedByteArray
+var _tunnel_entrance_dir: PackedInt32Array
+var _tunnel_mesh_instance: MeshInstance3D
+var _tunnel_collision_shape: CollisionShape3D
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -190,6 +212,19 @@ func _cell_edge_dir(x: int, z: int, dir: int) -> Vector2:
 
 func _edges_match(a: Vector2, b: Vector2, eps: float = 0.001) -> bool:
 	return absf(a.x - b.x) <= eps and absf(a.y - b.y) <= eps
+
+func _ramp_uv(s: float, t: float, ramp_dir: int) -> Vector2:
+	match ramp_dir:
+		RAMP_EAST:
+			return Vector2(t, s)
+		RAMP_WEST:
+			return Vector2(t, 1.0 - s)
+		RAMP_SOUTH:
+			return Vector2(s, t)
+		RAMP_NORTH:
+			return Vector2(s, 1.0 - t)
+		_:
+			return Vector2(s, t)
 
 func _is_flat_edge_at(edge: Vector2, h: float, eps: float = 0.001) -> bool:
 	return absf(edge.x - h) <= eps and absf(edge.y - h) <= eps
@@ -652,10 +687,10 @@ func _ready() -> void:
 		sm.set_shader_parameter("normal_top", normal_top_tex)
 		sm.set_shader_parameter("normal_wall", normal_wall_tex)
 		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
-		sm.set_shader_parameter("tex_strength", tex_strength)
+		sm.set_shader_parameter("normal_strength", normal_strength)
 		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
 		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
-		sm.set_shader_parameter("debug_vertex_colors", float(debug_vertex_colors))
+		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
@@ -663,6 +698,8 @@ func _ready() -> void:
 		mat.vertex_color_use_as_albedo = true
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mesh_instance.material_override = mat
+
+	_ensure_tunnel_nodes()
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
@@ -691,7 +728,6 @@ func generate() -> void:
 		var sm := mesh_instance.material_override as ShaderMaterial
 		if sm != null:
 			sm.set_shader_parameter("cell_size", _cell_size)
-			sm.set_shader_parameter("tex_scale", tiles_per_cell / maxf(_cell_size, 0.001))
 
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
@@ -700,6 +736,10 @@ func generate() -> void:
 	_generate_heights()
 	_limit_neighbor_cliffs()
 	_fill_pits()
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(noise_seed) ^ 0x9e3779b9
+	_generate_tunnels_layout(n, rng)
 
 	var guard: int = 0
 	while true:
@@ -712,8 +752,10 @@ func generate() -> void:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
 
-	_build_mesh_and_collision()
+	_build_mesh_and_collision(n)
+	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
+	_sync_sun()
 
 # -----------------------------
 # Height generation (14x14)
@@ -779,6 +821,212 @@ func _quantize(h: float, step: float) -> float:
 func _cell_h(x: int, z: int) -> float:
 	var n: int = max(2, cells_per_side)
 	return _heights[z * n + x]
+
+func _idx2(x: int, z: int, n: int) -> int:
+	return z * n + x
+
+func _in_bounds(x: int, z: int, n: int) -> bool:
+	return x >= 0 and x < n and z >= 0 and z < n
+
+func _shuffle_dirs(rng: RandomNumberGenerator, dirs: Array[int]) -> void:
+	for i in range(dirs.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		var tmp: int = dirs[i]
+		dirs[i] = dirs[j]
+		dirs[j] = tmp
+
+func _pick_edgeish_cell(n: int, rng: RandomNumberGenerator) -> Vector2i:
+	var side: int = rng.randi_range(0, 3)
+	var p := Vector2i(1, 1)
+	match side:
+		0:
+			p = Vector2i(rng.randi_range(1, n - 2), 0)
+		1:
+			p = Vector2i(rng.randi_range(1, n - 2), n - 1)
+		2:
+			p = Vector2i(0, rng.randi_range(1, n - 2))
+		3:
+			p = Vector2i(n - 1, rng.randi_range(1, n - 2))
+
+	if p.x == 0:
+		p.x = 1
+	if p.x == n - 1:
+		p.x = n - 2
+	if p.y == 0:
+		p.y = 1
+	if p.y == n - 1:
+		p.y = n - 2
+	return p
+
+func _bfs_path(start: Vector2i, goal: Vector2i, n: int, rng: RandomNumberGenerator) -> Array[Vector2i]:
+	var start_i: int = _idx2(start.x, start.y, n)
+	var goal_i: int = _idx2(goal.x, goal.y, n)
+
+	var came := PackedInt32Array()
+	came.resize(n * n)
+	for i in range(n * n):
+		came[i] = -1
+
+	var q: Array[int] = []
+	q.append(start_i)
+	came[start_i] = start_i
+
+	var dirs: Array[int] = [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]
+
+	while q.size() > 0:
+		var cur: int = int(q.pop_front())
+		if cur == goal_i:
+			break
+
+		var cx: int = cur % n
+		var cz: int = int(float(cur) / float(n))
+
+		_shuffle_dirs(rng, dirs)
+		for d in dirs:
+			var nb: Vector2i = _neighbor_of(cx, cz, d)
+			if not _in_bounds(nb.x, nb.y, n):
+				continue
+			var ni: int = _idx2(nb.x, nb.y, n)
+			if came[ni] != -1:
+				continue
+			came[ni] = cur
+			q.append(ni)
+
+	if came[goal_i] == -1:
+		return []
+
+	var path: Array[Vector2i] = []
+	var cur2: int = goal_i
+	while cur2 != start_i:
+		path.append(Vector2i(cur2 % n, int(float(cur2) / float(n))))
+		cur2 = came[cur2]
+	path.append(start)
+	path.reverse()
+	return path
+
+func _mark_tunnel_cell(x: int, z: int, n: int) -> void:
+	var i: int = _idx2(x, z, n)
+	_tunnel_mask[i] = 1
+
+func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
+	_tunnel_mask = PackedByteArray()
+	_tunnel_mask.resize(n * n)
+	_tunnel_hole_mask = PackedByteArray()
+	_tunnel_hole_mask.resize(n * n)
+	_tunnel_entrance_dir = PackedInt32Array()
+	_tunnel_entrance_dir.resize(n * n)
+
+	for i in range(n * n):
+		_tunnel_mask[i] = 0
+		_tunnel_hole_mask[i] = 0
+		_tunnel_entrance_dir[i] = RAMP_NONE
+
+	if not enable_tunnels or tunnel_count <= 0:
+		return
+
+	var tries: int = 0
+	var built: int = 0
+	var tunnel_cells: Array[int] = []
+
+	while built < tunnel_count and tries < tunnel_count * 12:
+		tries += 1
+
+		var a: Vector2i
+		var b: Vector2i
+		if built == 0 or tunnel_cells.is_empty():
+			a = _pick_edgeish_cell(n, rng)
+		else:
+			var pick_idx: int = tunnel_cells[rng.randi_range(0, tunnel_cells.size() - 1)]
+			a = Vector2i(pick_idx % n, int(float(pick_idx) / float(n)))
+		b = _pick_edgeish_cell(n, rng)
+
+		var manhattan: int = abs(a.x - b.x) + abs(a.y - b.y)
+		if manhattan < maxi(6, n - 2):
+			continue
+
+		var path: Array[Vector2i] = _bfs_path(a, b, n, rng)
+		if path.size() < tunnel_min_len_cells:
+			continue
+
+		for p in path:
+			var idx_p: int = _idx2(p.x, p.y, n)
+			if _tunnel_mask[idx_p] == 0:
+				_mark_tunnel_cell(p.x, p.y, n)
+				tunnel_cells.append(idx_p)
+
+		var r: int = maxi(0, tunnel_radius_cells)
+		if r > 0 and path.size() > 6:
+			for pi in range(2, path.size() - 2):
+				var p2: Vector2i = path[pi]
+				for dz in range(-r, r + 1):
+					for dx in range(-r, r + 1):
+						if abs(dx) + abs(dz) > r:
+							continue
+						var xx: int = p2.x + dx
+						var zz: int = p2.y + dz
+						if _in_bounds(xx, zz, n):
+							var idx_wide: int = _idx2(xx, zz, n)
+							if _tunnel_mask[idx_wide] == 0:
+								_mark_tunnel_cell(xx, zz, n)
+								tunnel_cells.append(idx_wide)
+
+		var a_idx: int = _idx2(a.x, a.y, n)
+		var b_idx: int = _idx2(b.x, b.y, n)
+
+		if built == 0:
+			_tunnel_hole_mask[a_idx] = 1
+		_tunnel_hole_mask[b_idx] = 1
+
+		if path.size() >= 2:
+			if built == 0:
+				var p1: Vector2i = path[1]
+				_tunnel_entrance_dir[a_idx] = _dir_from_to(a, p1)
+			var p_lastm1: Vector2i = path[path.size() - 2]
+			_tunnel_entrance_dir[b_idx] = _dir_from_to(b, p_lastm1)
+
+		built += 1
+
+func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
+	var dx: int = b.x - a.x
+	var dz: int = b.y - a.y
+	if dx == 1 and dz == 0:
+		return RAMP_EAST
+	if dx == -1 and dz == 0:
+		return RAMP_WEST
+	if dx == 0 and dz == 1:
+		return RAMP_SOUTH
+	if dx == 0 and dz == -1:
+		return RAMP_NORTH
+	return RAMP_EAST
+
+func _ensure_tunnel_nodes() -> void:
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body == null:
+		return
+
+	var tunnel_body: StaticBody3D = terrain_body.get_node_or_null("TunnelBody") as StaticBody3D
+	if tunnel_body == null:
+		tunnel_body = StaticBody3D.new()
+		tunnel_body.name = "TunnelBody"
+		terrain_body.add_child(tunnel_body)
+
+	_tunnel_mesh_instance = tunnel_body.get_node_or_null("TunnelMesh") as MeshInstance3D
+	if _tunnel_mesh_instance == null:
+		_tunnel_mesh_instance = MeshInstance3D.new()
+		_tunnel_mesh_instance.name = "TunnelMesh"
+		tunnel_body.add_child(_tunnel_mesh_instance)
+
+	_tunnel_collision_shape = tunnel_body.get_node_or_null("TunnelCollision") as CollisionShape3D
+	if _tunnel_collision_shape == null:
+		_tunnel_collision_shape = CollisionShape3D.new()
+		_tunnel_collision_shape.name = "TunnelCollision"
+		tunnel_body.add_child(_tunnel_collision_shape)
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tunnel_mesh_instance.material_override = mat
 
 # -----------------------------
 # Cliff limiter (enforces max neighbor delta)
@@ -1229,15 +1477,16 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 # Mesh building
 # -----------------------------
-func _build_mesh_and_collision() -> void:
-	var n: int = max(2, cells_per_side)
+func _build_mesh_and_collision(n: int) -> void:
+	n = max(2, n)
+	var tunnel_ceil_y: float = tunnel_floor_y + tunnel_height
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_uv2(Vector2.ZERO)
 
-	var uv_scale_top: float = 0.08
-	var uv_scale_wall: float = 0.08
+	var uv_scale_top: float = tiles_per_cell
+	var uv_scale_wall: float = tiles_per_cell
 	var ramps_openings: bool = enable_ramps
 	var want_levels: int = maxi(1, ramp_step_count)
 	var levels: PackedInt32Array = PackedInt32Array()
@@ -1256,6 +1505,11 @@ func _build_mesh_and_collision() -> void:
 			var z0: float = _oz + float(z) * _cell_size
 			var z1: float = z0 + _cell_size
 
+			if enable_tunnels and tunnel_carve_surface_holes:
+				var hole_idx: int = z * n + x
+				if _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[hole_idx] != 0:
+					continue
+
 			var c0 := _cell_corners(x, z)
 
 			var idx: int = z * n + x
@@ -1273,6 +1527,28 @@ func _build_mesh_and_collision() -> void:
 				top_col
 			)
 
+	if enable_tunnels and tunnel_occluder_enabled:
+		var occluder_col := tunnel_occluder_color
+		occluder_col.a = SURF_WALL
+		for z in range(n):
+			for x in range(n):
+				var idx_occluder: int = z * n + x
+				if tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and (_tunnel_hole_mask[idx_occluder] != 0 or _tunnel_mask[idx_occluder] != 0):
+					continue
+				var x0o: float = _ox + float(x) * _cell_size
+				var x1o: float = x0o + _cell_size
+				var z0o: float = _oz + float(z) * _cell_size
+				var z1o: float = z0o + _cell_size
+				_add_quad(
+					st,
+					Vector3(x0o, tunnel_occluder_y, z0o),
+					Vector3(x1o, tunnel_occluder_y, z0o),
+					Vector3(x1o, tunnel_occluder_y, z1o),
+					Vector3(x0o, tunnel_occluder_y, z1o),
+					Vector2(0, 0) * uv_scale_top, Vector2(1, 0) * uv_scale_top, Vector2(1, 1) * uv_scale_top, Vector2(0, 1) * uv_scale_top,
+					occluder_col
+				)
+
 	var eps := 0.0001
 
 	for z in range(n):
@@ -1287,7 +1563,29 @@ func _build_mesh_and_collision() -> void:
 			if x + 1 < n:
 				var idx_a: int = z * n + x
 				var idx_b: int = z * n + (x + 1)
-				if (not ramps_openings) or (not _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
+				if enable_tunnels and tunnel_carve_surface_holes:
+					var a_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_a] != 0
+					var b_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_b] != 0
+					if a_is_hole or b_is_hole:
+						# Rim wall from terrain surface down to tunnel ceiling (instead of skipping hole-adjacent walls)
+						if a_is_hole and b_is_hole:
+							continue
+						var cB: Vector4 = _cell_corners(x + 1, z)
+						var a_e: Vector2 = _edge_pair(cA, 0)
+						var b_w: Vector2 = _edge_pair(cB, 1)
+						var top0: float = maxf(a_e.x, b_w.x)
+						var top1: float = maxf(a_e.y, b_w.y)
+						if top0 > tunnel_ceil_y + eps or top1 > tunnel_ceil_y + eps:
+							if b_is_hole:
+								# Face into the +X cell (the hole is in cell B)
+								_add_wall_x_between(st, x1, z0, z1, tunnel_ceil_y, tunnel_ceil_y, top0, top1, uv_scale_wall, wall_subdiv)
+							else:
+								# Face into the -X cell (the hole is in cell A) by flipping z order
+								_add_wall_x_between(st, x1, z1, z0, tunnel_ceil_y, tunnel_ceil_y, top1, top0, uv_scale_wall, wall_subdiv)
+						continue
+				if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
+					pass
+				else:
 					var cB := _cell_corners(x + 1, z)
 					var a_e := _edge_pair(cA, 0)
 					var b_w := _edge_pair(cB, 1)
@@ -1305,7 +1603,29 @@ func _build_mesh_and_collision() -> void:
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
-				if (not ramps_openings) or (not _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels)):
+				if enable_tunnels and tunnel_carve_surface_holes:
+					var c_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_c] != 0
+					var d_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_d] != 0
+					if c_is_hole or d_is_hole:
+						# Rim wall from terrain surface down to tunnel ceiling (instead of skipping hole-adjacent walls)
+						if c_is_hole and d_is_hole:
+							continue
+						var cC: Vector4 = _cell_corners(x, z + 1)
+						var a_s: Vector2 = _edge_pair(cA, 3)
+						var c_n: Vector2 = _edge_pair(cC, 2)
+						var top0z: float = maxf(a_s.x, c_n.x)
+						var top1z: float = maxf(a_s.y, c_n.y)
+						if top0z > tunnel_ceil_y + eps or top1z > tunnel_ceil_y + eps:
+							if d_is_hole:
+								# Face into the +Z cell (the hole is in cell D)
+								_add_wall_z_between(st, z1, x0, x1, tunnel_ceil_y, tunnel_ceil_y, top0z, top1z, uv_scale_wall, wall_subdiv)
+							else:
+								# Face into the -Z cell (the hole is in cell C) by flipping x order
+								_add_wall_z_between(st, z1, x1, x0, tunnel_ceil_y, tunnel_ceil_y, top1z, top0z, uv_scale_wall, wall_subdiv)
+						continue
+				if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
+					pass
+				else:
 					var cC := _cell_corners(x, z + 1)
 					var a_s := _edge_pair(cA, 3)
 					var c_n := _edge_pair(cC, 2)
@@ -1327,9 +1647,118 @@ func _build_mesh_and_collision() -> void:
 		_add_ceiling(st, box_height, uv_scale_top)
 
 	st.generate_normals()
+	st.generate_tangents()
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+
+func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
+	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
+		return
+	var a := Vector3(x_edge, y_top0, z0)
+	var b := Vector3(x_edge, y_top1, z1)
+	var c := Vector3(x_edge, y_bot, z1)
+	var d := Vector3(x_edge, y_bot, z0)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, y_top0 * uv_scale), Vector2(1, y_top1 * uv_scale),
+		Vector2(1, y_bot * uv_scale), Vector2(0, y_bot * uv_scale),
+		color
+	)
+
+func _add_wall_z_colored(st: SurfaceTool, z_edge: float, x0: float, x1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
+	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
+		return
+	var a := Vector3(x0, y_top0, z_edge)
+	var b := Vector3(x1, y_top1, z_edge)
+	var c := Vector3(x1, y_bot, z_edge)
+	var d := Vector3(x0, y_bot, z_edge)
+	_add_quad(st, a, b, c, d,
+		Vector2(0, y_top0 * uv_scale), Vector2(1, y_top1 * uv_scale),
+		Vector2(1, y_bot * uv_scale), Vector2(0, y_bot * uv_scale),
+		color
+	)
+
+func _build_tunnel_mesh(n: int) -> void:
+	_ensure_tunnel_nodes()
+	if _tunnel_mesh_instance == null or _tunnel_collision_shape == null:
+		return
+
+	if not enable_tunnels or _tunnel_mask.size() != n * n:
+		_tunnel_mesh_instance.mesh = null
+		_tunnel_collision_shape.shape = null
+		return
+
+	var floor_y: float = tunnel_floor_y
+	var ceil_y: float = tunnel_floor_y + maxf(1.0, tunnel_height)
+	var uv_scale: float = 0.08
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = _idx2(x, z, n)
+			if _tunnel_mask[idx] == 0:
+				continue
+
+			var x0: float = _ox + float(x) * _cell_size
+			var x1: float = x0 + _cell_size
+			var z0: float = _oz + float(z) * _cell_size
+			var z1: float = z0 + _cell_size
+
+			var is_entrance: bool = tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
+
+			var has_w: bool = (x > 0) and (_tunnel_mask[_idx2(x - 1, z, n)] != 0)
+			var has_e: bool = (x < n - 1) and (_tunnel_mask[_idx2(x + 1, z, n)] != 0)
+			var has_n: bool = (z > 0) and (_tunnel_mask[_idx2(x, z - 1, n)] != 0)
+			var has_s: bool = (z < n - 1) and (_tunnel_mask[_idx2(x, z + 1, n)] != 0)
+
+			_add_quad(
+				st,
+				Vector3(x0, floor_y, z0),
+				Vector3(x1, floor_y, z0),
+				Vector3(x1, floor_y, z1),
+				Vector3(x0, floor_y, z1),
+				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
+				tunnel_color
+			)
+
+			if not is_entrance:
+				_add_quad(
+					st,
+					Vector3(x0, ceil_y, z1),
+					Vector3(x1, ceil_y, z1),
+					Vector3(x1, ceil_y, z0),
+					Vector3(x0, ceil_y, z0),
+					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
+					tunnel_color
+				)
+
+			if not has_w:
+				_add_wall_x_colored(st, x0, z0, z1, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_e:
+				_add_wall_x_colored(st, x1, z1, z0, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_n:
+				_add_wall_z_colored(st, z0, x1, x0, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+			if not has_s:
+				_add_wall_z_colored(st, z1, x0, x1, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
+
+			# Shaft rim walls are generated by the terrain mesh (_build_mesh_and_collision),
+			# so we do not add extra surface-to-ceiling liners here (avoids double walls / z-fighting).
+
+	st.generate_normals()
+	var mesh: ArrayMesh = st.commit()
+	_tunnel_mesh_instance.mesh = mesh
+	_tunnel_collision_shape.shape = mesh.create_trimesh_shape()
+
+func _sync_sun() -> void:
+	var sun := get_node_or_null("SUN") as DirectionalLight3D
+	if sun == null:
+		return
+
+	var center := global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+	sun.global_position = center + Vector3(0.0, sun_height, 0.0)
+	sun.look_at(center, Vector3.UP)
 
 # -----------------------------
 # Container primitives
@@ -1410,33 +1839,39 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	var d := Vector3(x_edge, low0, z0)
 	var wall_col := terrain_color
 	wall_col.a = SURF_WALL
+	var ua := Vector2(0.0, 1.0)
+	var ub := Vector2(1.0, 1.0)
+	var uc := Vector2(1.0, 0.0)
+	var ud := Vector2(0.0, 0.0)
+	ua.x *= uv_scale
+	ub.x *= uv_scale
+	uc.x *= uv_scale
+	ud.x *= uv_scale
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				subdiv, subdiv,
 				wall_col
 			)
 		else:
 			_add_quad_uv2(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
@@ -1452,33 +1887,39 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	var d := Vector3(x0, low0, z_edge)
 	var wall_col := terrain_color
 	wall_col.a = SURF_WALL
+	var ua := Vector2(0.0, 1.0)
+	var ub := Vector2(1.0, 1.0)
+	var uc := Vector2(1.0, 0.0)
+	var ud := Vector2(0.0, 0.0)
+	ua.x *= uv_scale
+	ub.x *= uv_scale
+	uc.x *= uv_scale
+	ud.x *= uv_scale
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				subdiv, subdiv,
 				wall_col
 			)
 		else:
 			_add_quad_uv2(st, a, b, c, d,
-				Vector2(0, high0 * uv_scale), Vector2(1, high1 * uv_scale),
-				Vector2(1, low1 * uv_scale), Vector2(0, low0 * uv_scale),
+				ua, ub, uc, ud,
 				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 				wall_col
 			)
 		return
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, high1 * uv_scale)); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 
 	st.set_color(wall_col)
-	st.set_uv(Vector2(0, high0 * uv_scale)); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(Vector2(1, low1 * uv_scale)); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(Vector2(0, low0 * uv_scale)); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
 # -----------------------------
 # Quad writer
@@ -1537,6 +1978,9 @@ func _add_cell_top_grid(
 	var h10 := corners.y
 	var h11 := corners.z
 	var h01 := corners.w
+	var idx: int = cell_z * max(2, cells_per_side) + cell_x
+	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
+	var is_ramp: bool = ramp_dir != RAMP_NONE
 
 	for iz in range(sdiv):
 		var t0 := float(iz) / float(sdiv)
@@ -1562,10 +2006,14 @@ func _add_cell_top_grid(
 			var c := Vector3(px1, y11, pz1)
 			var d := Vector3(px0, y01, pz1)
 
-			var ua := Vector2(float(cell_x) + s0, float(cell_z) + t0) * uv_scale
-			var ub := Vector2(float(cell_x) + s1, float(cell_z) + t0) * uv_scale
-			var uc := Vector2(float(cell_x) + s1, float(cell_z) + t1) * uv_scale
-			var ud := Vector2(float(cell_x) + s0, float(cell_z) + t1) * uv_scale
+			var ua := _ramp_uv(s0, t0, ramp_dir) if is_ramp else Vector2(s0, t0)
+			var ub := _ramp_uv(s1, t0, ramp_dir) if is_ramp else Vector2(s1, t0)
+			var uc := _ramp_uv(s1, t1, ramp_dir) if is_ramp else Vector2(s1, t1)
+			var ud := _ramp_uv(s0, t1, ramp_dir) if is_ramp else Vector2(s0, t1)
+			ua *= uv_scale
+			ub *= uv_scale
+			uc *= uv_scale
+			ud *= uv_scale
 
 			_add_quad_uv2(
 				st,
