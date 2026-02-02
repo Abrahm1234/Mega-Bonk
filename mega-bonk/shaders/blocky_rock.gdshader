@@ -1,164 +1,153 @@
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque;
 
-varying vec3 v_world_pos;
-varying vec3 v_world_nrm;
+uniform sampler2D noise_top  : repeat_enable;
+uniform sampler2D noise_wall : repeat_enable;
+uniform sampler2D noise_ramp : repeat_enable;
 
-uniform sampler2D noise_top : repeat_enable, filter_linear;
-uniform sampler2D noise_wall : repeat_enable, filter_linear;
-uniform sampler2D noise_ramp : repeat_enable, filter_linear;
+uniform sampler2D albedo_top  : repeat_disable;
+uniform sampler2D albedo_wall : repeat_disable;
+uniform sampler2D albedo_ramp : repeat_disable;
 
-uniform float disp_strength_top = 0.35;
-uniform float disp_strength_wall = 0.2;
-uniform float disp_strength_ramp = 0.25;
+uniform sampler2D normal_top  : repeat_disable;
+uniform sampler2D normal_wall : repeat_disable;
+uniform sampler2D normal_ramp : repeat_disable;
+uniform float normal_strength = 0.85;
 
-uniform float disp_scale_top = 0.06;
+uniform float cell_size = 1.0;
+uniform float disp_strength_top  = 0.40;
+uniform float disp_strength_wall = 0.35;
+uniform float disp_strength_ramp = 0.40;
+
+uniform float disp_scale_top  = 0.06;
 uniform float disp_scale_wall = 0.08;
 uniform float disp_scale_ramp = 0.06;
 
-uniform sampler2D albedo_top : repeat_enable, filter_linear;
-uniform sampler2D albedo_wall : repeat_enable, filter_linear;
-uniform sampler2D albedo_ramp : repeat_enable, filter_linear;
+uniform float seam_lock_width = 0.06;
+uniform float seam_lock_soft  = 0.02;
 
-uniform sampler2D normal_top : repeat_enable, filter_linear;
-uniform sampler2D normal_wall : repeat_enable, filter_linear;
-uniform sampler2D normal_ramp : repeat_enable, filter_linear;
+uniform bool debug_show_vertex_color = false;
 
-uniform float tex_scale = 0.1;
-uniform float tex_strength = 1.0;
-uniform float seam_lock_width = 0.18;
-uniform float seam_lock_soft = 0.06;
-uniform float cell_size = 1.0;
-uniform float debug_vertex_colors = 0.0;
-const float SURF_TOP = 0.0;
-const float SURF_WALL = 0.55;
-const float SURF_RAMP = 0.8;
-const float SURF_BOX = 1.0;
+const float TAG_TOP  = 0.00;
+const float TAG_WALL = 0.55;
+const float TAG_RAMP = 0.80;
+const float TAG_BOX  = 1.00;
+
+varying vec3 v_world_pos;
+varying float v_tag;
+
+float seam_lock_mask(vec2 uv2) {
+	float edge_dist = min(min(uv2.x, 1.0 - uv2.x), min(uv2.y, 1.0 - uv2.y));
+	float w0 = seam_lock_width;
+	float w1 = seam_lock_width + seam_lock_soft;
+	return smoothstep(w0, w1, edge_dist);
+}
+
+float decode_is(float tag, float target) {
+	return 1.0 - step(0.08, abs(tag - target));
+}
 
 vec2 wrap_uv(vec2 uv) {
 	return fract(uv);
 }
 
-vec4 triplanar_sample(sampler2D tex, vec3 p, vec3 n, float scale) {
+float triplanar_noise(sampler2D tex, vec3 p, vec3 n, float scale) {
 	vec3 an = abs(n);
-	vec3 w = pow(an, vec3(10.0));
-	w /= (w.x + w.y + w.z + 1e-6);
+	vec3 w = an / max(an.x + an.y + an.z, 1e-5);
 
 	vec2 uvx = wrap_uv(p.zy * scale);
 	vec2 uvy = wrap_uv(p.xz * scale);
 	vec2 uvz = wrap_uv(p.xy * scale);
 
-	vec4 cx = texture(tex, uvx);
-	vec4 cy = texture(tex, uvy);
-	vec4 cz = texture(tex, uvz);
-	return cx * w.x + cy * w.y + cz * w.z;
+	float nx = texture(tex, uvx).r;
+	float ny = texture(tex, uvy).r;
+	float nz = texture(tex, uvz).r;
+
+	return nx * w.x + ny * w.y + nz * w.z;
 }
 
-float fbm_triplanar(sampler2D tex, vec3 p, vec3 n, float base_scale) {
+float fbm_noise(sampler2D tex, vec3 p, vec3 n, float base_scale) {
 	float sum = 0.0;
-	float amp = 0.6;
-	float sc = base_scale;
-	for (int i = 0; i < 3; i++) {
-		sum += triplanar_sample(tex, p, n, sc).r * amp;
-		sc *= 2.0;
+	float amp = 0.55;
+	float sc  = base_scale;
+
+	for (int i = 0; i < 5; i++) {
+		sum += triplanar_noise(tex, p, n, sc) * amp;
+		sc  *= 2.0;
 		amp *= 0.5;
 	}
 	return sum;
 }
 
-float ridged(float x) {
-	x = abs(x * 2.0 - 1.0);
-	return 1.0 - x;
-}
-
-float hash21(vec2 p) {
-	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-}
-
-vec4 surf_flags(float a) {
-	float d_top = abs(a - SURF_TOP);
-	float d_wall = abs(a - SURF_WALL);
-	float d_ramp = abs(a - SURF_RAMP);
-	float d_box = abs(a - SURF_BOX);
-	vec4 flags = vec4(1.0, 0.0, 0.0, 0.0);
-	float min_d = d_top;
-	if (d_wall < min_d) {
-		min_d = d_wall;
-		flags = vec4(0.0, 1.0, 0.0, 0.0);
-	}
-	if (d_ramp < min_d) {
-		min_d = d_ramp;
-		flags = vec4(0.0, 0.0, 1.0, 0.0);
-	}
-	if (d_box < min_d) {
-		flags = vec4(0.0, 0.0, 0.0, 1.0);
-	}
-	return flags;
-}
-
 void vertex() {
-	vec4 flags = surf_flags(COLOR.a);
-	float is_top = flags.x;
-	float is_wall = flags.y;
-	float is_ramp = flags.z;
-	float is_box = flags.w;
+	v_tag = COLOR.a;
+
+	float is_top  = decode_is(v_tag, TAG_TOP);
+	float is_wall = decode_is(v_tag, TAG_WALL);
+	float is_ramp = decode_is(v_tag, TAG_RAMP);
+	float is_box  = decode_is(v_tag, TAG_BOX);
+
+	float disp_strength = disp_strength_top * is_top
+	                    + disp_strength_wall * is_wall
+	                    + disp_strength_ramp * is_ramp;
+
+	float disp_scale = disp_scale_top * is_top
+	                 + disp_scale_wall * is_wall
+	                 + disp_scale_ramp * is_ramp;
+
+	vec3 world_p0 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 world_n0 = normalize(MODEL_NORMAL_MATRIX * NORMAL);
+
+	vec2 cell = floor(world_p0.xz / max(cell_size, 1e-5));
+	float rnd = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+	vec3 p = world_p0 + vec3(rnd * 19.0, rnd * 7.0, rnd * 23.0);
+
+	float n_top = fbm_noise(noise_top, p, world_n0, disp_scale);
+	float n_wall = fbm_noise(noise_wall, p, world_n0, disp_scale);
+	float n_ramp = fbm_noise(noise_ramp, p, world_n0, disp_scale);
+	float n = n_top * is_top + n_wall * is_wall + n_ramp * is_ramp;
+
+	float disp = (n * 2.0 - 1.0) * disp_strength;
+
+	float seam = seam_lock_mask(UV2);
+	disp *= seam * (1.0 - is_box);
+
+	VERTEX += normalize(NORMAL) * disp;
 
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_world_nrm = normalize(MODEL_NORMAL_MATRIX * NORMAL);
-
-	vec2 cell = floor(v_world_pos.xz / max(cell_size, 1e-3));
-	float rnd = hash21(cell);
-	vec3 pvar = v_world_pos + vec3(rnd * 7.31, rnd * 3.17, rnd * 5.83);
-
-	float nt = fbm_triplanar(noise_top, pvar, v_world_nrm, disp_scale_top);
-	float nw = fbm_triplanar(noise_wall, pvar, v_world_nrm, disp_scale_wall);
-	float nr = fbm_triplanar(noise_ramp, pvar, v_world_nrm, disp_scale_ramp);
-	nt = ridged(nt);
-	nw = ridged(nw);
-	nr = ridged(nr);
-
-	float n = nt * is_top + nr * is_ramp + nw * is_wall;
-	float strength = disp_strength_top * is_top
-		+ disp_strength_ramp * is_ramp
-		+ disp_strength_wall * is_wall;
-
-	float edge_dist = min(
-		min(UV2.x, 1.0 - UV2.x),
-		min(UV2.y, 1.0 - UV2.y)
-	);
-	float seam_mask = smoothstep(seam_lock_width, seam_lock_width + seam_lock_soft, edge_dist);
-	float disp = (n * 2.0 - 1.0) * strength * (1.0 - is_box) * seam_mask;
-	vec3 dir_top = vec3(0.0, 1.0, 0.0);
-	vec3 dir_wall = normalize(vec3(NORMAL.x, NORMAL.y * 0.15, NORMAL.z));
-	vec3 dir_ramp = normalize(mix(dir_top, normalize(NORMAL), 0.65));
-	vec3 dir = dir_top * is_top + dir_ramp * is_ramp + dir_wall * is_wall;
-	VERTEX += dir * disp;
 }
 
 void fragment() {
-	vec4 flags = surf_flags(COLOR.a);
-	float is_top = flags.x;
-	float is_wall = flags.y;
-	float is_ramp = flags.z;
-	float is_box = flags.w;
+	if (debug_show_vertex_color) {
+		ALBEDO = COLOR.rgb;
+		METALLIC = 0.0;
+		ROUGHNESS = 1.0;
+	} else {
+		float is_top  = decode_is(v_tag, TAG_TOP);
+		float is_wall = decode_is(v_tag, TAG_WALL);
+		float is_ramp = decode_is(v_tag, TAG_RAMP);
+		float is_box  = decode_is(v_tag, TAG_BOX);
 
-	vec3 p = v_world_pos;
-	vec3 nrm = normalize(v_world_nrm);
+		vec3 a_top  = texture(albedo_top,  UV).rgb;
+		vec3 a_wall = texture(albedo_wall, UV).rgb;
+		vec3 a_ramp = texture(albedo_ramp, UV).rgb;
 
-	vec3 at = triplanar_sample(albedo_top, p, nrm, tex_scale).rgb;
-	vec3 aw = triplanar_sample(albedo_wall, p, nrm, tex_scale).rgb;
-	vec3 ar = triplanar_sample(albedo_ramp, p, nrm, tex_scale).rgb;
+		vec3 albedo = a_top * is_top + a_wall * is_wall + a_ramp * is_ramp;
+		ALBEDO = mix(albedo, vec3(0.08), is_box);
 
-	vec3 albedo_tex = at * is_top + ar * is_ramp + aw * is_wall;
-	vec3 surf_albedo = mix(vec3(1.0), albedo_tex, tex_strength);
-	surf_albedo = mix(surf_albedo, COLOR.rgb, debug_vertex_colors);
-	ALBEDO = mix(surf_albedo, COLOR.rgb, is_box);
+		vec3 P = (VIEW_MATRIX * vec4(v_world_pos, 1.0)).xyz;
+		vec3 dpx = dFdx(P);
+		vec3 dpy = dFdy(P);
+		vec3 n_view = normalize(cross(dpx, dpy));
+		NORMAL = n_view;
 
-	vec3 nt = triplanar_sample(normal_top, p, nrm, tex_scale).xyz * 2.0 - 1.0;
-	vec3 nw = triplanar_sample(normal_wall, p, nrm, tex_scale).xyz * 2.0 - 1.0;
-	vec3 nr = triplanar_sample(normal_ramp, p, nrm, tex_scale).xyz * 2.0 - 1.0;
+		if (normal_strength > 0.001) {
+			vec3 nt = (texture(normal_top,  UV).rgb * 2.0 - 1.0) * is_top;
+			vec3 nw = (texture(normal_wall, UV).rgb * 2.0 - 1.0) * is_wall;
+			vec3 nr = (texture(normal_ramp, UV).rgb * 2.0 - 1.0) * is_ramp;
+			vec3 nm = normalize(nt + nw + nr);
 
-	vec3 tn = nt * is_top + nr * is_ramp + nw * is_wall;
-	NORMAL_MAP = normalize(tn);
-	NORMAL_MAP_DEPTH = 1.0;
+			NORMAL = normalize(mix(NORMAL, normalize(NORMAL + nm * 0.35), normal_strength));
+		}
+	}
 }
