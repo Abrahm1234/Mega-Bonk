@@ -933,7 +933,7 @@ func _resolve_tunnel_layer(n: int) -> void:
 	for z in range(n):
 		for x in range(n):
 			var c := _cell_corners(x, z)
-			var roof: float = minf(minf(c.x, c.y), minf(c.z, c.w))
+			var roof: float = min(min(c.x, c.y), min(c.z, c.w))
 			roof_min = minf(roof_min, roof)
 
 	var max_ceiling: float = roof_min - tunnel_ceiling_clearance
@@ -949,7 +949,7 @@ func _tunnel_cell_passable(x: int, z: int, n: int, ceil_y: float) -> bool:
 	if not _in_bounds(x, z, n):
 		return false
 	var c := _cell_corners(x, z)
-	var roof_min: float = minf(minf(c.x, c.y), minf(c.z, c.w))
+	var roof_min: float = min(min(c.x, c.y), min(c.z, c.w))
 	return roof_min >= ceil_y + tunnel_ceiling_clearance
 
 func _tunnel_edge_blocked(x: int, z: int, dir: int, n: int, levels: PackedInt32Array, ceil_y: float) -> bool:
