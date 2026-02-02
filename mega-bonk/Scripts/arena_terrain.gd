@@ -1533,7 +1533,7 @@ func _build_mesh_and_collision(n: int) -> void:
 		for z in range(n):
 			for x in range(n):
 				var idx_occluder: int = z * n + x
-				if tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_occluder] != 0:
+				if tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and (_tunnel_hole_mask[idx_occluder] != 0 or _tunnel_mask[idx_occluder] != 0):
 					continue
 				var x0o: float = _ox + float(x) * _cell_size
 				var x1o: float = x0o + _cell_size
