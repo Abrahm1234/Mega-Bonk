@@ -119,6 +119,12 @@ class_name BlockyTerrain
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 @export var debug_vertex_colors: bool = false
 @export var sun_height: float = 200.0
+@export var enable_wall_decor: bool = true
+@export var wall_decor_meshes: Array[Mesh] = []
+@export var wall_decor_offset: float = 0.03
+@export var wall_decor_seed: int = 1337
+@export var wall_decor_min_height: float = 0.25
+@export var wall_decor_skip_trapezoids: bool = false
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -152,6 +158,23 @@ const SURF_TOP := 0.0
 const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
+
+class WallFace:
+	var center: Vector3
+	var normal: Vector3
+	var width: float
+	var height: float
+	var key: int
+
+	func _init(c: Vector3, n: Vector3, w: float, h: float, k: int) -> void:
+		center = c
+		normal = n
+		width = w
+		height = h
+		key = k
+
+var _wall_faces: Array[WallFace] = []
+var _wall_decor_root: Node3D = null
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 	match dir:
@@ -1835,6 +1858,7 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 func _build_mesh_and_collision(n: int) -> void:
 	n = max(2, n)
+	_wall_faces.clear()
 	var tunnel_ceil_y: float = _tunnel_ceil_resolved
 	if tunnel_ceil_y == 0.0:
 		tunnel_ceil_y = tunnel_floor_y + tunnel_height
@@ -2017,6 +2041,147 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+	_rebuild_wall_decor()
+
+func _ensure_wall_decor_root() -> void:
+	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
+		return
+	_wall_decor_root = get_node_or_null("WallDecor") as Node3D
+	if _wall_decor_root == null:
+		_wall_decor_root = Node3D.new()
+		_wall_decor_root.name = "WallDecor"
+		add_child(_wall_decor_root)
+
+func _basis_from_normal(n: Vector3) -> Basis:
+	var nn: Vector3 = n.normalized()
+	var z: Vector3 = -nn
+	var x: Vector3 = Vector3.UP.cross(z)
+	if x.length() < 0.001:
+		x = Vector3.RIGHT
+	x = x.normalized()
+	var y: Vector3 = z.cross(x).normalized()
+	return Basis(x, y, z)
+
+func _hash_wall_face(center: Vector3, n: Vector3) -> int:
+	var qx: int = int(floor(center.x * 10.0))
+	var qy: int = int(floor(center.y * 10.0))
+	var qz: int = int(floor(center.z * 10.0))
+
+	var dir: int = 0
+	if absf(n.x) > absf(n.z):
+		dir = 1 if n.x > 0.0 else 2
+	else:
+		dir = 3 if n.z > 0.0 else 4
+
+	var h: int = (qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791) ^ (dir * 2654435761)
+	if h < 0:
+		h = -h
+	return h
+
+func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	if not enable_wall_decor:
+		return
+
+	var edge_u: Vector3 = b - a
+	var edge_v: Vector3 = d - a
+	var n: Vector3 = edge_u.cross(edge_v)
+	var nlen: float = n.length()
+	if nlen < 0.0001:
+		return
+	n /= nlen
+
+	var width: float = edge_u.length()
+	var h0: float = (a - d).length()
+	var h1: float = (b - c).length()
+	var height: float = max(h0, h1)
+
+	if height < wall_decor_min_height:
+		return
+
+	if wall_decor_skip_trapezoids:
+		if absf(a.y - b.y) > 0.01 or absf(d.y - c.y) > 0.01:
+			return
+
+	var center: Vector3 = (a + b + c + d) * 0.25
+	var key: int = _hash_wall_face(center, n)
+	_wall_faces.append(WallFace.new(center, n, width, height, key))
+
+func _rebuild_wall_decor() -> void:
+	if not enable_wall_decor or wall_decor_meshes.is_empty():
+		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
+			for child: Node in _wall_decor_root.get_children():
+				child.queue_free()
+		return
+
+	_ensure_wall_decor_root()
+
+	for child: Node in _wall_decor_root.get_children():
+		child.queue_free()
+
+	var variant_count: int = wall_decor_meshes.size()
+
+	var counts: Array[int] = []
+	counts.resize(variant_count)
+	for i: int in range(variant_count):
+		counts[i] = 0
+
+	for f: WallFace in _wall_faces:
+		var idx: int = (f.key + wall_decor_seed) % variant_count
+		counts[idx] += 1
+
+	var mmi_by_variant: Array[MultiMeshInstance3D] = []
+	mmi_by_variant.resize(variant_count)
+
+	var aabb_by_variant: Array[AABB] = []
+	aabb_by_variant.resize(variant_count)
+
+	for v: int in range(variant_count):
+		if counts[v] <= 0:
+			mmi_by_variant[v] = null
+			continue
+
+		var mm: MultiMesh = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.instance_count = counts[v]
+
+		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		mmi.mesh = wall_decor_meshes[v]
+		mmi.multimesh = mm
+
+		_wall_decor_root.add_child(mmi)
+		mmi_by_variant[v] = mmi
+		aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
+
+	var write_i: Array[int] = []
+	write_i.resize(variant_count)
+	for v2: int in range(variant_count):
+		write_i[v2] = 0
+
+	for f2: WallFace in _wall_faces:
+		var vsel: int = (f2.key + wall_decor_seed) % variant_count
+		var mmi2: MultiMeshInstance3D = mmi_by_variant[vsel]
+		if mmi2 == null:
+			continue
+
+		var aabb: AABB = aabb_by_variant[vsel]
+		var sx: float = f2.width / max(aabb.size.x, 0.001)
+		var sy: float = f2.height / max(aabb.size.y, 0.001)
+		var sz: float = 1.0
+
+		var basis: Basis = _basis_from_normal(f2.normal)
+
+		var flip: bool = ((f2.key & 1) == 1)
+		if flip:
+			basis = basis.rotated(f2.normal, PI)
+
+		basis = basis.scaled(Vector3(sx, sy, sz))
+
+		var pos: Vector3 = f2.center + f2.normal * wall_decor_offset
+		var xf: Transform3D = Transform3D(basis, pos)
+
+		var wi: int = write_i[vsel]
+		mmi2.multimesh.set_instance_transform(wi, xf)
+		write_i[vsel] = wi + 1
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
@@ -2279,6 +2444,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
+	_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -2327,6 +2493,7 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
+	_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
