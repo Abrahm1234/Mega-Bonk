@@ -68,8 +68,10 @@ class_name BlockyTerrain
 @export var tunnel_floor_y: float = -22.0
 @export var tunnel_height: float = 8.0
 @export_range(1, 8, 1) var tunnel_height_steps: int = 2
-@export_range(1, 4, 1) var tunnel_ramp_drop_steps: int = 1
-@export_range(4, 64, 1) var tunnel_ramp_max_cells: int = 32
+@export var tunnel_roof_clearance: float = 0.75
+@export var tunnel_ramp_drop: float = 8.0
+@export_range(4, 64, 1) var tunnel_ramp_max_steps: int = 16
+@export var tunnel_turn_penalty: float = 3.0
 @export var tunnel_floor_clearance_from_box: float = 2.0
 @export var tunnel_ceiling_clearance: float = 1.0
 @export var tunnel_edge_clearance: float = 0.5
@@ -136,6 +138,8 @@ var _tunnel_mesh_instance: MeshInstance3D
 var _tunnel_collision_shape: CollisionShape3D
 var _tunnel_floor_resolved: float = 0.0
 var _tunnel_ceil_resolved: float = 0.0
+var _tunnel_base_floor_y: float = 0.0
+var _tunnel_base_ceil_y: float = 0.0
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -948,6 +952,9 @@ func _tunnel_arrays_resize(n: int) -> void:
 		_tunnel_floor_max_y[i] = 0.0
 		_tunnel_ramp_dir[i] = TUNNEL_DIR_NONE
 
+func _tunnel_flat_corners(y: float) -> Vector4:
+	return Vector4(y, y, y, y)
+
 func _resolve_tunnel_layer(n: int) -> void:
 	var min_floor: float = outer_floor_height + tunnel_floor_clearance_from_box
 	var floor_y: float = maxf(min_floor, tunnel_floor_y)
@@ -973,11 +980,92 @@ func _resolve_tunnel_layer(n: int) -> void:
 
 	_tunnel_floor_resolved = floor_y
 	_tunnel_ceil_resolved = ceil_y
+	_tunnel_base_floor_y = floor_y
+	_tunnel_base_ceil_y = ceil_y
 
 func _tunnel_cell_passable(x: int, z: int, n: int, _ceil_y: float) -> bool:
 	if x <= 0 or z <= 0 or x >= n - 1 or z >= n - 1:
 		return false
 	return true
+
+func _edge_is_open_at_ceil(n: int, a: Vector2i, b: Vector2i, ceil_y: float) -> bool:
+	var ia: int = _idx2(a.x, a.y, n)
+	var ib: int = _idx2(b.x, b.y, n)
+	var ha: float = _heights[ia]
+	var hb: float = _heights[ib]
+	if absf(ha - hb) < 0.001:
+		return true
+
+	var wall_bottom: float = minf(ha, hb)
+	return ceil_y <= (wall_bottom - tunnel_roof_clearance)
+
+func _pick_entrance_dir(n: int, entrance: Vector2i) -> int:
+	var center := Vector2i(n >> 1, n >> 1)
+	var best_dir: int = RAMP_EAST
+	var best_score: float = -1.0e20
+
+	var e_idx: int = _idx2(entrance.x, entrance.y, n)
+	var h0: float = _heights[e_idx]
+
+	for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+		var p := entrance
+		var ok := true
+		for _i in range(tunnel_ramp_max_steps + 2):
+			p = _neighbor_of(p.x, p.y, dir)
+			if not _in_bounds(p.x, p.y, n):
+				ok = false
+				break
+		if not ok:
+			continue
+
+		var nb: Vector2i = _neighbor_of(entrance.x, entrance.y, dir)
+		var nb_idx: int = _idx2(nb.x, nb.y, n)
+		var h1: float = _heights[nb_idx]
+
+		var to_center := Vector2(center - entrance)
+		var dvec := Vector2(nb - entrance)
+		var dotc: float = to_center.dot(dvec)
+
+		var score: float = 0.0
+		if h1 <= h0:
+			score += 10.0
+		if absf(h1 - h0) < 0.001:
+			score += 10.0
+		score += dotc * 0.05
+
+		if score > best_score:
+			best_score = score
+			best_dir = dir
+
+	return best_dir
+
+func _choose_tunnel_base_depth(n: int, entrances: Array[Vector2i]) -> void:
+	var min_wall_bottom: float = INF
+	for e in entrances:
+		for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+			var nb: Vector2i = _neighbor_of(e.x, e.y, dir)
+			if not _in_bounds(nb.x, nb.y, n):
+				continue
+			var ia: int = _idx2(e.x, e.y, n)
+			var ib: int = _idx2(nb.x, nb.y, n)
+			var ha: float = _heights[ia]
+			var hb: float = _heights[ib]
+			min_wall_bottom = minf(min_wall_bottom, minf(ha, hb))
+
+	if min_wall_bottom == INF:
+		return
+
+	var base_ceil: float = min_wall_bottom - tunnel_roof_clearance
+	var base_floor: float = base_ceil - (_tunnel_ceil_resolved - _tunnel_floor_resolved)
+	var min_floor: float = outer_floor_height + 1.0
+	if base_floor < min_floor:
+		base_floor = min_floor
+		base_ceil = base_floor + (_tunnel_ceil_resolved - _tunnel_floor_resolved)
+
+	_tunnel_base_floor_y = base_floor
+	_tunnel_base_ceil_y = base_ceil
+	_tunnel_floor_resolved = base_floor
+	_tunnel_ceil_resolved = base_ceil
 
 func _tunnel_edge_blocked(x: int, z: int, dir: int, n: int, _levels: PackedInt32Array, _ceil_y: float) -> bool:
 	var nb: Vector2i = _neighbor_of(x, z, dir)
@@ -1047,59 +1135,56 @@ func _bfs_tunnel_path(
 func _mark_tunnel_cell(x: int, z: int, n: int) -> void:
 	var i: int = _idx2(x, z, n)
 	_tunnel_mask[i] = 1
-	_tunnel_floor_min_y[i] = _tunnel_floor_resolved
-	_tunnel_floor_max_y[i] = _tunnel_floor_resolved
+	_tunnel_floor_min_y[i] = _tunnel_base_floor_y
+	_tunnel_floor_max_y[i] = _tunnel_base_floor_y
 	_tunnel_ramp_dir[i] = TUNNEL_DIR_NONE
 
-func _tunnel_set_flat_cell(idx: int) -> void:
-	_tunnel_floor_min_y[idx] = _tunnel_floor_resolved
-	_tunnel_floor_max_y[idx] = _tunnel_floor_resolved
+func _tunnel_set_flat_cell(idx: int, y: float) -> void:
+	_tunnel_floor_min_y[idx] = y
+	_tunnel_floor_max_y[idx] = y
 	_tunnel_ramp_dir[idx] = TUNNEL_DIR_NONE
 
-func _tunnel_stamp_entrance_ramp(entr_idx: int, seq: Array, n: int) -> void:
-	if seq.size() < 2:
-		return
+func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector2i:
+	var e_idx: int = _idx2(entrance.x, entrance.y, n)
+	var start_floor: float = _heights[e_idx] - 0.5
 
-	var drop: float = float(tunnel_ramp_drop_steps) * height_step
-	if drop <= 0.0:
-		drop = height_step
+	var cur := entrance
+	var hi: float = start_floor
 
-	var ex: int = entr_idx % n
-	var ez: int = int(float(entr_idx) / float(n))
-	var c := _cell_corners(ex, ez)
-	var top_y: float = min(min(c.x, c.y), min(c.z, c.w))
+	_tunnel_hole_mask[e_idx] = 1
+	_tunnel_mask[e_idx] = 1
 
-	var start_y: float = top_y - drop
-	var target_y: float = _tunnel_floor_resolved
-	if start_y <= target_y + 0.01:
-		_tunnel_set_flat_cell(entr_idx)
-		return
+	for _i in range(tunnel_ramp_max_steps):
+		var idx: int = _idx2(cur.x, cur.y, n)
+		var lo: float = maxf(_tunnel_base_floor_y, hi - tunnel_ramp_drop)
 
-	var needed: int = int(ceil((start_y - target_y) / drop))
-	needed = clamp(needed, 1, min(tunnel_ramp_max_cells, seq.size() - 1))
+		_tunnel_ramp_dir[idx] = dir
+		_tunnel_floor_max_y[idx] = hi
+		_tunnel_floor_min_y[idx] = lo
+		_tunnel_mask[idx] = 1
 
-	for i in range(needed):
-		var a_pos: Vector2i = seq[i]
-		var b_pos: Vector2i = seq[i + 1]
-		var a_idx: int = _idx2(a_pos.x, a_pos.y, n)
-		var dir: int = _dir_from_to(a_pos, b_pos)
+		if lo <= _tunnel_base_floor_y + 0.001:
+			break
 
-		var high: float = max(target_y, start_y - float(i) * drop)
-		var low: float = max(target_y, start_y - float(i + 1) * drop)
+		var next: Vector2i = _neighbor_of(cur.x, cur.y, dir)
+		if not _in_bounds(next.x, next.y, n):
+			break
 
-		_tunnel_ramp_dir[a_idx] = dir
-		_tunnel_floor_max_y[a_idx] = high
-		_tunnel_floor_min_y[a_idx] = low
+		cur = next
+		hi = lo
 
-	var after_idx: int = _idx2(seq[needed].x, seq[needed].y, n)
-	_tunnel_set_flat_cell(after_idx)
+	var end_idx: int = _idx2(cur.x, cur.y, n)
+	_tunnel_ramp_dir[end_idx] = TUNNEL_DIR_NONE
+	_tunnel_set_flat_cell(end_idx, _tunnel_base_floor_y)
+	_tunnel_mask[end_idx] = 1
+	return cur
 
 func _tunnel_corner_floors(idx: int, _n: int) -> PackedFloat32Array:
 	var f := PackedFloat32Array([
-		_tunnel_floor_resolved,
-		_tunnel_floor_resolved,
-		_tunnel_floor_resolved,
-		_tunnel_floor_resolved
+		_tunnel_base_floor_y,
+		_tunnel_base_floor_y,
+		_tunnel_base_floor_y,
+		_tunnel_base_floor_y
 	])
 
 	var dir: int = int(_tunnel_ramp_dir[idx])
@@ -1133,30 +1218,84 @@ func _tunnel_corner_floors(idx: int, _n: int) -> PackedFloat32Array:
 
 	return f
 
+func _tunnel_ceil_edge_pair(idx: int, edge: int, tunnel_height_y: float) -> Vector2:
+	var floors: PackedFloat32Array = _tunnel_corner_floors(idx, 0)
+	var c := Vector4(
+		floors[0] + tunnel_height_y,
+		floors[1] + tunnel_height_y,
+		floors[2] + tunnel_height_y,
+		floors[3] + tunnel_height_y
+	)
+	return _edge_pair(c, edge)
+
+func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Vector2i]:
+	if start == goal:
+		return [start]
+
+	var open: Array[Vector2i] = [start]
+	var came_from: Dictionary = {}
+	var g: Dictionary = {start: 0.0}
+	var f: Dictionary = {start: float(abs(start.x - goal.x) + abs(start.y - goal.y))}
+	var last_dir: Dictionary = {}
+
+	while open.size() > 0:
+		var best_i: int = 0
+		var best_f: float = f.get(open[0], 1.0e20)
+		for i in range(1, open.size()):
+			var p := open[i]
+			var fp: float = f.get(p, 1.0e20)
+			if fp < best_f:
+				best_f = fp
+				best_i = i
+
+		var current: Vector2i = open.pop_at(best_i)
+		if current == goal:
+			var out: Array[Vector2i] = [current]
+			while came_from.has(current):
+				current = came_from[current]
+				out.push_back(current)
+			out.reverse()
+			return out
+
+		for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+			var nb: Vector2i = _neighbor_of(current.x, current.y, dir)
+			if not _in_bounds(nb.x, nb.y, n):
+				continue
+			if not _edge_is_open_at_ceil(n, current, nb, ceil_y):
+				continue
+
+			var tentative: float = g.get(current, 1.0e20) + 1.0
+			if last_dir.has(current) and int(last_dir[current]) != dir:
+				tentative += tunnel_turn_penalty
+
+			if tentative < g.get(nb, 1.0e20):
+				came_from[nb] = current
+				last_dir[nb] = dir
+				g[nb] = tentative
+				var h: float = float(abs(nb.x - goal.x) + abs(nb.y - goal.y))
+				f[nb] = tentative + h
+				if not open.has(nb):
+					open.append(nb)
+
+	return []
+
 func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	_tunnel_arrays_resize(n)
 
 	if not enable_tunnels or tunnel_count <= 0:
 		return
 
-	var ceil_y: float = _tunnel_ceil_resolved
-	if ceil_y == 0.0:
-		ceil_y = tunnel_floor_y + maxf(1.0, tunnel_height)
-
-	var levels := PackedInt32Array()
-	levels.resize(n * n)
 	var passable := PackedByteArray()
 	passable.resize(n * n)
-
 	for z in range(n):
 		for x in range(n):
 			var idx: int = _idx2(x, z, n)
-			levels[idx] = _h_to_level(_heights[idx])
-			passable[idx] = 1 if _tunnel_cell_passable(x, z, n, ceil_y) else 0
+			passable[idx] = 1 if _tunnel_cell_passable(x, z, n, _tunnel_ceil_resolved) else 0
 
 	var tries: int = 0
 	var built: int = 0
 	var tunnel_cells: Array[int] = []
+	var entrances: Array[Vector2i] = []
 
 	while built < tunnel_count and tries < tunnel_count * 12:
 		tries += 1
@@ -1174,95 +1313,33 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 		if manhattan < maxi(6, n - 2):
 			continue
 
-		var path: Array[Vector2i] = _bfs_tunnel_path(a, b, n, passable, levels, ceil_y, rng)
-		if path.size() < tunnel_min_len_cells:
-			continue
-
-		for p in path:
-			var idx_p: int = _idx2(p.x, p.y, n)
-			if _tunnel_mask[idx_p] == 0 and passable[idx_p] != 0:
-				_mark_tunnel_cell(p.x, p.y, n)
-				tunnel_cells.append(idx_p)
-
-		var r: int = maxi(0, tunnel_radius_cells)
-		if r > 0 and path.size() > 6:
-			for pi in range(2, path.size() - 2):
-				var p2: Vector2i = path[pi]
-				for dz in range(-r, r + 1):
-					for dx in range(-r, r + 1):
-						if abs(dx) + abs(dz) > r:
-							continue
-						var xx: int = p2.x + dx
-						var zz: int = p2.y + dz
-						if _in_bounds(xx, zz, n):
-							var idx_wide: int = _idx2(xx, zz, n)
-							if _tunnel_mask[idx_wide] == 0 and passable[idx_wide] != 0:
-								_mark_tunnel_cell(xx, zz, n)
-								tunnel_cells.append(idx_wide)
-
 		var a_idx: int = _idx2(a.x, a.y, n)
 		var b_idx: int = _idx2(b.x, b.y, n)
 
 		if built == 0:
-			_tunnel_hole_mask[a_idx] = 1
-		_tunnel_hole_mask[b_idx] = 1
-
-		if path.size() >= 2:
-			if built == 0:
-				var p1: Vector2i = path[1]
-				_tunnel_entrance_dir[a_idx] = _dir_from_to(a, p1)
-			var p_lastm1: Vector2i = path[path.size() - 2]
-			_tunnel_entrance_dir[b_idx] = _dir_from_to(b, p_lastm1)
-
-		_tunnel_stamp_entrance_ramp(a_idx, path, n)
-		var reverse_path: Array = path.duplicate()
-		reverse_path.reverse()
-		_tunnel_stamp_entrance_ramp(b_idx, reverse_path, n)
+			entrances.append(a)
+		entrances.append(b)
 
 		built += 1
 
-	if tunnel_cells.is_empty():
+	if entrances.is_empty():
 		return
 
-	var passable_cells: Array[int] = []
-	for i in range(n * n):
-		if passable[i] != 0:
-			passable_cells.append(i)
+	_choose_tunnel_base_depth(n, entrances)
 
-	var extra_targets: int = maxi(0, tunnel_extra_outpoints)
-	for _k in range(extra_targets):
-		var best_idx: int = -1
-		var best_dist: int = -1
-		for idx_c in passable_cells:
-			if _tunnel_mask[idx_c] != 0:
-				continue
-			var cx: int = idx_c % n
-			var cz: int = int(float(idx_c) / float(n))
-			var min_dist: int = 2147483647
-			for idx_t in tunnel_cells:
-				var tx: int = idx_t % n
-				var tz: int = int(float(idx_t) / float(n))
-				var dist: int = abs(cx - tx) + abs(cz - tz)
-				if dist < min_dist:
-					min_dist = dist
-			if min_dist > best_dist:
-				best_dist = min_dist
-				best_idx = idx_c
+	var endpoints: Array[Vector2i] = []
+	for entrance in entrances:
+		var dir: int = _pick_entrance_dir(n, entrance)
+		endpoints.append(_tunnel_stamp_entrance_ramp(n, entrance, dir))
 
-		if best_idx == -1:
-			break
-
-		var target := Vector2i(best_idx % n, int(float(best_idx) / float(n)))
-		var start_idx: int = tunnel_cells[rng.randi_range(0, tunnel_cells.size() - 1)]
-		var start := Vector2i(start_idx % n, int(float(start_idx) / float(n)))
-		var path_extra: Array[Vector2i] = _bfs_tunnel_path(start, target, n, passable, levels, ceil_y, rng)
-		if path_extra.is_empty():
-			continue
-		for p_extra in path_extra:
-			var idx_extra: int = _idx2(p_extra.x, p_extra.y, n)
-			if _tunnel_mask[idx_extra] == 0 and passable[idx_extra] != 0:
-				_mark_tunnel_cell(p_extra.x, p_extra.y, n)
-				tunnel_cells.append(idx_extra)
+	for i in range(1, endpoints.size()):
+		var path: Array[Vector2i] = _a_star(n, endpoints[i - 1], endpoints[i], _tunnel_base_ceil_y)
+		for p in path:
+			var idx_path: int = _idx2(p.x, p.y, n)
+			_tunnel_mask[idx_path] = 1
+			_tunnel_ramp_dir[idx_path] = TUNNEL_DIR_NONE
+			_tunnel_set_flat_cell(idx_path, _tunnel_base_floor_y)
+			tunnel_cells.append(idx_path)
 
 func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
 	var dx: int = b.x - a.x
@@ -1857,13 +1934,16 @@ func _build_mesh_and_collision(n: int) -> void:
 						var b_w: Vector2 = _edge_pair(cB, 1)
 						var top0: float = maxf(a_e.x, b_w.x)
 						var top1: float = maxf(a_e.y, b_w.y)
-						if top0 > tunnel_ceil_y + eps or top1 > tunnel_ceil_y + eps:
+						var hole_idx: int = idx_a if a_is_hole else idx_b
+						var hole_edge: int = 0 if a_is_hole else 1
+						var ceil_pair: Vector2 = _tunnel_ceil_edge_pair(hole_idx, hole_edge, tunnel_ceil_y - _tunnel_floor_resolved)
+						if top0 > ceil_pair.x + eps or top1 > ceil_pair.y + eps:
 							if b_is_hole:
 								# Face into the +X cell (the hole is in cell B)
-								_add_wall_x_between(st, x1, z0, z1, tunnel_ceil_y, tunnel_ceil_y, top0, top1, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv)
 							else:
 								# Face into the -X cell (the hole is in cell A) by flipping z order
-								_add_wall_x_between(st, x1, z1, z0, tunnel_ceil_y, tunnel_ceil_y, top1, top0, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv)
 						continue
 				if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
 					pass
@@ -1897,13 +1977,16 @@ func _build_mesh_and_collision(n: int) -> void:
 						var c_n: Vector2 = _edge_pair(cC, 2)
 						var top0z: float = maxf(a_s.x, c_n.x)
 						var top1z: float = maxf(a_s.y, c_n.y)
-						if top0z > tunnel_ceil_y + eps or top1z > tunnel_ceil_y + eps:
+						var hole_idx_z: int = idx_c if c_is_hole else idx_d
+						var hole_edge_z: int = 3 if c_is_hole else 2
+						var ceil_pair_z: Vector2 = _tunnel_ceil_edge_pair(hole_idx_z, hole_edge_z, tunnel_ceil_y - _tunnel_floor_resolved)
+						if top0z > ceil_pair_z.x + eps or top1z > ceil_pair_z.y + eps:
 							if d_is_hole:
 								# Face into the +Z cell (the hole is in cell D)
-								_add_wall_z_between(st, z1, x0, x1, tunnel_ceil_y, tunnel_ceil_y, top0z, top1z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, z1, x0, x1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv)
 							else:
 								# Face into the -Z cell (the hole is in cell C) by flipping x order
-								_add_wall_z_between(st, z1, x1, x0, tunnel_ceil_y, tunnel_ceil_y, top1z, top0z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, z1, x1, x0, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv)
 						continue
 				if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
 					pass
@@ -1994,10 +2077,10 @@ func _build_tunnel_mesh(n: int) -> void:
 
 			var is_entrance: bool = tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
 
-			var has_w: bool = (x > 0) and (_tunnel_mask[_idx2(x - 1, z, n)] != 0)
-			var has_e: bool = (x < n - 1) and (_tunnel_mask[_idx2(x + 1, z, n)] != 0)
-			var has_n: bool = (z > 0) and (_tunnel_mask[_idx2(x, z - 1, n)] != 0)
-			var has_s: bool = (z < n - 1) and (_tunnel_mask[_idx2(x, z + 1, n)] != 0)
+			var has_w: bool = false
+			var has_e: bool = false
+			var has_n: bool = false
+			var has_s: bool = false
 
 			var floors: PackedFloat32Array = _tunnel_corner_floors(idx, n)
 			var c00: float = floors[0] + tunnel_height_y
@@ -2026,6 +2109,12 @@ func _build_tunnel_mesh(n: int) -> void:
 					tunnel_color
 				)
 
+			if x > 0 and _tunnel_mask[_idx2(x - 1, z, n)] != 0:
+				var nb_floors_w: PackedFloat32Array = _tunnel_corner_floors(_idx2(x - 1, z, n), n)
+				var edge_a_w: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 1)
+				var edge_b_w: Vector2 = _edge_pair(Vector4(nb_floors_w[0], nb_floors_w[1], nb_floors_w[2], nb_floors_w[3]), 0)
+				has_w = _edges_match(edge_a_w, edge_b_w)
+
 			if not has_w:
 				_add_quad(
 					st,
@@ -2036,6 +2125,12 @@ func _build_tunnel_mesh(n: int) -> void:
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+			if x < n - 1 and _tunnel_mask[_idx2(x + 1, z, n)] != 0:
+				var nb_floors_e: PackedFloat32Array = _tunnel_corner_floors(_idx2(x + 1, z, n), n)
+				var edge_a_e: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 0)
+				var edge_b_e: Vector2 = _edge_pair(Vector4(nb_floors_e[0], nb_floors_e[1], nb_floors_e[2], nb_floors_e[3]), 1)
+				has_e = _edges_match(edge_a_e, edge_b_e)
+
 			if not has_e:
 				_add_quad(
 					st,
@@ -2046,6 +2141,12 @@ func _build_tunnel_mesh(n: int) -> void:
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+			if z > 0 and _tunnel_mask[_idx2(x, z - 1, n)] != 0:
+				var nb_floors_n: PackedFloat32Array = _tunnel_corner_floors(_idx2(x, z - 1, n), n)
+				var edge_a_n: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 2)
+				var edge_b_n: Vector2 = _edge_pair(Vector4(nb_floors_n[0], nb_floors_n[1], nb_floors_n[2], nb_floors_n[3]), 3)
+				has_n = _edges_match(edge_a_n, edge_b_n)
+
 			if not has_n:
 				_add_quad(
 					st,
@@ -2056,6 +2157,12 @@ func _build_tunnel_mesh(n: int) -> void:
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+			if z < n - 1 and _tunnel_mask[_idx2(x, z + 1, n)] != 0:
+				var nb_floors_s: PackedFloat32Array = _tunnel_corner_floors(_idx2(x, z + 1, n), n)
+				var edge_a_s: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 3)
+				var edge_b_s: Vector2 = _edge_pair(Vector4(nb_floors_s[0], nb_floors_s[1], nb_floors_s[2], nb_floors_s[3]), 2)
+				has_s = _edges_match(edge_a_s, edge_b_s)
+
 			if not has_s:
 				_add_quad(
 					st,
