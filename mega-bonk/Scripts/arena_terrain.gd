@@ -72,6 +72,7 @@ class_name BlockyTerrain
 @export var tunnel_ramp_drop: float = 8.0
 @export_range(4, 64, 1) var tunnel_ramp_max_steps: int = 16
 @export var tunnel_turn_penalty: float = 3.0
+@export_enum("Shaft", "Ramp") var tunnel_entrance_mode: int = 0
 @export var tunnel_floor_clearance_from_box: float = 2.0
 @export var tunnel_ceiling_clearance: float = 1.0
 @export var tunnel_edge_clearance: float = 0.5
@@ -1125,6 +1126,13 @@ func _tunnel_set_flat_cell(idx: int, y: float) -> void:
 
 func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector2i:
 	var e_idx: int = _idx2(entrance.x, entrance.y, n)
+	if tunnel_entrance_mode == 0:
+		_tunnel_mask[e_idx] = 1
+		if tunnel_carve_surface_holes:
+			_tunnel_hole_mask[e_idx] = 1
+		_tunnel_set_flat_cell(e_idx, _tunnel_base_floor_y)
+		_tunnel_ramp_dir[e_idx] = TUNNEL_DIR_NONE
+		return entrance
 	var start_floor: float = _heights[e_idx] - 0.5
 
 	var cur := entrance
@@ -1316,7 +1324,9 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 	var endpoints: Array[Vector2i] = []
 	for entrance in entrances:
-		var dir: int = _pick_entrance_dir(n, entrance)
+		var dir: int = RAMP_EAST
+		if tunnel_entrance_mode == 1:
+			dir = _pick_entrance_dir(n, entrance)
 		endpoints.append(_tunnel_stamp_entrance_ramp(n, entrance, dir))
 
 	for i in range(1, endpoints.size()):
