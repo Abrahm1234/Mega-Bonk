@@ -752,7 +752,8 @@ func generate() -> void:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
 
-	_build_mesh_and_collision()
+	_build_mesh_and_collision(n)
+	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
@@ -1476,8 +1477,9 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 # Mesh building
 # -----------------------------
-func _build_mesh_and_collision() -> void:
-	var n: int = max(2, cells_per_side)
+func _build_mesh_and_collision(n: int) -> void:
+	n = max(2, n)
+	var tunnel_ceil_y: float = tunnel_floor_y + tunnel_height
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -1487,9 +1489,6 @@ func _build_mesh_and_collision() -> void:
 	var uv_scale_wall: float = tiles_per_cell
 	var ramps_openings: bool = enable_ramps
 	var want_levels: int = maxi(1, ramp_step_count)
-	var tunnel_ceil_y: float = tunnel_floor_y + maxf(1.0, tunnel_height)
-	var tunnel_wall_col := terrain_color
-	tunnel_wall_col.a = SURF_WALL
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
@@ -1567,13 +1566,26 @@ func _build_mesh_and_collision() -> void:
 				if enable_tunnels and tunnel_carve_surface_holes:
 					var a_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_a] != 0
 					var b_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_b] != 0
-					if a_is_hole and b_is_hole:
+					if a_is_hole or b_is_hole:
+						# Rim wall from terrain surface down to tunnel ceiling (instead of skipping hole-adjacent walls)
+						if a_is_hole and b_is_hole:
+							continue
+						var cB: Vector4 = _cell_corners(x + 1, z)
+						var a_e: Vector2 = _edge_pair(cA, 0)
+						var b_w: Vector2 = _edge_pair(cB, 1)
+						var top0: float = maxf(a_e.x, b_w.x)
+						var top1: float = maxf(a_e.y, b_w.y)
+						if top0 > tunnel_ceil_y + eps or top1 > tunnel_ceil_y + eps:
+							if b_is_hole:
+								# Face into the +X cell (the hole is in cell B)
+								_add_wall_x_between(st, x1, z0, z1, tunnel_ceil_y, tunnel_ceil_y, top0, top1, uv_scale_wall, wall_subdiv)
+							else:
+								# Face into the -X cell (the hole is in cell A) by flipping z order
+								_add_wall_x_between(st, x1, z1, z0, tunnel_ceil_y, tunnel_ceil_y, top1, top0, uv_scale_wall, wall_subdiv)
 						continue
-					if a_is_hole != b_is_hole:
-						var edge: Vector2 = _edge_pair(cA, 0) if not a_is_hole else _edge_pair(_cell_corners(x + 1, z), 1)
-						_add_wall_x_colored(st, x1, z0, z1, edge.x, edge.y, tunnel_ceil_y, uv_scale_wall, tunnel_wall_col)
-						continue
-				if (not ramps_openings) or (not _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
+				if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
+					pass
+				else:
 					var cB := _cell_corners(x + 1, z)
 					var a_e := _edge_pair(cA, 0)
 					var b_w := _edge_pair(cB, 1)
@@ -1594,13 +1606,26 @@ func _build_mesh_and_collision() -> void:
 				if enable_tunnels and tunnel_carve_surface_holes:
 					var c_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_c] != 0
 					var d_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_d] != 0
-					if c_is_hole and d_is_hole:
+					if c_is_hole or d_is_hole:
+						# Rim wall from terrain surface down to tunnel ceiling (instead of skipping hole-adjacent walls)
+						if c_is_hole and d_is_hole:
+							continue
+						var cC: Vector4 = _cell_corners(x, z + 1)
+						var a_s: Vector2 = _edge_pair(cA, 3)
+						var c_n: Vector2 = _edge_pair(cC, 2)
+						var top0z: float = maxf(a_s.x, c_n.x)
+						var top1z: float = maxf(a_s.y, c_n.y)
+						if top0z > tunnel_ceil_y + eps or top1z > tunnel_ceil_y + eps:
+							if d_is_hole:
+								# Face into the +Z cell (the hole is in cell D)
+								_add_wall_z_between(st, z1, x0, x1, tunnel_ceil_y, tunnel_ceil_y, top0z, top1z, uv_scale_wall, wall_subdiv)
+							else:
+								# Face into the -Z cell (the hole is in cell C) by flipping x order
+								_add_wall_z_between(st, z1, x1, x0, tunnel_ceil_y, tunnel_ceil_y, top1z, top0z, uv_scale_wall, wall_subdiv)
 						continue
-					if c_is_hole != d_is_hole:
-						var edge_z: Vector2 = _edge_pair(cA, 3) if not c_is_hole else _edge_pair(_cell_corners(x, z + 1), 2)
-						_add_wall_z_colored(st, z1, x0, x1, edge_z.x, edge_z.y, tunnel_ceil_y, uv_scale_wall, tunnel_wall_col)
-						continue
-				if (not ramps_openings) or (not _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels)):
+				if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
+					pass
+				else:
 					var cC := _cell_corners(x, z + 1)
 					var a_s := _edge_pair(cA, 3)
 					var c_n := _edge_pair(cC, 2)
@@ -1626,7 +1651,6 @@ func _build_mesh_and_collision() -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-	_build_tunnel_mesh(n)
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
@@ -1719,28 +1743,8 @@ func _build_tunnel_mesh(n: int) -> void:
 			if not has_s:
 				_add_wall_z_colored(st, z1, x0, x1, ceil_y, ceil_y, floor_y, uv_scale, tunnel_color)
 
-			if is_entrance and tunnel_carve_surface_holes:
-				var top_corners: Vector4 = _cell_corners(x, z)
-				if not has_w:
-					var top_w: Vector2 = _edge_pair(top_corners, 1)
-					var top_wy: float = maxf(top_w.x, top_w.y)
-					if top_wy > ceil_y + 0.01:
-						_add_wall_x_colored(st, x0, z0, z1, top_wy, top_wy, ceil_y, uv_scale, tunnel_color)
-				if not has_e:
-					var top_e: Vector2 = _edge_pair(top_corners, 0)
-					var top_ey: float = maxf(top_e.x, top_e.y)
-					if top_ey > ceil_y + 0.01:
-						_add_wall_x_colored(st, x1, z1, z0, top_ey, top_ey, ceil_y, uv_scale, tunnel_color)
-				if not has_n:
-					var top_n: Vector2 = _edge_pair(top_corners, 2)
-					var top_ny: float = maxf(top_n.x, top_n.y)
-					if top_ny > ceil_y + 0.01:
-						_add_wall_z_colored(st, z0, x1, x0, top_ny, top_ny, ceil_y, uv_scale, tunnel_color)
-				if not has_s:
-					var top_s: Vector2 = _edge_pair(top_corners, 3)
-					var top_sy: float = maxf(top_s.x, top_s.y)
-					if top_sy > ceil_y + 0.01:
-						_add_wall_z_colored(st, z1, x0, x1, top_sy, top_sy, ceil_y, uv_scale, tunnel_color)
+			# Shaft rim walls are generated by the terrain mesh (_build_mesh_and_collision),
+			# so we do not add extra surface-to-ceiling liners here (avoids double walls / z-fighting).
 
 	st.generate_normals()
 	var mesh: ArrayMesh = st.commit()
