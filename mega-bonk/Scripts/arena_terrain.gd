@@ -128,6 +128,9 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_fit_to_face: bool = true
 @export var wall_decor_max_scale: float = 3.0
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
+@export var wall_decor_flip_outward: bool = true
+@export var wall_decor_min_world_y: float = -INF
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2069,19 +2072,23 @@ func _ensure_wall_decor_root() -> void:
 		add_child(_wall_decor_root)
 
 func _basis_from_face(face: WallFace) -> Basis:
-	var u: Vector3 = face.b - face.a
-	var v_raw: Vector3 = face.d - face.a
-	if u.length() < 0.0001 or v_raw.length() < 0.0001:
-		return Basis()
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length() < 0.0001:
+		n = face.normal.normalized()
+	else:
+		n = n.normalized()
 
-	u = u.normalized()
-	var n: Vector3 = face.normal.normalized()
+	if wall_decor_flip_outward:
+		n = -n
+
+	var u: Vector3 = Vector3.UP.cross(n)
+	if u.length() < 0.0001:
+		u = Vector3.RIGHT
+	else:
+		u = u.normalized()
+
 	var v: Vector3 = n.cross(u).normalized()
-
-	if v.dot(v_raw) < 0.0:
-		v = -v
-
-	n = u.cross(v).normalized()
 	return Basis(u, v, n)
 
 func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
@@ -2162,6 +2169,8 @@ func _rebuild_wall_decor() -> void:
 	)
 
 	for f: WallFace in faces_for_decor:
+		if f.center.y < wall_decor_min_world_y:
+			continue
 		if wall_decor_skip_trapezoids and f.is_trapezoid:
 			continue
 		if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
@@ -2207,6 +2216,8 @@ func _rebuild_wall_decor() -> void:
 		return
 
 	for f2: WallFace in faces_for_decor:
+		if f2.center.y < wall_decor_min_world_y:
+			continue
 		if wall_decor_skip_trapezoids and f2.is_trapezoid:
 			continue
 		if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
@@ -2235,17 +2246,21 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	if wall_decor_fit_to_face:
 		sx = clamp(face.width / ref_w, 0.1, wall_decor_max_scale)
 		sy = clamp(face.height / ref_h, 0.1, wall_decor_max_scale)
+	var sz: float = wall_decor_depth_scale
 
 	var aabb_center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var aabb_center_y: float = aabb.position.y + aabb.size.y * 0.5
-	var back_z: float = aabb.position.z
+	var attach_z: float = aabb.position.z
+	if wall_decor_flip_outward:
+		attach_z = aabb.position.z + aabb.size.z
 
-	var local_correction := Vector3(-aabb_center_x * sx, -aabb_center_y * sy, -back_z)
+	var local_correction := Vector3(-aabb_center_x * sx, -aabb_center_y * sy, -attach_z * sz)
 	var world_correction := rot * local_correction
 
-	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z)
+	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
-	var pos: Vector3 = face.center + face.normal.normalized() * outward_offset + world_correction
+	var outward: Vector3 = rot.z.normalized()
+	var pos: Vector3 = face.center + outward * outward_offset + world_correction
 	return Transform3D(decor_basis, pos)
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
