@@ -2190,6 +2190,26 @@ func _axis_min3(v: Vector3) -> int:
 		return 1
 	return 2
 
+func _infer_floor_mesh_normal_axis(mesh: Mesh) -> int:
+	# Prefer the mesh's thickness axis (most reliable for floor tiles that have big side walls).
+	# If no axis is clearly thinner than the others, fall back to an area-weighted dominant normal.
+	if mesh == null:
+		return 1
+	var aabb := mesh.get_aabb()
+	var abs_size := Vector3(absf(aabb.size.x), absf(aabb.size.y), absf(aabb.size.z))
+
+	# Find the smallest and second-smallest extents to detect a "clearly thin" axis.
+	var dims := [abs_size.x, abs_size.y, abs_size.z]
+	dims.sort()
+	var s0 := float(dims[0])
+	var s1 := maxf(float(dims[1]), 0.000001)
+	var thin_ratio := s0 / s1
+
+	if thin_ratio <= 0.75:
+		return _axis_min3(abs_size)
+
+	return _dominant_normal_axis_for_mesh(mesh)
+
 func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
 	if mesh == null or mesh.get_surface_count() <= 0:
 		return 1
@@ -2233,91 +2253,98 @@ func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
 	return axis
 
 func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use_top: bool) -> Dictionary:
-	if mesh == null or mesh.get_surface_count() <= 0:
-		return {"valid": false}
+	# Robustly estimate the planar bounds of the top/bottom cap.
+	# This is used to scale decor so the visible cap fills the cell, even if the mesh has beveled sides
+	# or a wider underside. We avoid latching onto tiny outlier spikes by sampling a band near the cap.
+	var out: Dictionary = {
+		"valid": false,
+		"size_w": 0.0,
+		"size_d": 0.0,
+		"center_w": 0.0,
+		"center_d": 0.0,
+		"plane_n": 0.0
+	}
+	if mesh == null:
+		return out
 
-	var rid := mesh.get_rid()
-	var key := "%s_%d_%d_%d_%d" % [str(rid), int(normal_axis), int(axis0), int(axis1), int(use_top)]
+	# Cache per mesh + axis + cap side.
+	var key := str(mesh.get_rid().get_id()) + ":" + str(normal_axis) + ":" + str(axis0) + ":" + str(axis1) + ":" + (use_top ? "t" : "b")
 	if _floor_mesh_cap_cache.has(key):
 		return _floor_mesh_cap_cache[key]
 
+	var verts: PackedVector3Array
+	if mesh.get_surface_count() > 0:
+		var arrays := mesh.surface_get_arrays(0)
+		verts = arrays[Mesh.ARRAY_VERTEX]
+	else:
+		verts = PackedVector3Array()
+
+	if verts.size() < 3:
+		_floor_mesh_cap_cache[key] = out
+		return out
+
+	# Find min/max along the normal axis.
 	var min_n := INF
 	var max_n := -INF
-	var mdt := MeshDataTool.new()
-	for s in range(mesh.get_surface_count()):
-		if mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
-			continue
-		if mdt.create_from_surface(mesh, s) != OK:
-			continue
-		var vc := mdt.get_vertex_count()
-		for i in range(vc):
-			var p: Vector3 = mdt.get_vertex(i)
-			var nval: float = p[normal_axis]
-			if nval < min_n:
-				min_n = nval
-			if nval > max_n:
-				max_n = nval
-		mdt.clear()
+	for p in verts:
+		var nval := float(p[normal_axis])
+		min_n = minf(min_n, nval)
+		max_n = maxf(max_n, nval)
 
-	if max_n <= -INF * 0.5:
-		var bad := {"valid": false}
-		_floor_mesh_cap_cache[key] = bad
-		return bad
+	var thickness := max_n - min_n
+	# Sample a band near the cap instead of the single extreme plane.
+	# This avoids tiny outlier spikes selecting a near-zero cap, which would explode scaling.
+	var band := maxf(0.002, thickness * 0.06)  # 6% of thickness, min 2mm
 
-	var plane_n: float = max_n if use_top else min_n
-	var thickness: float = max_n - min_n
-	var eps: float = max(0.0001, thickness * 0.02)
+	var lo := (use_top ? (max_n - band) : min_n)
+	var hi := (use_top ? max_n : (min_n + band))
 
-	var min_w := INF
-	var max_w := -INF
-	var min_d := INF
-	var max_d := -INF
+	var min0 := INF
+	var max0 := -INF
+	var min1 := INF
+	var max1 := -INF
 	var found := 0
 
-	for s2 in range(mesh.get_surface_count()):
-		if mesh.surface_get_primitive_type(s2) != Mesh.PRIMITIVE_TRIANGLES:
-			continue
-		if mdt.create_from_surface(mesh, s2) != OK:
-			continue
-		var vc2 := mdt.get_vertex_count()
-		for j in range(vc2):
-			var p2: Vector3 = mdt.get_vertex(j)
-			if absf(p2[normal_axis] - plane_n) <= eps:
-				var wv: float = p2[axis0]
-				var dv: float = p2[axis1]
-				if wv < min_w:
-					min_w = wv
-				if wv > max_w:
-					max_w = wv
-				if dv < min_d:
-					min_d = dv
-				if dv > max_d:
-					max_d = dv
-				found += 1
-		mdt.clear()
+	for p2 in verts:
+		var nval2 := float(p2[normal_axis])
+		if use_top:
+			if nval2 < lo:
+				continue
+		else:
+			if nval2 > hi:
+				continue
 
+		var a0 := float(p2[axis0])
+		var a1 := float(p2[axis1])
+		min0 = minf(min0, a0)
+		max0 = maxf(max0, a0)
+		min1 = minf(min1, a1)
+		max1 = maxf(max1, a1)
+		found += 1
+
+	# Need enough points to represent an actual cap.
 	if found < 3:
-		var bad2 := {"valid": false}
-		_floor_mesh_cap_cache[key] = bad2
-		return bad2
+		_floor_mesh_cap_cache[key] = out
+		return out
 
-	var cap_w: float = max_w - min_w
-	var cap_d: float = max_d - min_d
-	if cap_w <= 0.00001 or cap_d <= 0.00001:
-		var bad3 := {"valid": false}
-		_floor_mesh_cap_cache[key] = bad3
-		return bad3
+	var size_w := max0 - min0
+	var size_d := max1 - min1
 
-	var result := {
-		"valid": true,
-		"plane_n": plane_n,
-		"size_w": cap_w,
-		"size_d": cap_d,
-		"center_w": (min_w + max_w) * 0.5,
-		"center_d": (min_d + max_d) * 0.5
-	}
-	_floor_mesh_cap_cache[key] = result
-	return result
+	# Reject pathological caps (near-zero planar size).
+	if size_w <= 0.001 or size_d <= 0.001:
+		_floor_mesh_cap_cache[key] = out
+		return out
+
+	out["valid"] = true
+	out["size_w"] = size_w
+	out["size_d"] = size_d
+	out["center_w"] = (min0 + max0) * 0.5
+	out["center_d"] = (min1 + max1) * 0.5
+	# Anchor to the true extreme plane so the cap sits flush.
+	out["plane_n"] = (use_top ? max_n : min_n)
+
+	_floor_mesh_cap_cache[key] = out
+	return out
 
 func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
 	var axes := PackedInt32Array()
@@ -2571,7 +2598,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 
 	var normal_axis: int = floor_decor_mesh_normal_axis
 	if normal_axis < 0:
-		normal_axis = _dominant_normal_axis_for_mesh(mesh)
+		normal_axis = _infer_floor_mesh_normal_axis(mesh)
 	var plane_axes := _plane_axes_from_normal_axis(normal_axis)
 	var axis0: int = plane_axes[0]
 	var axis1: int = plane_axes[1]
@@ -2625,7 +2652,8 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	var size_w: float
 	var size_d: float
 	var anchor: Vector3 = Vector3.ZERO
-	if bool(cap.get("valid", false)):
+	var cap_valid := bool(cap.get("valid", false))
+	if cap_valid:
 		var cap_w: float = float(cap.get("size_w", 0.0))
 		var cap_d: float = float(cap.get("size_d", 0.0))
 		var cap_center_w: float = float(cap.get("center_w", 0.0))
@@ -2638,10 +2666,14 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 			cap_center_d = float(cap.get("center_w", 0.0))
 		size_w = _safe_dim(cap_w - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(cap_d - 2.0 * floor_decor_local_margin)
-		anchor[width_axis] = cap_center_w
-		anchor[depth_axis] = cap_center_d
-		anchor[normal_axis] = cap_plane_n
-	else:
+		# If cap bounds collapse (e.g., outlier spike), fall back to full AABB to avoid exploding scales.
+		if size_w <= 0.001 or size_d <= 0.001:
+			cap_valid = false
+		if cap_valid:
+			anchor[width_axis] = cap_center_w
+			anchor[depth_axis] = cap_center_d
+			anchor[normal_axis] = cap_plane_n
+	if not cap_valid:
 		size_w = _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
 		anchor = aabb.position + aabb.size * 0.5
