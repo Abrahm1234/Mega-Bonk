@@ -144,6 +144,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
+@export var floor_decor_local_margin: float = 0.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2480,11 +2481,14 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		cols[depth_axis] = -cols[depth_axis]
 		basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
 
-	var size_w := _safe_dim(aabb.size[width_axis])
-	var size_d := _safe_dim(aabb.size[depth_axis])
+	var size_w := _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
+	var size_d := _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
 	var sx := (face_w / size_w) * floor_decor_fill_ratio
 	var sd := (face_d / size_d) * floor_decor_fill_ratio
 	if floor_decor_max_scale > 0.0:
+		var needed := maxf(sx, sd)
+		if needed > floor_decor_max_scale + 0.0001:
+			push_warning("Floor decor scale capped: needed=%s max=%s" % [str(needed), str(floor_decor_max_scale)])
 		sx = minf(sx, floor_decor_max_scale)
 		sd = minf(sd, floor_decor_max_scale)
 
