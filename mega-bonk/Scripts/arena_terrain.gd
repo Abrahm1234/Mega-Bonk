@@ -209,6 +209,7 @@ class WallFace:
 var _wall_faces: Array[WallFace] = []
 var _wall_decor_root: Node3D = null
 var _floor_mesh_normal_axis_cache: Dictionary = {}
+var _floor_mesh_cap_cache: Dictionary = {}
 
 class FloorFace extends RefCounted:
 	var a: Vector3
@@ -2231,6 +2232,93 @@ func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
 	_floor_mesh_normal_axis_cache[rid] = axis
 	return axis
 
+func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use_top: bool) -> Dictionary:
+	if mesh == null or mesh.get_surface_count() <= 0:
+		return {"valid": false}
+
+	var rid := mesh.get_rid()
+	var key := "%s_%d_%d_%d_%d" % [str(rid), normal_axis, axis0, axis1, use_top]
+	if _floor_mesh_cap_cache.has(key):
+		return _floor_mesh_cap_cache[key]
+
+	var min_n := INF
+	var max_n := -INF
+	var mdt := MeshDataTool.new()
+	for s in range(mesh.get_surface_count()):
+		if mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		if mdt.create_from_surface(mesh, s) != OK:
+			continue
+		var vc := mdt.get_vertex_count()
+		for i in range(vc):
+			var p: Vector3 = mdt.get_vertex(i)
+			var nval: float = p[normal_axis]
+			if nval < min_n:
+				min_n = nval
+			if nval > max_n:
+				max_n = nval
+		mdt.clear()
+
+	if max_n <= -INF * 0.5:
+		var bad := {"valid": false}
+		_floor_mesh_cap_cache[key] = bad
+		return bad
+
+	var plane_n: float = max_n if use_top else min_n
+	var thickness: float = max_n - min_n
+	var eps: float = max(0.0001, thickness * 0.02)
+
+	var min_w := INF
+	var max_w := -INF
+	var min_d := INF
+	var max_d := -INF
+	var found := 0
+
+	for s2 in range(mesh.get_surface_count()):
+		if mesh.surface_get_primitive_type(s2) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		if mdt.create_from_surface(mesh, s2) != OK:
+			continue
+		var vc2 := mdt.get_vertex_count()
+		for j in range(vc2):
+			var p2: Vector3 = mdt.get_vertex(j)
+			if absf(p2[normal_axis] - plane_n) <= eps:
+				var wv: float = p2[axis0]
+				var dv: float = p2[axis1]
+				if wv < min_w:
+					min_w = wv
+				if wv > max_w:
+					max_w = wv
+				if dv < min_d:
+					min_d = dv
+				if dv > max_d:
+					max_d = dv
+				found += 1
+		mdt.clear()
+
+	if found < 3:
+		var bad2 := {"valid": false}
+		_floor_mesh_cap_cache[key] = bad2
+		return bad2
+
+	var cap_w: float = max_w - min_w
+	var cap_d: float = max_d - min_d
+	if cap_w <= 0.00001 or cap_d <= 0.00001:
+		var bad3 := {"valid": false}
+		_floor_mesh_cap_cache[key] = bad3
+		return bad3
+
+	var result := {
+		"valid": true,
+		"plane_n": plane_n,
+		"size_w": cap_w,
+		"size_d": cap_d,
+		"center_w": (min_w + max_w) * 0.5,
+		"center_d": (min_d + max_d) * 0.5
+	}
+	_floor_mesh_cap_cache[key] = result
+	return result
+
 func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
 	var axes := PackedInt32Array()
 	for i in [0, 1, 2]:
@@ -2527,8 +2615,35 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		cols[depth_axis] = -cols[depth_axis]
 		basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
 
-	var size_w := _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
-	var size_d := _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
+	var cap_top := _mesh_cap_extents(mesh, normal_axis, axis0, axis1, true)
+	var cap_bottom := _mesh_cap_extents(mesh, normal_axis, axis0, axis1, false)
+	var cap := cap_top if not flipped else cap_bottom
+	var size_w: float
+	var size_d: float
+	var anchor := Vector3.ZERO
+	if cap.valid:
+		var cap_w := cap.size_w
+		var cap_d := cap.size_d
+		var cap_center_w := cap.center_w
+		var cap_center_d := cap.center_d
+		if width_axis == axis1:
+			cap_w = cap.size_d
+			cap_d = cap.size_w
+			cap_center_w = cap.center_d
+			cap_center_d = cap.center_w
+		size_w = _safe_dim(cap_w - 2.0 * floor_decor_local_margin)
+		size_d = _safe_dim(cap_d - 2.0 * floor_decor_local_margin)
+		anchor[width_axis] = cap_center_w
+		anchor[depth_axis] = cap_center_d
+		anchor[normal_axis] = cap.plane_n
+	else:
+		size_w = _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
+		size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
+		anchor = aabb.position + aabb.size * 0.5
+		if flipped:
+			anchor[normal_axis] = aabb.position[normal_axis]
+		else:
+			anchor[normal_axis] = aabb.position[normal_axis] + aabb.size[normal_axis]
 	var sx := (face_w / size_w) * floor_decor_fill_ratio
 	var sd := (face_d / size_d) * floor_decor_fill_ratio
 	if floor_decor_max_scale > 0.0:
@@ -2549,12 +2664,6 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	svec[normal_axis] = 1.0
 
 	basis = basis.scaled(svec)
-
-	var anchor := aabb.position + aabb.size * 0.5
-	if flipped:
-		anchor[normal_axis] = aabb.position[normal_axis] + aabb.size[normal_axis]
-	else:
-		anchor[normal_axis] = aabb.position[normal_axis]
 
 	var pos := face.center + n * floor_decor_offset
 	var xform := Transform3D(basis, pos)
