@@ -1989,22 +1989,29 @@ func _build_mesh_and_collision(n: int) -> void:
 								# Face into the -X cell (the hole is in cell A) by flipping z order
 								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv)
 						continue
-				if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
-					pass
-				else:
-					var cB := _cell_corners(x + 1, z)
-					var a_e := _edge_pair(cA, 0)
-					var b_w := _edge_pair(cB, 1)
+					if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
+						pass
+					else:
+						var cB := _cell_corners(x + 1, z)
+						var a_e := _edge_pair(cA, 0)
+						var b_w := _edge_pair(cB, 1)
 
-					var top0 := maxf(a_e.x, b_w.x)
-					var top1 := maxf(a_e.y, b_w.y)
-					var bot0 := minf(a_e.x, b_w.x)
-					var bot1 := minf(a_e.y, b_w.y)
+						var top0 := maxf(a_e.x, b_w.x)
+						var top1 := maxf(a_e.y, b_w.y)
+						var bot0 := minf(a_e.x, b_w.x)
+						var bot1 := minf(a_e.y, b_w.y)
 
-					if (top0 - bot0) > eps or (top1 - bot1) > eps:
-						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv
-						)
+						if (top0 - bot0) > eps or (top1 - bot1) > eps:
+							var mean_a: float = (a_e.x + a_e.y) * 0.5
+							var mean_b: float = (b_w.x + b_w.y) * 0.5
+							if mean_a >= mean_b:
+								_add_wall_x_between(
+									st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv
+								)
+							else:
+								_add_wall_x_between(
+									st, x1, z1, z0, bot1, bot0, top1, top0, uv_scale_wall, wall_subdiv
+								)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
@@ -2044,10 +2051,17 @@ func _build_mesh_and_collision(n: int) -> void:
 					var bot0z := minf(a_s.x, c_n.x)
 					var bot1z := minf(a_s.y, c_n.y)
 
-					if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
-						_add_wall_z_between(
-							st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
-						)
+						if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
+							var mean_a: float = (a_s.x + a_s.y) * 0.5
+							var mean_c: float = (c_n.x + c_n.y) * 0.5
+							if mean_a >= mean_c:
+								_add_wall_z_between(
+									st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
+								)
+							else:
+								_add_wall_z_between(
+									st, z1, x1, x0, bot1z, bot0z, top1z, top0z, uv_scale_wall, wall_subdiv
+								)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
