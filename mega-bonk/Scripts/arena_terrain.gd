@@ -2237,7 +2237,7 @@ func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use
 		return {"valid": false}
 
 	var rid := mesh.get_rid()
-	var key := "%s_%d_%d_%d_%d" % [str(rid), normal_axis, axis0, axis1, use_top]
+	var key := "%s_%d_%d_%d_%d" % [str(rid), int(normal_axis), int(axis0), int(axis1), int(use_top)]
 	if _floor_mesh_cap_cache.has(key):
 		return _floor_mesh_cap_cache[key]
 
