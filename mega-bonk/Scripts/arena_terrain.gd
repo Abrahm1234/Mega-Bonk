@@ -208,6 +208,7 @@ class WallFace:
 
 var _wall_faces: Array[WallFace] = []
 var _wall_decor_root: Node3D = null
+var _floor_mesh_normal_axis_cache: Dictionary = {}
 
 class FloorFace extends RefCounted:
 	var a: Vector3
@@ -2188,6 +2189,48 @@ func _axis_min3(v: Vector3) -> int:
 		return 1
 	return 2
 
+func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
+	if mesh == null or mesh.get_surface_count() <= 0:
+		return 1
+
+	var rid := mesh.get_rid()
+	if _floor_mesh_normal_axis_cache.has(rid):
+		return int(_floor_mesh_normal_axis_cache[rid])
+
+	var mdt := MeshDataTool.new()
+	var err := mdt.create_from_surface(mesh, 0)
+	if err != OK:
+		_floor_mesh_normal_axis_cache[rid] = 1
+		return 1
+
+	var sum := Vector3.ZERO
+	for f in range(mdt.get_face_count()):
+		var i0: int = mdt.get_face_vertex(f, 0)
+		var i1: int = mdt.get_face_vertex(f, 1)
+		var i2: int = mdt.get_face_vertex(f, 2)
+		var v0: Vector3 = mdt.get_vertex(i0)
+		var v1: Vector3 = mdt.get_vertex(i1)
+		var v2: Vector3 = mdt.get_vertex(i2)
+
+		var cr: Vector3 = (v1 - v0).cross(v2 - v0)
+		var area: float = cr.length() * 0.5
+		if area <= 0.0:
+			continue
+
+		var n: Vector3 = cr.normalized()
+		sum.x += absf(n.x) * area
+		sum.y += absf(n.y) * area
+		sum.z += absf(n.z) * area
+
+	var axis := 1
+	if sum.x >= sum.y and sum.x >= sum.z:
+		axis = 0
+	elif sum.z >= sum.x and sum.z >= sum.y:
+		axis = 2
+
+	_floor_mesh_normal_axis_cache[rid] = axis
+	return axis
+
 func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
 	var axes := PackedInt32Array()
 	for i in [0, 1, 2]:
@@ -2440,7 +2483,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 
 	var normal_axis: int = floor_decor_mesh_normal_axis
 	if normal_axis < 0:
-		normal_axis = _axis_min3(aabb_sz)
+		normal_axis = _dominant_normal_axis_for_mesh(mesh)
 	var plane_axes := _plane_axes_from_normal_axis(normal_axis)
 	var axis0: int = plane_axes[0]
 	var axis1: int = plane_axes[1]
@@ -2453,6 +2496,9 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if floor_decor_scale_in_xz:
 		face_w = Vector3(edge_u.x, 0.0, edge_u.z).length()
 		face_d = Vector3(edge_v.x, 0.0, edge_v.z).length()
+	if floor_decor_fit_to_cell:
+		face_w = _cell_size
+		face_d = _cell_size
 
 	var width_axis: int
 	var depth_axis: int
