@@ -2268,7 +2268,7 @@ func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use
 		return out
 
 	# Cache per mesh + axis + cap side.
-	var key := str(mesh.get_rid().get_id()) + ":" + str(normal_axis) + ":" + str(axis0) + ":" + str(axis1) + ":" + (use_top ? "t" : "b")
+	var key := str(mesh.get_rid().get_id()) + ":" + str(normal_axis) + ":" + str(axis0) + ":" + str(axis1) + ":" + ("t" if use_top else "b")
 	if _floor_mesh_cap_cache.has(key):
 		return _floor_mesh_cap_cache[key]
 
@@ -2296,8 +2296,8 @@ func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use
 	# This avoids tiny outlier spikes selecting a near-zero cap, which would explode scaling.
 	var band := maxf(0.002, thickness * 0.06)  # 6% of thickness, min 2mm
 
-	var lo := (use_top ? (max_n - band) : min_n)
-	var hi := (use_top ? max_n : (min_n + band))
+	var lo := (max_n - band) if use_top else min_n
+	var hi := max_n if use_top else (min_n + band)
 
 	var min0 := INF
 	var max0 := -INF
@@ -2341,7 +2341,7 @@ func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use
 	out["center_w"] = (min0 + max0) * 0.5
 	out["center_d"] = (min1 + max1) * 0.5
 	# Anchor to the true extreme plane so the cap sits flush.
-	out["plane_n"] = (use_top ? max_n : min_n)
+	out["plane_n"] = max_n if use_top else min_n
 
 	_floor_mesh_cap_cache[key] = out
 	return out
