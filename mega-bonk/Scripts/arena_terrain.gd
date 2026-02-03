@@ -137,13 +137,13 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_seed: int = 24601
 @export var floor_decor_offset: float = 0.01
 @export var floor_decor_fit_to_cell: bool = true
-@export var floor_decor_max_scale: float = 3.0
+@export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
 @export var floor_decor_mesh_normal_axis: int = -1
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
-@export_range(0.90, 1.00, 0.001) var floor_decor_fill_ratio: float = 1.0
+@export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2482,20 +2482,21 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 
 	var size_w := _safe_dim(aabb.size[width_axis])
 	var size_d := _safe_dim(aabb.size[depth_axis])
-	var sx := face_w / size_w
-	var sd := face_d / size_d
+	var sx := (face_w / size_w) * floor_decor_fill_ratio
+	var sd := (face_d / size_d) * floor_decor_fill_ratio
+	if floor_decor_max_scale > 0.0:
+		sx = minf(sx, floor_decor_max_scale)
+		sd = minf(sd, floor_decor_max_scale)
 
 	var svec := Vector3.ONE
 	if floor_decor_fit_to_cell:
-		svec[width_axis] = clampf(sx, 0.01, floor_decor_max_scale)
-		svec[depth_axis] = clampf(sd, 0.01, floor_decor_max_scale)
+		svec[width_axis] = sx
+		svec[depth_axis] = sd
 	else:
-		var uni := clampf(minf(sx, sd), 0.01, floor_decor_max_scale)
+		var uni := minf(sx, sd)
 		svec[width_axis] = uni
 		svec[depth_axis] = uni
-
-	svec[width_axis] *= floor_decor_fill_ratio
-	svec[depth_axis] *= floor_decor_fill_ratio
+	svec[normal_axis] = 1.0
 
 	basis = basis.scaled(svec)
 
