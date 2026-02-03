@@ -1984,10 +1984,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0 > ceil_pair.x + eps or top1 > ceil_pair.y + eps:
 							if b_is_hole:
 								# Face into the +X cell (the hole is in cell B)
-								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv, true, false)
 							else:
 								# Face into the -X cell (the hole is in cell A) by flipping z order
-								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv, false, false)
 						continue
 					if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
 						pass
@@ -2004,14 +2004,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if (top0 - bot0) > eps or (top1 - bot1) > eps:
 							var mean_a: float = (a_e.x + a_e.y) * 0.5
 							var mean_b: float = (b_w.x + b_w.y) * 0.5
-							if mean_a >= mean_b:
-								_add_wall_x_between(
-									st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv
-								)
-							else:
-								_add_wall_x_between(
-									st, x1, z1, z0, bot1, bot0, top1, top0, uv_scale_wall, wall_subdiv
-								)
+							var normal_pos_x: bool = mean_a > mean_b
+							_add_wall_x_between(
+								st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x
+							)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
@@ -2034,10 +2030,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0z > ceil_pair_z.x + eps or top1z > ceil_pair_z.y + eps:
 							if d_is_hole:
 								# Face into the +Z cell (the hole is in cell D)
-								_add_wall_z_between(st, z1, x0, x1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, x0, x1, z1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv, true, false)
 							else:
 								# Face into the -Z cell (the hole is in cell C) by flipping x order
-								_add_wall_z_between(st, z1, x1, x0, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, x1, x0, z1, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv, false, false)
 						continue
 					if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
 						pass
@@ -2054,14 +2050,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
 							var mean_a: float = (a_s.x + a_s.y) * 0.5
 							var mean_c: float = (c_n.x + c_n.y) * 0.5
-							if mean_a >= mean_c:
-								_add_wall_z_between(
-									st, z1, x1, x0, bot1z, bot0z, top1z, top0z, uv_scale_wall, wall_subdiv
-								)
-							else:
-								_add_wall_z_between(
-									st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
-								)
+							var normal_pos_z: bool = mean_a > mean_c
+							_add_wall_z_between(
+								st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z
+							)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
@@ -2562,7 +2554,8 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # Terrain wall helpers (between unequal cells)
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
+	normal_pos_x: bool, capture_decor: bool = true) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2583,7 +2576,15 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
-	_capture_wall_face(a, b, c, d)
+	if not normal_pos_x:
+		var tmp: Vector3 = a
+		a = b
+		b = tmp
+		tmp = c
+		c = d
+		d = tmp
+	if capture_decor:
+		_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -2610,8 +2611,9 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
-func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
+func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
+	normal_pos_z: bool, capture_decor: bool = true) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2632,7 +2634,15 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
-	_capture_wall_face(a, b, c, d)
+	if normal_pos_z:
+		var tmp: Vector3 = a
+		a = b
+		b = tmp
+		tmp = c
+		c = d
+		d = tmp
+	if capture_decor:
+		_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
