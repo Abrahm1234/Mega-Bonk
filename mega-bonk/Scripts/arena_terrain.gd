@@ -127,6 +127,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_skip_trapezoids: bool = false
 @export var wall_decor_fit_to_face: bool = true
 @export var wall_decor_max_scale: float = 3.0
+@export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2124,8 +2125,6 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	var center: Vector3 = (a + b + c + d) * 0.25
 	var trapezoid: bool = _is_trapezoid(a, b, c, d)
-	if wall_decor_skip_trapezoids and trapezoid:
-		return
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
@@ -2150,9 +2149,24 @@ func _rebuild_wall_decor() -> void:
 
 	var faces_for_decor: Array[WallFace] = []
 	faces_for_decor.assign(_wall_faces)
+	var trap_count: int = 0
+	for face in _wall_faces:
+		if face.is_trapezoid:
+			trap_count += 1
+	print(
+		"wall_decor_meshes:", wall_decor_meshes.size(),
+		" wall_faces:", _wall_faces.size(),
+		" trapezoids:", trap_count,
+		" skip_trap:", wall_decor_skip_trapezoids,
+		" max_size:", wall_decor_max_size
+	)
 
 	for f: WallFace in faces_for_decor:
 		if wall_decor_skip_trapezoids and f.is_trapezoid:
+			continue
+		if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
+			continue
+		if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
 			continue
 		var idx: int = (f.key + wall_decor_seed) % variant_count
 		counts[idx] += 1
@@ -2185,8 +2199,19 @@ func _rebuild_wall_decor() -> void:
 	for v2: int in range(variant_count):
 		write_i[v2] = 0
 
+	var total_instances: int = 0
+	for count in counts:
+		total_instances += count
+	if total_instances <= 0:
+		push_warning("Wall decor: 0 instances after filtering. Check max size or trapezoid skip.")
+		return
+
 	for f2: WallFace in faces_for_decor:
 		if wall_decor_skip_trapezoids and f2.is_trapezoid:
+			continue
+		if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
+			continue
+		if wall_decor_max_size.y > 0.0 and f2.height > wall_decor_max_size.y:
 			continue
 		var vsel: int = (f2.key + wall_decor_seed) % variant_count
 		var mmi2: MultiMeshInstance3D = mmi_by_variant[vsel]
@@ -2218,10 +2243,10 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var local_correction := Vector3(-aabb_center_x * sx, -aabb_center_y * sy, -back_z)
 	var world_correction := rot * local_correction
 
-	var basis := Basis(rot.x * sx, rot.y * sy, rot.z)
+	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z)
 
 	var pos: Vector3 = face.center + face.normal.normalized() * outward_offset + world_correction
-	return Transform3D(basis, pos)
+	return Transform3D(decor_basis, pos)
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
