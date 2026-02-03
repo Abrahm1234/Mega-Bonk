@@ -1049,7 +1049,7 @@ func _resolve_tunnel_layer(n: int) -> void:
 	for z in range(n):
 		for x in range(n):
 			var c := _cell_corners(x, z)
-			var roof: float = min(min(c.x, c.y), min(c.z, c.w))
+			var roof: float = minf(minf(c.x, c.y), minf(c.z, c.w))
 			roof_min = minf(roof_min, roof)
 
 	var max_ceiling: float = roof_min - tunnel_ceiling_clearance
@@ -2615,27 +2615,32 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		cols[depth_axis] = -cols[depth_axis]
 		basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
 
-	var cap_top := _mesh_cap_extents(mesh, normal_axis, axis0, axis1, true)
-	var cap_bottom := _mesh_cap_extents(mesh, normal_axis, axis0, axis1, false)
-	var cap := cap_top if not flipped else cap_bottom
+	var cap_top: Dictionary = _mesh_cap_extents(mesh, normal_axis, axis0, axis1, true)
+	var cap_bottom: Dictionary = _mesh_cap_extents(mesh, normal_axis, axis0, axis1, false)
+
+	var cap: Dictionary = cap_top
+	if flipped:
+		cap = cap_bottom
+
 	var size_w: float
 	var size_d: float
-	var anchor := Vector3.ZERO
-	if cap.valid:
-		var cap_w := cap.size_w
-		var cap_d := cap.size_d
-		var cap_center_w := cap.center_w
-		var cap_center_d := cap.center_d
+	var anchor: Vector3 = Vector3.ZERO
+	if bool(cap.get("valid", false)):
+		var cap_w: float = float(cap.get("size_w", 0.0))
+		var cap_d: float = float(cap.get("size_d", 0.0))
+		var cap_center_w: float = float(cap.get("center_w", 0.0))
+		var cap_center_d: float = float(cap.get("center_d", 0.0))
+		var cap_plane_n: float = float(cap.get("plane_n", 0.0))
 		if width_axis == axis1:
-			cap_w = cap.size_d
-			cap_d = cap.size_w
-			cap_center_w = cap.center_d
-			cap_center_d = cap.center_w
+			cap_w = float(cap.get("size_d", 0.0))
+			cap_d = float(cap.get("size_w", 0.0))
+			cap_center_w = float(cap.get("center_d", 0.0))
+			cap_center_d = float(cap.get("center_w", 0.0))
 		size_w = _safe_dim(cap_w - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(cap_d - 2.0 * floor_decor_local_margin)
 		anchor[width_axis] = cap_center_w
 		anchor[depth_axis] = cap_center_d
-		anchor[normal_axis] = cap.plane_n
+		anchor[normal_axis] = cap_plane_n
 	else:
 		size_w = _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
