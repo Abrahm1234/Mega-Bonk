@@ -2039,17 +2039,17 @@ func _build_mesh_and_collision(n: int) -> void:
 								# Face into the -Z cell (the hole is in cell C) by flipping x order
 								_add_wall_z_between(st, z1, x1, x0, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv)
 						continue
-				if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
-					pass
-				else:
-					var cC := _cell_corners(x, z + 1)
-					var a_s := _edge_pair(cA, 3)
-					var c_n := _edge_pair(cC, 2)
+					if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
+						pass
+					else:
+						var cC := _cell_corners(x, z + 1)
+						var a_s := _edge_pair(cA, 3)
+						var c_n := _edge_pair(cC, 2)
 
-					var top0z := maxf(a_s.x, c_n.x)
-					var top1z := maxf(a_s.y, c_n.y)
-					var bot0z := minf(a_s.x, c_n.x)
-					var bot1z := minf(a_s.y, c_n.y)
+						var top0z := maxf(a_s.x, c_n.x)
+						var top1z := maxf(a_s.y, c_n.y)
+						var bot0z := minf(a_s.x, c_n.x)
+						var bot1z := minf(a_s.y, c_n.y)
 
 						if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
 							var mean_a: float = (a_s.x + a_s.y) * 0.5
