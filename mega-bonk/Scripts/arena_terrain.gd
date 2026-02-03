@@ -132,6 +132,14 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
 @export var wall_decor_min_world_y: float = -INF
+@export var enable_floor_decor: bool = true
+@export var floor_decor_meshes: Array[Mesh] = []
+@export var floor_decor_seed: int = 24601
+@export var floor_decor_offset: float = 0.01
+@export var floor_decor_fit_to_cell: bool = true
+@export var floor_decor_max_scale: float = 3.0
+@export var floor_decor_min_world_y: float = -INF
+@export var floor_decor_random_yaw_steps: int = 4
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -195,6 +203,32 @@ class WallFace:
 
 var _wall_faces: Array[WallFace] = []
 var _wall_decor_root: Node3D = null
+
+class FloorFace extends RefCounted:
+	var a: Vector3
+	var b: Vector3
+	var c: Vector3
+	var d: Vector3
+	var center: Vector3
+	var normal: Vector3
+	var width: float
+	var depth: float
+	var key: int
+
+	func _init(a0: Vector3, b0: Vector3, c0: Vector3, d0: Vector3, center0: Vector3, normal0: Vector3, width0: float, depth0: float, key0: int) -> void:
+		a = a0
+		b = b0
+		c = c0
+		d = d0
+		center = center0
+		normal = normal0
+		width = width0
+		depth = depth0
+		key = key0
+
+var _floor_faces: Array[FloorFace] = []
+var _floor_decor_root: Node3D
+var _floor_decor_instances: Array[MultiMeshInstance3D] = []
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 	match dir:
@@ -1879,6 +1913,7 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 func _build_mesh_and_collision(n: int) -> void:
 	n = max(2, n)
 	_wall_faces.clear()
+	_floor_faces.clear()
 	var tunnel_ceil_y: float = _tunnel_ceil_resolved
 	if tunnel_ceil_y == 0.0:
 		tunnel_ceil_y = tunnel_floor_y + tunnel_height
@@ -2068,6 +2103,7 @@ func _build_mesh_and_collision(n: int) -> void:
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
 	_rebuild_wall_decor()
+	_rebuild_floor_decor()
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
@@ -2077,6 +2113,21 @@ func _ensure_wall_decor_root() -> void:
 		_wall_decor_root = Node3D.new()
 		_wall_decor_root.name = "WallDecor"
 		add_child(_wall_decor_root)
+
+func _ensure_floor_decor_root() -> void:
+	if _floor_decor_root != null and is_instance_valid(_floor_decor_root):
+		return
+	_floor_decor_root = get_node_or_null("FloorDecor") as Node3D
+	if _floor_decor_root == null:
+		_floor_decor_root = Node3D.new()
+		_floor_decor_root.name = "FloorDecor"
+		add_child(_floor_decor_root)
+
+func _clear_floor_decor() -> void:
+	if _floor_decor_root != null and is_instance_valid(_floor_decor_root):
+		for child: Node in _floor_decor_root.get_children():
+			child.queue_free()
+	_floor_decor_instances.clear()
 
 func _basis_from_face(face: WallFace) -> Basis:
 	var n: Vector3 = face.normal
@@ -2145,6 +2196,22 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
 	return ((a + d) - (b + c)).length() > 0.001
+
+func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
+	var n: Vector3 = (b - a).cross(d - a)
+	if n.length() < 0.000001:
+		return
+	n = n.normalized()
+	if n.y < 0.0:
+		n = -n
+
+	var center: Vector3 = (a + b + c + d) * 0.25
+	if center.y < floor_decor_min_world_y:
+		return
+
+	var width: float = (b - a).length()
+	var depth: float = (d - a).length()
+	_floor_faces.append(FloorFace.new(a, b, c, d, center, n, width, depth, key))
 
 func _hash_wall_face(center: Vector3, n: Vector3) -> int:
 	var qx: int = int(floor(center.x * 10.0))
@@ -2318,6 +2385,85 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var target_world: Vector3 = face.center + outward * outward_offset
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
+
+func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	var up: Vector3 = face.normal
+	var xaxis: Vector3 = Vector3.RIGHT
+	if absf(up.dot(xaxis)) > 0.95:
+		xaxis = Vector3.FORWARD
+	var tangent: Vector3 = (xaxis - up * up.dot(xaxis)).normalized()
+	var bitangent: Vector3 = up.cross(tangent).normalized()
+	var basis: Basis = Basis(tangent, up, bitangent)
+
+	if floor_decor_random_yaw_steps > 0:
+		var steps: int = max(1, floor_decor_random_yaw_steps)
+		var yaw_idx: int = (face.key ^ floor_decor_seed) & 1023
+		var step: float = float(yaw_idx % steps)
+		var yaw: float = step * (TAU / float(steps))
+		basis = basis.rotated(up, yaw)
+
+	var scale_x: float = 1.0
+	var scale_z: float = 1.0
+	var anchor := Vector3.ZERO
+	if mesh != null and floor_decor_fit_to_cell:
+		var aabb: AABB = mesh.get_aabb()
+		anchor = Vector3(
+			aabb.position.x + aabb.size.x * 0.5,
+			aabb.position.y,
+			aabb.position.z + aabb.size.z * 0.5
+		)
+		if absf(aabb.size.x) > 0.000001:
+			scale_x = clamp(face.width / aabb.size.x, 0.001, floor_decor_max_scale)
+		if absf(aabb.size.z) > 0.000001:
+			scale_z = clamp(face.depth / aabb.size.z, 0.001, floor_decor_max_scale)
+
+	basis = basis.scaled(Vector3(scale_x, 1.0, scale_z))
+
+	var pos: Vector3 = face.center + face.normal * floor_decor_offset
+	if mesh != null and floor_decor_fit_to_cell:
+		pos -= basis * anchor
+
+	return Transform3D(basis, pos)
+
+func _rebuild_floor_decor() -> void:
+	_clear_floor_decor()
+
+	if not enable_floor_decor:
+		return
+	if floor_decor_meshes.is_empty():
+		return
+	if _floor_faces.is_empty():
+		return
+
+	_ensure_floor_decor_root()
+
+	var buckets: Array[Array] = []
+	buckets.resize(floor_decor_meshes.size())
+	for i in range(buckets.size()):
+		buckets[i] = []
+
+	for face in _floor_faces:
+		var pick: int = int(abs(face.key ^ floor_decor_seed)) % floor_decor_meshes.size()
+		buckets[pick].append(face)
+
+	for i in range(floor_decor_meshes.size()):
+		var faces_i: Array = buckets[i]
+		if faces_i.is_empty():
+			continue
+
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.instance_count = faces_i.size()
+		mm.mesh = floor_decor_meshes[i]
+
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		_floor_decor_root.add_child(inst)
+		_floor_decor_instances.append(inst)
+
+		for j in range(faces_i.size()):
+			var f: FloorFace = faces_i[j]
+			mm.set_instance_transform(j, _floor_transform_for_face(f, floor_decor_meshes[i]))
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
@@ -2734,6 +2880,13 @@ func _add_cell_top_grid(
 	var idx: int = cell_z * max(2, cells_per_side) + cell_x
 	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
 	var is_ramp: bool = ramp_dir != RAMP_NONE
+	if enable_floor_decor and not floor_decor_meshes.is_empty():
+		var f_a := Vector3(x0, h00, z0)
+		var f_b := Vector3(x1, h10, z0)
+		var f_c := Vector3(x1, h11, z1)
+		var f_d := Vector3(x0, h01, z1)
+		var key: int = _idx2(cell_x, cell_z, max(2, cells_per_side))
+		_capture_floor_face(f_a, f_b, f_c, f_d, key)
 
 	for iz in range(sdiv):
 		var t0 := float(iz) / float(sdiv)
