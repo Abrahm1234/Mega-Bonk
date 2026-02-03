@@ -130,6 +130,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
 @export var wall_decor_flip_outward: bool = true
+@export var wall_decor_flip_facing: bool = false
 @export var wall_decor_min_world_y: float = -INF
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
@@ -2291,6 +2292,11 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var outward: Vector3 = _pick_open_side_outward(face)
 	var rot: Basis = _basis_from_outward(outward)
 
+	var attach_far: bool = wall_decor_flip_outward
+	if wall_decor_flip_facing:
+		rot = Basis(Vector3.UP, PI) * rot
+		attach_far = not attach_far
+
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = 1.0
@@ -2300,19 +2306,18 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 		sy = clamp(face.height / ref_h, 0.1, wall_decor_max_scale)
 	var sz: float = wall_decor_depth_scale
 
-	var aabb_center_x: float = aabb.position.x + aabb.size.x * 0.5
-	var aabb_center_y: float = aabb.position.y + aabb.size.y * 0.5
-	var attach_z: float = aabb.position.z
-	if wall_decor_flip_outward:
-		attach_z = aabb.position.z + aabb.size.z
-
-	var local_correction := Vector3(-aabb_center_x * sx, -aabb_center_y * sy, -attach_z * sz)
-	var world_correction := rot * local_correction
-
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
-	var pos: Vector3 = face.center + outward * outward_offset + world_correction
-	return Transform3D(decor_basis, pos)
+	var center_x: float = aabb.position.x + aabb.size.x * 0.5
+	var center_y: float = aabb.position.y + aabb.size.y * 0.5
+	var z_min: float = aabb.position.z
+	var z_max: float = aabb.position.z + aabb.size.z
+	var attach_z: float = z_max if attach_far else z_min
+	var anchor_local := Vector3(center_x, center_y, attach_z)
+
+	var target_world: Vector3 = face.center + outward * outward_offset
+	var origin: Vector3 = target_world - (decor_basis * anchor_local)
+	return Transform3D(decor_basis, origin)
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
