@@ -2105,6 +2105,64 @@ func _basis_from_face(face: WallFace) -> Basis:
 	var v: Vector3 = n.cross(u).normalized()
 	return Basis(u, v, n)
 
+func _basis_from_outward(outward: Vector3) -> Basis:
+	var z_axis: Vector3 = outward.normalized()
+	var x_axis: Vector3 = Vector3.UP.cross(z_axis)
+	if x_axis.length() < 0.0001:
+		x_axis = Vector3.RIGHT
+	else:
+		x_axis = x_axis.normalized()
+	var y_axis: Vector3 = z_axis.cross(x_axis).normalized()
+	return Basis(x_axis, y_axis, z_axis)
+
+func _sample_surface_y(world_x: float, world_z: float) -> float:
+	var n: int = max(2, cells_per_side)
+	var fx: float = (world_x - _ox) / _cell_size
+	var fz: float = (world_z - _oz) / _cell_size
+	var ix: int = int(floor(fx))
+	var iz: int = int(floor(fz))
+	if ix < 0 or iz < 0 or ix >= n or iz >= n:
+		return -INF
+
+	ix = clampi(ix, 0, n - 2)
+	iz = clampi(iz, 0, n - 2)
+	var tx: float = fx - float(ix)
+	var tz: float = fz - float(iz)
+
+	var corners: Vector4 = _cell_corners(ix, iz)
+	return _bilinear_height(corners.x, corners.y, corners.z, corners.w, tx, tz)
+
+func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
+	return a.y > b.y
+
+func _pick_open_side_outward(face: WallFace) -> Vector3:
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length_squared() < 0.0001:
+		n = Vector3.RIGHT
+	else:
+		n = n.normalized()
+
+	var corners: Array[Vector3] = [face.a, face.b, face.c, face.d]
+	corners.sort_custom(Callable(self, "_sort_vec3_y_desc"))
+	var top_mid: Vector3 = (corners[0] + corners[1]) * 0.5
+	top_mid.y += 0.05
+
+	var eps_side: float = 0.15
+	var eps_air: float = 0.02
+	var p_plus: Vector3 = top_mid + n * eps_side
+	var p_minus: Vector3 = top_mid - n * eps_side
+	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
+	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
+	var plus_open: bool = p_plus.y > (h_plus + eps_air)
+	var minus_open: bool = p_minus.y > (h_minus + eps_air)
+
+	if plus_open and not minus_open:
+		return n
+	if minus_open and not plus_open:
+		return -n
+	return n if h_plus < h_minus else -n
+
 func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
 	return ((a + d) - (b + c)).length() > 0.001
 
@@ -2251,7 +2309,8 @@ func _rebuild_wall_decor() -> void:
 		write_i[vsel] = wi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var rot: Basis = _basis_from_face(face)
+	var outward: Vector3 = _pick_open_side_outward(face)
+	var rot: Basis = _basis_from_outward(outward)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -2273,7 +2332,6 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
-	var outward: Vector3 = rot.z.normalized()
 	var pos: Vector3 = face.center + outward * outward_offset + world_correction
 	return Transform3D(decor_basis, pos)
 
