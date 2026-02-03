@@ -126,6 +126,8 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
 @export var wall_decor_tile_size: Vector2 = Vector2(4.0, 4.0)
+@export var wall_decor_fit_to_face: bool = true
+@export var wall_decor_max_scale: float = 3.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2110,12 +2112,10 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	if height < wall_decor_min_height:
 		return
 
-	if wall_decor_skip_trapezoids:
-		if absf(a.y - b.y) > 0.01 or absf(d.y - c.y) > 0.01:
-			return
-
 	var center: Vector3 = (a + b + c + d) * 0.25
 	var trapezoid: bool = _is_trapezoid(a, b, c, d)
+	if wall_decor_skip_trapezoids and trapezoid:
+		return
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
@@ -2197,8 +2197,11 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
-	var sx: float = face.width / ref_w
-	var sy: float = face.height / ref_h
+	var sx: float = 1.0
+	var sy: float = 1.0
+	if wall_decor_fit_to_face:
+		sx = clamp(face.width / ref_w, 0.1, wall_decor_max_scale)
+		sy = clamp(face.height / ref_h, 0.1, wall_decor_max_scale)
 
 	var aabb_center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var aabb_center_y: float = aabb.position.y + aabb.size.y * 0.5
