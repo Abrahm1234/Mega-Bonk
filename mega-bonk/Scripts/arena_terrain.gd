@@ -140,6 +140,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 3.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
+@export_enum("normal +Y (XZ floor)", "normal +Z (XY plane)", "normal +X (YZ plane)") var floor_decor_mesh_normal_axis: int = 0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2387,13 +2388,52 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
-	var up: Vector3 = face.normal
+	var up: Vector3 = face.normal.normalized()
+
 	var xaxis: Vector3 = Vector3.RIGHT
 	if absf(up.dot(xaxis)) > 0.95:
 		xaxis = Vector3.FORWARD
 	var tangent: Vector3 = (xaxis - up * up.dot(xaxis)).normalized()
-	var bitangent: Vector3 = up.cross(tangent).normalized()
-	var basis: Basis = Basis(tangent, up, bitangent)
+	var bitangent_y: Vector3 = tangent.cross(up).normalized()
+
+	var xcol: Vector3
+	var ycol: Vector3
+	var zcol: Vector3
+	var width_axis: int
+	var depth_axis: int
+	var normal_axis: int
+
+	match floor_decor_mesh_normal_axis:
+		0:
+			xcol = tangent
+			ycol = up
+			zcol = bitangent_y
+			width_axis = 0
+			depth_axis = 2
+			normal_axis = 1
+		1:
+			xcol = tangent
+			ycol = up.cross(tangent).normalized()
+			zcol = up
+			width_axis = 0
+			depth_axis = 1
+			normal_axis = 2
+		2:
+			xcol = up
+			ycol = tangent
+			zcol = up.cross(tangent).normalized()
+			width_axis = 1
+			depth_axis = 2
+			normal_axis = 0
+		_:
+			xcol = tangent
+			ycol = up
+			zcol = bitangent_y
+			width_axis = 0
+			depth_axis = 2
+			normal_axis = 1
+
+	var basis: Basis = Basis(xcol, ycol, zcol)
 
 	if floor_decor_random_yaw_steps > 0:
 		var steps: int = max(1, floor_decor_random_yaw_steps)
@@ -2402,25 +2442,63 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		var yaw: float = step * (TAU / float(steps))
 		basis = basis.rotated(up, yaw)
 
-	var scale_x: float = 1.0
-	var scale_z: float = 1.0
-	var anchor := Vector3.ZERO
+	var pos: Vector3 = face.center + up * floor_decor_offset
+
 	if mesh != null and floor_decor_fit_to_cell:
 		var aabb: AABB = mesh.get_aabb()
-		anchor = Vector3(
+		var anchor := Vector3(
 			aabb.position.x + aabb.size.x * 0.5,
-			aabb.position.y,
+			aabb.position.y + aabb.size.y * 0.5,
 			aabb.position.z + aabb.size.z * 0.5
 		)
-		if absf(aabb.size.x) > 0.000001:
-			scale_x = clamp(face.width / aabb.size.x, 0.001, floor_decor_max_scale)
-		if absf(aabb.size.z) > 0.000001:
-			scale_z = clamp(face.depth / aabb.size.z, 0.001, floor_decor_max_scale)
+		match normal_axis:
+			0:
+				anchor.x = aabb.position.x
+			1:
+				anchor.y = aabb.position.y
+			2:
+				anchor.z = aabb.position.z
 
-	basis = basis.scaled(Vector3(scale_x, 1.0, scale_z))
+		var size_w: float = 0.000001
+		var size_d: float = 0.000001
+		match width_axis:
+			0:
+				size_w = absf(aabb.size.x)
+			1:
+				size_w = absf(aabb.size.y)
+			2:
+				size_w = absf(aabb.size.z)
+		match depth_axis:
+			0:
+				size_d = absf(aabb.size.x)
+			1:
+				size_d = absf(aabb.size.y)
+			2:
+				size_d = absf(aabb.size.z)
 
-	var pos: Vector3 = face.center + face.normal * floor_decor_offset
-	if mesh != null and floor_decor_fit_to_cell:
+		var sx: float = clamp(face.width / maxf(size_w, 0.000001), 0.001, floor_decor_max_scale)
+		var sd: float = clamp(face.depth / maxf(size_d, 0.000001), 0.001, floor_decor_max_scale)
+		var svec := Vector3.ONE
+		match width_axis:
+			0:
+				svec.x = sx
+			1:
+				svec.y = sx
+			2:
+				svec.z = sx
+		match depth_axis:
+			0:
+				svec.x = sd
+			1:
+				svec.y = sd
+			2:
+				svec.z = sd
+
+		basis = basis.scaled(svec)
+
+		if basis.determinant() < 0.0:
+			basis.x = -basis.x
+
 		pos -= basis * anchor
 
 	return Transform3D(basis, pos)
