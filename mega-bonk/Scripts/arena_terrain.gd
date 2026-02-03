@@ -142,6 +142,8 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_random_yaw_steps: int = 4
 @export var floor_decor_mesh_normal_axis: int = -1
 @export var floor_decor_scale_in_xz: bool = true
+@export var floor_decor_flip_facing: bool = true
+@export_range(0.90, 1.00, 0.001) var floor_decor_fill_ratio: float = 1.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2430,6 +2432,11 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		u = r * u
 		v = r * v
 
+	var flipped: bool = floor_decor_flip_facing
+	if flipped:
+		v = -v
+		n = -n
+
 	var normal_axis: int = floor_decor_mesh_normal_axis
 	if normal_axis < 0:
 		normal_axis = _axis_min3(aabb_sz)
@@ -2487,13 +2494,16 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		svec[width_axis] = uni
 		svec[depth_axis] = uni
 
-	svec[width_axis] *= 0.98
-	svec[depth_axis] *= 0.98
+	svec[width_axis] *= floor_decor_fill_ratio
+	svec[depth_axis] *= floor_decor_fill_ratio
 
 	basis = basis.scaled(svec)
 
 	var anchor := aabb.position + aabb.size * 0.5
-	anchor[normal_axis] = aabb.position[normal_axis]
+	if flipped:
+		anchor[normal_axis] = aabb.position[normal_axis] + aabb.size[normal_axis]
+	else:
+		anchor[normal_axis] = aabb.position[normal_axis]
 
 	var pos := face.center + n * floor_decor_offset
 	var xform := Transform3D(basis, pos)
