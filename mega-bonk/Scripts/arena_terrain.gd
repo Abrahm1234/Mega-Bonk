@@ -140,7 +140,8 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 3.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
-@export_enum("normal +Y (XZ floor)", "normal +Z (XY plane)", "normal +X (YZ plane)") var floor_decor_mesh_normal_axis: int = 0
+@export var floor_decor_mesh_normal_axis: int = -1
+@export var floor_decor_scale_in_xz: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2177,6 +2178,23 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
 
+func _axis_min3(v: Vector3) -> int:
+	if v.x <= v.y and v.x <= v.z:
+		return 0
+	if v.y <= v.x and v.y <= v.z:
+		return 1
+	return 2
+
+func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
+	var axes := PackedInt32Array()
+	for i in [0, 1, 2]:
+		if i != n_axis:
+			axes.append(i)
+	return axes
+
+func _safe_dim(x: float) -> float:
+	return maxf(0.0001, absf(x))
+
 func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var n: Vector3 = face.normal
 	n.y = 0.0
@@ -2388,120 +2406,99 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
-	var up: Vector3 = face.normal.normalized()
+	if mesh == null:
+		return Transform3D()
 
-	var xaxis: Vector3 = Vector3.RIGHT
-	if absf(up.dot(xaxis)) > 0.95:
-		xaxis = Vector3.FORWARD
-	var tangent: Vector3 = (xaxis - up * up.dot(xaxis)).normalized()
-	var bitangent_y: Vector3 = tangent.cross(up).normalized()
+	var aabb: AABB = mesh.get_aabb()
+	var aabb_sz: Vector3 = aabb.size.abs()
 
-	var xcol: Vector3
-	var ycol: Vector3
-	var zcol: Vector3
-	var width_axis: int
-	var depth_axis: int
-	var normal_axis: int
+	var edge_u: Vector3 = face.b - face.a
+	var edge_v: Vector3 = face.d - face.a
+	var u: Vector3 = edge_u.normalized()
+	var n: Vector3 = edge_u.cross(edge_v).normalized()
+	if n.y < 0.0:
+		n = -n
+	var v: Vector3 = n.cross(u).normalized()
+	u = v.cross(n).normalized()
 
-	match floor_decor_mesh_normal_axis:
-		0:
-			xcol = tangent
-			ycol = up
-			zcol = bitangent_y
-			width_axis = 0
-			depth_axis = 2
-			normal_axis = 1
-		1:
-			xcol = tangent
-			ycol = up.cross(tangent).normalized()
-			zcol = up
-			width_axis = 0
-			depth_axis = 1
-			normal_axis = 2
-		2:
-			xcol = up
-			ycol = tangent
-			zcol = up.cross(tangent).normalized()
-			width_axis = 1
-			depth_axis = 2
-			normal_axis = 0
-		_:
-			xcol = tangent
-			ycol = up
-			zcol = bitangent_y
-			width_axis = 0
-			depth_axis = 2
-			normal_axis = 1
-
-	var basis: Basis = Basis(xcol, ycol, zcol)
-
-	if floor_decor_random_yaw_steps > 0:
+	if floor_decor_random_yaw_steps > 1:
 		var steps: int = max(1, floor_decor_random_yaw_steps)
 		var yaw_idx: int = (face.key ^ floor_decor_seed) & 1023
 		var step: float = float(yaw_idx % steps)
 		var yaw: float = step * (TAU / float(steps))
-		basis = basis.rotated(up, yaw)
+		var r := Basis(n, yaw)
+		u = r * u
+		v = r * v
 
-	var pos: Vector3 = face.center + up * floor_decor_offset
+	var normal_axis: int = floor_decor_mesh_normal_axis
+	if normal_axis < 0:
+		normal_axis = _axis_min3(aabb_sz)
+	var plane_axes := _plane_axes_from_normal_axis(normal_axis)
+	var axis0: int = plane_axes[0]
+	var axis1: int = plane_axes[1]
 
-	if mesh != null and floor_decor_fit_to_cell:
-		var aabb: AABB = mesh.get_aabb()
-		var anchor := Vector3(
-			aabb.position.x + aabb.size.x * 0.5,
-			aabb.position.y + aabb.size.y * 0.5,
-			aabb.position.z + aabb.size.z * 0.5
-		)
-		match normal_axis:
-			0:
-				anchor.x = aabb.position.x
-			1:
-				anchor.y = aabb.position.y
-			2:
-				anchor.z = aabb.position.z
+	var local0 := _safe_dim(aabb.size[axis0])
+	var local1 := _safe_dim(aabb.size[axis1])
 
-		var size_w: float = 0.000001
-		var size_d: float = 0.000001
-		match width_axis:
-			0:
-				size_w = absf(aabb.size.x)
-			1:
-				size_w = absf(aabb.size.y)
-			2:
-				size_w = absf(aabb.size.z)
-		match depth_axis:
-			0:
-				size_d = absf(aabb.size.x)
-			1:
-				size_d = absf(aabb.size.y)
-			2:
-				size_d = absf(aabb.size.z)
+	var face_w: float = edge_u.length()
+	var face_d: float = edge_v.length()
+	if floor_decor_scale_in_xz:
+		face_w = Vector3(edge_u.x, 0.0, edge_u.z).length()
+		face_d = Vector3(edge_v.x, 0.0, edge_v.z).length()
 
-		var sx: float = clamp(face.width / maxf(size_w, 0.000001), 0.001, floor_decor_max_scale)
-		var sd: float = clamp(face.depth / maxf(size_d, 0.000001), 0.001, floor_decor_max_scale)
-		var svec := Vector3.ONE
-		match width_axis:
-			0:
-				svec.x = sx
-			1:
-				svec.y = sx
-			2:
-				svec.z = sx
-		match depth_axis:
-			0:
-				svec.x = sd
-			1:
-				svec.y = sd
-			2:
-				svec.z = sd
+	var width_axis: int
+	var depth_axis: int
+	if face_w >= face_d:
+		if local0 >= local1:
+			width_axis = axis0
+			depth_axis = axis1
+		else:
+			width_axis = axis1
+			depth_axis = axis0
+	else:
+		if local0 >= local1:
+			width_axis = axis1
+			depth_axis = axis0
+		else:
+			width_axis = axis0
+			depth_axis = axis1
 
-		basis = basis.scaled(svec)
+	var cols := [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	cols[normal_axis] = n
+	cols[width_axis] = u
+	cols[depth_axis] = v
+	var basis := Basis(cols[0], cols[1], cols[2]).orthonormalized()
 
-		if basis.determinant() < 0.0:
-			basis.x = -basis.x
+	if basis.determinant() < 0.0:
+		cols[depth_axis] = -cols[depth_axis]
+		basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
 
-		pos -= basis * anchor
+	var size_w := _safe_dim(aabb.size[width_axis])
+	var size_d := _safe_dim(aabb.size[depth_axis])
+	var sx := face_w / size_w
+	var sd := face_d / size_d
 
-	return Transform3D(basis, pos)
+	var svec := Vector3.ONE
+	if floor_decor_fit_to_cell:
+		svec[width_axis] = clampf(sx, 0.01, floor_decor_max_scale)
+		svec[depth_axis] = clampf(sd, 0.01, floor_decor_max_scale)
+	else:
+		var uni := clampf(minf(sx, sd), 0.01, floor_decor_max_scale)
+		svec[width_axis] = uni
+		svec[depth_axis] = uni
+
+	svec[width_axis] *= 0.98
+	svec[depth_axis] *= 0.98
+
+	basis = basis.scaled(svec)
+
+	var anchor := aabb.position + aabb.size * 0.5
+	anchor[normal_axis] = aabb.position[normal_axis]
+
+	var pos := face.center + n * floor_decor_offset
+	var xform := Transform3D(basis, pos)
+	xform.origin -= basis * anchor
+	return xform
 
 func _rebuild_floor_decor() -> void:
 	_clear_floor_decor()
