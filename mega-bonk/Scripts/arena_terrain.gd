@@ -125,7 +125,6 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
-@export var wall_decor_tile_size: Vector2 = Vector2(4.0, 4.0)
 @export var wall_decor_fit_to_face: bool = true
 @export var wall_decor_max_scale: float = 3.0
 
@@ -174,17 +173,20 @@ class WallFace:
 	var is_trapezoid: bool
 	var key: int
 
-	func _init(a0: Vector3, b0: Vector3, c0: Vector3, d0: Vector3, c: Vector3, n: Vector3, w: float, h: float, trapezoid: bool, k: int) -> void:
-		a = a0
-		b = b0
-		c = c0
-		d = d0
-		center = c
-		normal = n
-		width = w
-		height = h
-		is_trapezoid = trapezoid
-		key = k
+	func _init(
+		a0: Vector3, b0: Vector3, c0: Vector3, d0: Vector3,
+		center0: Vector3, n0: Vector3, w: float, h: float, trapezoid: bool, k: int
+	) -> void:
+		self.a = a0
+		self.b = b0
+		self.c = c0
+		self.d = d0
+		self.center = center0
+		self.normal = n0
+		self.width = w
+		self.height = h
+		self.is_trapezoid = trapezoid
+		self.key = k
 
 var _wall_faces: Array[WallFace] = []
 var _wall_decor_root: Node3D = null
@@ -2065,12 +2067,20 @@ func _ensure_wall_decor_root() -> void:
 		_wall_decor_root.name = "WallDecor"
 		add_child(_wall_decor_root)
 
-func _basis_from_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> Basis:
-	var u: Vector3 = (b - a).normalized()
-	var v: Vector3 = (a - c).normalized()
-	var n: Vector3 = u.cross(v).normalized()
-	u = v.cross(n).normalized()
-	v = n.cross(u).normalized()
+func _basis_from_face(face: WallFace) -> Basis:
+	var u: Vector3 = face.b - face.a
+	var v_raw: Vector3 = face.d - face.a
+	if u.length() < 0.0001 or v_raw.length() < 0.0001:
+		return Basis()
+
+	u = u.normalized()
+	var n: Vector3 = face.normal.normalized()
+	var v: Vector3 = n.cross(u).normalized()
+
+	if v.dot(v_raw) < 0.0:
+		v = -v
+
+	n = u.cross(v).normalized()
 	return Basis(u, v, n)
 
 func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
@@ -2140,8 +2150,6 @@ func _rebuild_wall_decor() -> void:
 
 	var faces_for_decor: Array[WallFace] = []
 	faces_for_decor.assign(_wall_faces)
-	if wall_decor_tile_size.x > 0.0 and wall_decor_tile_size.y > 0.0:
-		faces_for_decor = _tile_wall_faces(faces_for_decor, wall_decor_tile_size)
 
 	for f: WallFace in faces_for_decor:
 		if wall_decor_skip_trapezoids and f.is_trapezoid:
@@ -2193,7 +2201,7 @@ func _rebuild_wall_decor() -> void:
 		write_i[vsel] = wi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var rot: Basis = _basis_from_face(face.a, face.b, face.c, face.d)
+	var rot: Basis = _basis_from_face(face)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -2214,46 +2222,6 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 	var pos: Vector3 = face.center + face.normal.normalized() * outward_offset + world_correction
 	return Transform3D(basis, pos)
-
-func _tile_wall_faces(faces: Array[WallFace], tile_size: Vector2) -> Array[WallFace]:
-	var out: Array[WallFace] = []
-	var tile_w: float = tile_size.x
-	var tile_h: float = tile_size.y
-	for f: WallFace in faces:
-		var u: Vector3 = f.b - f.a
-		var v: Vector3 = f.d - f.a
-		var w: float = u.length()
-		var h: float = v.length()
-		var nx: int = max(1, int(ceil(w / tile_w)))
-		var ny: int = max(1, int(ceil(h / tile_h)))
-
-		for iy in range(ny):
-			for ix in range(nx):
-				var u0: float = float(ix) / float(nx)
-				var u1: float = float(ix + 1) / float(nx)
-				var v0: float = float(iy) / float(ny)
-				var v1: float = float(iy + 1) / float(ny)
-
-				var a := f.a.lerp(f.b, u0).lerp(f.d.lerp(f.c, u0), v0)
-				var b := f.a.lerp(f.b, u1).lerp(f.d.lerp(f.c, u1), v0)
-				var c := f.a.lerp(f.b, u1).lerp(f.d.lerp(f.c, u1), v1)
-				var d := f.a.lerp(f.b, u0).lerp(f.d.lerp(f.c, u0), v1)
-
-				var edge_u: Vector3 = b - a
-				var edge_v: Vector3 = d - a
-				var n: Vector3 = edge_u.cross(edge_v)
-				var nlen: float = n.length()
-				if nlen < 0.0001:
-					continue
-				n /= nlen
-
-				var width: float = edge_u.length()
-				var height: float = edge_v.length()
-				var center: Vector3 = (a + b + c + d) * 0.25
-				var trapezoid: bool = _is_trapezoid(a, b, c, d)
-				var key: int = _hash_wall_face(center, n)
-				out.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
-	return out
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
