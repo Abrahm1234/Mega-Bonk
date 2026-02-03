@@ -2191,8 +2191,8 @@ func _axis_min3(v: Vector3) -> int:
 	return 2
 
 func _infer_floor_mesh_normal_axis(mesh: Mesh) -> int:
-	# Prefer the mesh's thickness axis (most reliable for floor tiles that have big side walls).
-	# If no axis is clearly thinner than the others, fall back to an area-weighted dominant normal.
+	# Prefer the mesh's thickness axis only if Y is clearly thinner.
+	# Otherwise fall back to an area-weighted dominant normal with a slight Y bias.
 	if mesh == null:
 		return 1
 	var aabb := mesh.get_aabb()
@@ -2205,8 +2205,8 @@ func _infer_floor_mesh_normal_axis(mesh: Mesh) -> int:
 	var s1 := maxf(float(dims[1]), 0.000001)
 	var thin_ratio := s0 / s1
 
-	if thin_ratio <= 0.75:
-		return _axis_min3(abs_size)
+	if thin_ratio <= 0.75 and _axis_min3(abs_size) == 1:
+		return 1
 
 	return _dominant_normal_axis_for_mesh(mesh)
 
@@ -2244,7 +2244,10 @@ func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
 		sum.z += absf(n.z) * area
 
 	var axis := 1
-	if sum.x >= sum.y and sum.x >= sum.z:
+	var max_h := maxf(sum.x, sum.z)
+	if sum.y >= max_h * 0.9:
+		axis = 1
+	elif sum.x >= sum.y and sum.x >= sum.z:
 		axis = 0
 	elif sum.z >= sum.x and sum.z >= sum.y:
 		axis = 2
@@ -2645,35 +2648,57 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	var cap_top: Dictionary = _mesh_cap_extents(mesh, normal_axis, axis0, axis1, true)
 	var cap_bottom: Dictionary = _mesh_cap_extents(mesh, normal_axis, axis0, axis1, false)
 
-	var cap: Dictionary = cap_top
-	if flipped:
-		cap = cap_bottom
+	var cap_anchor: Dictionary = cap_bottom if flipped else cap_top
+	var cap_size: Dictionary = cap_top
+	var cap_top_valid := bool(cap_top.get("valid", false))
+	var cap_bottom_valid := bool(cap_bottom.get("valid", false))
+	var cap_size_valid := cap_top_valid or cap_bottom_valid
+	var cap_anchor_valid := bool(cap_anchor.get("valid", false))
+
+	if cap_top_valid and cap_bottom_valid:
+		var top_w := float(cap_top.get("size_w", 0.0))
+		var top_d := float(cap_top.get("size_d", 0.0))
+		var bottom_w := float(cap_bottom.get("size_w", 0.0))
+		var bottom_d := float(cap_bottom.get("size_d", 0.0))
+		if width_axis == axis1:
+			top_w = float(cap_top.get("size_d", 0.0))
+			top_d = float(cap_top.get("size_w", 0.0))
+			bottom_w = float(cap_bottom.get("size_d", 0.0))
+			bottom_d = float(cap_bottom.get("size_w", 0.0))
+		if bottom_w * bottom_d > top_w * top_d:
+			cap_size = cap_bottom
+	elif cap_bottom_valid:
+		cap_size = cap_bottom
 
 	var size_w: float
 	var size_d: float
 	var anchor: Vector3 = Vector3.ZERO
-	var cap_valid := bool(cap.get("valid", false))
-	if cap_valid:
-		var cap_w: float = float(cap.get("size_w", 0.0))
-		var cap_d: float = float(cap.get("size_d", 0.0))
-		var cap_center_w: float = float(cap.get("center_w", 0.0))
-		var cap_center_d: float = float(cap.get("center_d", 0.0))
-		var cap_plane_n: float = float(cap.get("plane_n", 0.0))
+	if cap_size_valid:
+		var cap_w: float = float(cap_size.get("size_w", 0.0))
+		var cap_d: float = float(cap_size.get("size_d", 0.0))
 		if width_axis == axis1:
-			cap_w = float(cap.get("size_d", 0.0))
-			cap_d = float(cap.get("size_w", 0.0))
-			cap_center_w = float(cap.get("center_d", 0.0))
-			cap_center_d = float(cap.get("center_w", 0.0))
+			cap_w = float(cap_size.get("size_d", 0.0))
+			cap_d = float(cap_size.get("size_w", 0.0))
 		size_w = _safe_dim(cap_w - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(cap_d - 2.0 * floor_decor_local_margin)
-		# If cap bounds collapse (e.g., outlier spike), fall back to full AABB to avoid exploding scales.
-		if size_w <= 0.001 or size_d <= 0.001:
-			cap_valid = false
-		if cap_valid:
-			anchor[width_axis] = cap_center_w
-			anchor[depth_axis] = cap_center_d
-			anchor[normal_axis] = cap_plane_n
-	if not cap_valid:
+
+		var aabb_area := absf(aabb.size[axis0] * aabb.size[axis1])
+		var cap_area := size_w * size_d
+		if size_w <= 0.001 or size_d <= 0.001 or cap_area <= aabb_area * 0.12:
+			cap_size_valid = false
+
+	if cap_size_valid and (cap_anchor_valid or cap_size_valid):
+		var anchor_cap := cap_anchor if cap_anchor_valid else cap_size
+		var cap_center_w: float = float(anchor_cap.get("center_w", 0.0))
+		var cap_center_d: float = float(anchor_cap.get("center_d", 0.0))
+		var cap_plane_n: float = float(anchor_cap.get("plane_n", 0.0))
+		if width_axis == axis1:
+			cap_center_w = float(anchor_cap.get("center_d", 0.0))
+			cap_center_d = float(anchor_cap.get("center_w", 0.0))
+		anchor[width_axis] = cap_center_w
+		anchor[depth_axis] = cap_center_d
+		anchor[normal_axis] = cap_plane_n
+	else:
 		size_w = _safe_dim(aabb.size[width_axis] - 2.0 * floor_decor_local_margin)
 		size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * floor_decor_local_margin)
 		anchor = aabb.position + aabb.size * 0.5
