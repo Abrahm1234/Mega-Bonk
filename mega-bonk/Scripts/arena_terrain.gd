@@ -2056,11 +2056,11 @@ func _build_mesh_and_collision(n: int) -> void:
 							var mean_c: float = (c_n.x + c_n.y) * 0.5
 							if mean_a >= mean_c:
 								_add_wall_z_between(
-									st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
+									st, z1, x1, x0, bot1z, bot0z, top1z, top0z, uv_scale_wall, wall_subdiv
 								)
 							else:
 								_add_wall_z_between(
-									st, z1, x1, x0, bot1z, bot0z, top1z, top0z, uv_scale_wall, wall_subdiv
+									st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
 								)
 
 	# Container walls (keeps everything “inside a box”)
@@ -2119,18 +2119,15 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	var n: int = max(2, cells_per_side)
 	var fx: float = (world_x - _ox) / _cell_size
 	var fz: float = (world_z - _oz) / _cell_size
-	var ix: int = int(floor(fx))
-	var iz: int = int(floor(fz))
-	if ix < 0 or iz < 0 or ix >= n or iz >= n:
-		return -INF
-
-	ix = clampi(ix, 0, n - 2)
-	iz = clampi(iz, 0, n - 2)
-	var tx: float = fx - float(ix)
-	var tz: float = fz - float(iz)
+	var ix: int = clampi(int(floor(fx)), 0, n - 1)
+	var iz: int = clampi(int(floor(fz)), 0, n - 1)
+	var tx: float = clampf(fx - float(ix), 0.0, 1.0)
+	var tz: float = clampf(fz - float(iz), 0.0, 1.0)
 
 	var corners: Vector4 = _cell_corners(ix, iz)
-	return _bilinear_height(corners.x, corners.y, corners.z, corners.w, tx, tz)
+	var y0: float = lerpf(corners.x, corners.y, tx)
+	var y1: float = lerpf(corners.z, corners.w, tx)
+	return lerpf(y0, y1, tz)
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
@@ -2140,27 +2137,17 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	n.y = 0.0
 	if n.length_squared() < 0.0001:
 		n = Vector3.RIGHT
-	else:
-		n = n.normalized()
+	n = n.normalized()
 
-	var corners: Array[Vector3] = [face.a, face.b, face.c, face.d]
-	corners.sort_custom(Callable(self, "_sort_vec3_y_desc"))
-	var top_mid: Vector3 = (corners[0] + corners[1]) * 0.5
-	top_mid.y += 0.05
+	var probe: Vector3 = face.center
+	probe.y += 0.02
 
-	var eps_side: float = 0.15
-	var eps_air: float = 0.02
-	var p_plus: Vector3 = top_mid + n * eps_side
-	var p_minus: Vector3 = top_mid - n * eps_side
+	var eps_side: float = max(0.25, _cell_size * 0.05)
+	var p_plus: Vector3 = probe + n * eps_side
+	var p_minus: Vector3 = probe - n * eps_side
 	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
 	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
-	var plus_open: bool = p_plus.y > (h_plus + eps_air)
-	var minus_open: bool = p_minus.y > (h_minus + eps_air)
 
-	if plus_open and not minus_open:
-		return n
-	if minus_open and not plus_open:
-		return -n
 	return n if h_plus < h_minus else -n
 
 func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
