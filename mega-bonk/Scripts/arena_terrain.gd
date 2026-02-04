@@ -148,7 +148,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
-@export var floor_decor_mesh_normal_axis: int = -1
+@export var floor_decor_mesh_normal_axis: int = 2
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
@@ -2713,16 +2713,6 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f2: WallFace in rect_faces:
-			var to_face: Vector3 = f2.center - _arena_center_local()
-			to_face.y = 0.0
-			if to_face.length() > 0.0001:
-				to_face = to_face.normalized()
-				var n: Vector3 = f2.normal
-				n.y = 0.0
-				if n.length() > 0.0001:
-					n = n.normalized()
-					if n.dot(to_face) < 0.0:
-						continue
 			if f2.center.y < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
@@ -2743,16 +2733,6 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
-			var w_to_face: Vector3 = wf2.center - _arena_center_local()
-			w_to_face.y = 0.0
-			if w_to_face.length() > 0.0001:
-				w_to_face = w_to_face.normalized()
-				var w_n: Vector3 = wf2.normal
-				w_n.y = 0.0
-				if w_n.length() > 0.0001:
-					w_n = w_n.normalized()
-					if w_n.dot(w_to_face) < 0.0:
-						continue
 			if wf2.center.y < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and wf2.width > wall_decor_max_size.x:
@@ -2776,6 +2756,14 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
+	var to_face := face.center - _arena_center_local()
+	to_face.y = 0.0
+	outward.y = 0.0
+	if to_face.length() > 0.0001 and outward.length() > 0.0001:
+		to_face = to_face.normalized()
+		outward = outward.normalized()
+		if outward.dot(to_face) < 0.0:
+			outward = -outward
 	_face_flip_if_needed(face, outward)
 	var rot: Basis = _basis_from_outward(outward)
 
@@ -2811,6 +2799,14 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
+	var to_face := face.center - _arena_center_local()
+	to_face.y = 0.0
+	outward.y = 0.0
+	if to_face.length() > 0.0001 and outward.length() > 0.0001:
+		to_face = to_face.normalized()
+		outward = outward.normalized()
+		if outward.dot(to_face) < 0.0:
+			outward = -outward
 	_face_flip_if_needed(face, outward)
 
 	var ab_avg: float = (face.a.y + face.b.y) * 0.5
@@ -2864,8 +2860,11 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	var sx: float = 1.0
 	var sy: float = 1.0
 	if wall_wedge_decor_fit_to_face:
-		sx = clamp(face.width / ref_w, 0.1, wall_wedge_decor_max_scale)
-		sy = clamp(face.height / ref_h, 0.1, wall_wedge_decor_max_scale)
+		sx = max(face.width / ref_w, 0.1)
+		sy = max(face.height / ref_h, 0.1)
+		if wall_wedge_decor_max_scale > 0.0:
+			sx = min(sx, wall_wedge_decor_max_scale)
+			sy = min(sy, wall_wedge_decor_max_scale)
 	var sz: float = 1.0
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
@@ -2963,6 +2962,9 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 			else:
 				axis_thin = 1
 
+	if floor_decor_mesh_normal_axis >= 0 and floor_decor_mesh_normal_axis <= 2:
+		axis_thin = floor_decor_mesh_normal_axis
+
 	var normal_axis: int = axis_thin
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
 	var axis0: int = plane_axes[0]
@@ -3012,18 +3014,8 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 	var local_basis := Basis(cols[0], cols[1], cols[2])
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
-		v = -v
-		local_basis = Basis(u, face_n, v)
-
-	match floor_decor_mesh_normal_axis:
-		0:
-			local_basis = local_basis * Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
-		1:
-			pass
-		2:
-			local_basis = local_basis * Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
-		_:
-			pass
+		cols[depth_axis] = -cols[depth_axis]
+		local_basis = Basis(cols[0], cols[1], cols[2])
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
@@ -3156,18 +3148,25 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 		sd = s
 
 	# Scale in local space (do not scale thickness)
-	var scale_vec := Vector3.ONE
+	var scale_vec: Vector3 = Vector3.ONE
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := local_basis
-	basis_scaled.x = basis_scaled.x * scale_vec.x
-	basis_scaled.y = basis_scaled.y * scale_vec.y
-	basis_scaled.z = basis_scaled.z * scale_vec.z
+	var basis_scaled: Basis = local_basis
+	basis_scaled.x *= scale_vec.x
+	basis_scaled.y *= scale_vec.y
+	basis_scaled.z *= scale_vec.z
 
 	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
 	var pos: Vector3 = face.center + face_n * floor_decor_offset
-	var mesh_n: Vector3 = local_basis.y.normalized()
+	var mesh_n: Vector3 = Vector3.UP
+	match normal_axis:
+		0:
+			mesh_n = basis_scaled.x.normalized()
+		1:
+			mesh_n = basis_scaled.y.normalized()
+		2:
+			mesh_n = basis_scaled.z.normalized()
 	var extent_n: float = abs(mesh_n.x) * aabb.size.x + abs(mesh_n.y) * aabb.size.y + abs(mesh_n.z) * aabb.size.z
 	var mesh_anchor: Vector3 = anchor - mesh_n * (extent_n * 0.5)
 	var origin: Vector3 = pos - basis_scaled * mesh_anchor
