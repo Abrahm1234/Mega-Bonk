@@ -2402,6 +2402,18 @@ func _edge_vertical_score(p0: Vector3, p1: Vector3) -> float:
 func _edge_vertical_height(p0: Vector3, p1: Vector3) -> float:
 	return absf(p0.y - p1.y)
 
+func _face_flip_if_needed(face, desired_dir: Vector3) -> void:
+	if face.normal.dot(desired_dir) < 0.0:
+		var ta = face.a
+		var tb = face.b
+		var tc = face.c
+		var td = face.d
+		face.a = tb
+		face.b = ta
+		face.c = td
+		face.d = tc
+		face.normal = -face.normal
+
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
 	if n.length() < 0.000001:
@@ -2740,7 +2752,11 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _outward_from_center(face)
+	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
+	if outward.length_squared() < 0.0001:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	_face_flip_if_needed(face, outward)
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
@@ -2771,13 +2787,11 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = face.normal
-	outward.y = 0.0
-	if outward.length_squared() < 0.0001:
-		outward = Vector3(face.normal.x, 0.0, face.normal.z)
+	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
+	_face_flip_if_needed(face, outward)
 
 	var ab_avg: float = (face.a.y + face.b.y) * 0.5
 	var dc_avg: float = (face.d.y + face.c.y) * 0.5
@@ -2862,6 +2876,35 @@ func _dominant_plane_axes(normal_axis: int) -> PackedInt32Array:
 			return PackedInt32Array([0, 2])
 
 func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	if mesh == null:
+		return Transform3D()
+
+	_face_flip_if_needed(face, Vector3.UP)
+
+	var a: Vector3 = face.a
+	var b: Vector3 = face.b
+	var c: Vector3 = face.c
+	var d: Vector3 = face.d
+
+	var ab: Vector3 = b - a
+	var ad: Vector3 = d - a
+
+	var x_axis: Vector3 = ab if ab.length_squared() >= ad.length_squared() else ad
+	x_axis = x_axis.normalized()
+
+	var y_axis: Vector3 = face.normal.normalized()
+	var z_axis: Vector3 = y_axis.cross(x_axis).normalized()
+	x_axis = z_axis.cross(y_axis).normalized()
+
+	var center: Vector3 = (a + b + c + d) * 0.25
+	var basis := Basis(x_axis, y_axis, z_axis)
+
+	var eps: float = 0.002
+	var origin: Vector3 = center + y_axis * eps
+
+	return Transform3D(basis, origin)
+
+func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if mesh == null:
 		return Transform3D()
 
