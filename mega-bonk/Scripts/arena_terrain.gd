@@ -3014,18 +3014,8 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 	var local_basis := Basis(cols[0], cols[1], cols[2])
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
-		v = -v
-		local_basis = Basis(u, face_n, v)
-
-	match floor_decor_mesh_normal_axis:
-		0:
-			local_basis = local_basis * Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
-		1:
-			pass
-		2:
-			local_basis = local_basis * Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
-		_:
-			pass
+		cols[depth_axis] = -cols[depth_axis]
+		local_basis = Basis(cols[0], cols[1], cols[2])
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
@@ -3169,7 +3159,7 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 
 	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
 	var pos: Vector3 = face.center + face_n * floor_decor_offset
-	var mesh_n: Vector3 = local_basis.y.normalized()
+	var mesh_n: Vector3 = local_basis[normal_axis].normalized()
 	var extent_n: float = abs(mesh_n.x) * aabb.size.x + abs(mesh_n.y) * aabb.size.y + abs(mesh_n.z) * aabb.size.z
 	var mesh_anchor: Vector3 = anchor - mesh_n * (extent_n * 0.5)
 	var origin: Vector3 = pos - basis_scaled * mesh_anchor
