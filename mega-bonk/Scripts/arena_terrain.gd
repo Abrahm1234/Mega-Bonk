@@ -135,6 +135,8 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
 @export var wall_wedge_decor_max_scale: float = 2.5
+@export var wall_wedge_decor_flip_outward: bool = true
+@export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
 @export var wall_decor_min_world_y: float = -INF
@@ -2375,9 +2377,6 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	return n if h_plus < h_minus else -n
 
-func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
-	return ((a + d) - (b + c)).length() > 0.001
-
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
 	if n.length() < 0.000001:
@@ -2431,7 +2430,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		return
 
 	var center: Vector3 = (a + b + c + d) * 0.25
-	var trapezoid: bool = _is_trapezoid(a, b, c, d)
+	var trapezoid: bool = absf(h0 - h1) > 0.001
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
@@ -2643,24 +2642,30 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = _pick_open_side_outward(face)
-	var u_dir: Vector3 = face.b - face.a
-	u_dir.y = 0.0
-	if u_dir.length_squared() < 0.0001:
-		u_dir = Vector3.RIGHT
-	u_dir = u_dir.normalized()
+	var z_dir: Vector3 = outward
+	z_dir.y = 0.0
+	if z_dir.length_squared() < 0.0001:
+		z_dir = Vector3.FORWARD
+	z_dir = z_dir.normalized()
 
-	var z_dir: Vector3 = outward.normalized()
-	var x_dir: Vector3 = u_dir
 	var y_dir: Vector3 = Vector3.UP
+	var x_dir: Vector3 = y_dir.cross(z_dir)
+	if x_dir.length_squared() < 0.0001:
+		x_dir = Vector3.RIGHT
+	x_dir = x_dir.normalized()
+	y_dir = z_dir.cross(x_dir).normalized()
+
 	var rot := Basis(x_dir, y_dir, z_dir)
 
-	var attach_far: bool = wall_decor_flip_outward
-	if wall_decor_flip_facing:
+	var attach_far: bool = wall_wedge_decor_flip_outward
+	if wall_wedge_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
 
-	var slope_up_along_x: bool = face.b.y >= face.a.y
-	if not slope_up_along_x:
+	var left_avg: float = (face.a.y + face.d.y) * 0.5
+	var right_avg: float = (face.b.y + face.c.y) * 0.5
+	var slope_up_toward_right: bool = right_avg > left_avg
+	if not slope_up_toward_right:
 		rot = rot * Basis(rot.z, PI)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
