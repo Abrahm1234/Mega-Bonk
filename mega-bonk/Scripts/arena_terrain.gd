@@ -129,6 +129,14 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_max_scale: float = 3.0
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
+@export var enable_wall_wedge_decor: bool = true
+@export var wall_wedge_decor_meshes: Array[Mesh] = []
+@export var wall_wedge_decor_seed: int = 1337
+@export var wall_wedge_decor_offset: float = 0.02
+@export var wall_wedge_decor_fit_to_face: bool = true
+@export var wall_wedge_decor_max_scale: float = 2.5
+@export var wall_wedge_decor_flip_outward: bool = true
+@export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
 @export var wall_decor_min_world_y: float = -INF
@@ -2369,8 +2377,42 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	return n if h_plus < h_minus else -n
 
-func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
-	return ((a + d) - (b + c)).length() > 0.001
+func _arena_center_local() -> Vector3:
+	return Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+
+func _outward_from_center(face: WallFace) -> Vector3:
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length_squared() < 0.000001:
+		n = Vector3.FORWARD
+	n = n.normalized()
+
+	var to_face: Vector3 = face.center - _arena_center_local()
+	to_face.y = 0.0
+	if to_face.length_squared() > 0.000001 and n.dot(to_face) < 0.0:
+		n = -n
+
+	return n
+
+func _edge_vertical_score(p0: Vector3, p1: Vector3) -> float:
+	var d := p1 - p0
+	var len := maxf(0.000001, d.length())
+	return absf(d.y) / len
+
+func _edge_vertical_height(p0: Vector3, p1: Vector3) -> float:
+	return absf(p0.y - p1.y)
+
+func _face_flip_if_needed(face, desired_dir: Vector3) -> void:
+	if face.normal.dot(desired_dir) < 0.0:
+		var ta = face.a
+		var tb = face.b
+		var tc = face.c
+		var td = face.d
+		face.a = tb
+		face.b = ta
+		face.c = td
+		face.d = tc
+		face.normal = -face.normal
 
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
@@ -2417,20 +2459,120 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n /= nlen
 
 	var width: float = edge_u.length()
-	var h0: float = (a - d).length()
-	var h1: float = (b - c).length()
-	var height: float = max(h0, h1)
+	var edges := [
+		[a, b],
+		[b, c],
+		[c, d],
+		[d, a],
+	]
+
+	var best0_i := 0
+	var best1_i := 1
+	var best0_s := -1.0
+	var best1_s := -1.0
+
+	for i in range(4):
+		var p0: Vector3 = edges[i][0]
+		var p1: Vector3 = edges[i][1]
+		var s := _edge_vertical_score(p0, p1)
+		if s > best0_s:
+			best1_s = best0_s
+			best1_i = best0_i
+			best0_s = s
+			best0_i = i
+		elif s > best1_s:
+			best1_s = s
+			best1_i = i
+
+	var h0: float = _edge_vertical_height(edges[best0_i][0], edges[best0_i][1])
+	var h1: float = _edge_vertical_height(edges[best1_i][0], edges[best1_i][1])
+	var height: float = maxf(h0, h1)
 
 	if height < wall_decor_min_height:
 		return
 
 	var center: Vector3 = (a + b + c + d) * 0.25
-	var trapezoid: bool = _is_trapezoid(a, b, c, d)
+	var trapezoid: bool = absf(h0 - h1) > 0.001
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
+func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
+	var ad: float = absf(face.a.y - face.d.y)
+	var bc: float = absf(face.b.y - face.c.y)
+	var ab: float = absf(face.a.y - face.b.y)
+	var dc: float = absf(face.d.y - face.c.y)
+	var use_sides_ad_bc: bool = (ad + bc) >= (ab + dc)
+
+	var e0_lo: Vector3
+	var e0_hi: Vector3
+	var e1_lo: Vector3
+	var e1_hi: Vector3
+	if use_sides_ad_bc:
+		e0_lo = face.a
+		e0_hi = face.d
+		e1_lo = face.b
+		e1_hi = face.c
+	else:
+		e0_lo = face.a
+		e0_hi = face.b
+		e1_lo = face.d
+		e1_hi = face.c
+
+	if e0_hi.y < e0_lo.y:
+		var tmp := e0_lo
+		e0_lo = e0_hi
+		e0_hi = tmp
+
+	if e1_hi.y < e1_lo.y:
+		var tmp2 := e1_lo
+		e1_lo = e1_hi
+		e1_hi = tmp2
+
+	var h0: float = absf(e0_hi.y - e0_lo.y)
+	var h1: float = absf(e1_hi.y - e1_lo.y)
+	var min_h: float = minf(h0, h1)
+
+	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
+		return [face]
+
+	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
+	var t1: float = clampf(min_h / maxf(h1, 0.0001), 0.0, 1.0)
+
+	var p0 := e0_lo.lerp(e0_hi, t0)
+	var p1 := e1_lo.lerp(e1_hi, t1)
+
+	var ra := e0_lo
+	var rb := e1_lo
+	var rc := p1
+	var rd := p0
+
+	var rcenter := (ra + rb + rc + rd) * 0.25
+	var ru := rb - ra
+	var rv := rd - ra
+	var rn := ru.cross(rv).normalized()
+	var rwidth := ru.length()
+	var rheight: float = maxf((rd - ra).length(), (rc - rb).length())
+	var rkey := face.key ^ 0x51ED_0A11
+
+	var rect_face := WallFace.new(ra, rb, rc, rd, face.center, face.normal, rwidth, min_h, false, rkey)
+
+	var wa := p0
+	var wb := p1
+	var wc := e1_hi
+	var wd := e0_hi
+
+	var wwidth := rwidth
+	var wheight: float = ((h0 + h1) * 0.5) - min_h
+	var wkey := face.key ^ 0xA7D3_19C3
+
+	var wedge_face := WallFace.new(wa, wb, wc, wd, face.center, face.normal, wwidth, wheight, false, wkey)
+
+	return [rect_face, wedge_face]
+
 func _rebuild_wall_decor() -> void:
-	if not enable_wall_decor or wall_decor_meshes.is_empty():
+	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
+	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
+	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
 				child.queue_free()
@@ -2441,97 +2583,200 @@ func _rebuild_wall_decor() -> void:
 	for child: Node in _wall_decor_root.get_children():
 		child.queue_free()
 
-	var variant_count: int = wall_decor_meshes.size()
+	var rect_variant_count: int = wall_decor_meshes.size()
+	var wedge_variant_count: int = wall_wedge_decor_meshes.size()
 
-	var counts: Array[int] = []
-	counts.resize(variant_count)
-	for i: int in range(variant_count):
-		counts[i] = 0
+	var rect_counts: Array[int] = []
+	rect_counts.resize(rect_variant_count)
+	for i: int in range(rect_variant_count):
+		rect_counts[i] = 0
 
-	var faces_for_decor: Array[WallFace] = []
-	faces_for_decor.assign(_wall_faces)
+	var wedge_counts: Array[int] = []
+	wedge_counts.resize(wedge_variant_count)
+	for i2: int in range(wedge_variant_count):
+		wedge_counts[i2] = 0
+
+	var rect_faces: Array[WallFace] = []
+	var wedge_faces: Array[WallFace] = []
 	var trap_count: int = 0
 	for face in _wall_faces:
 		if face.is_trapezoid:
 			trap_count += 1
+			var parts := _split_trapezoid_wall_face_for_decor(face)
+			if parts.size() == 2:
+				var rect_face: WallFace = parts[0]
+				var wedge_face: WallFace = parts[1]
+				if has_wedge_decor:
+					wedge_faces.append(wedge_face)
+				if has_rect_decor and not wall_decor_skip_trapezoids and rect_face.height > 0.01:
+					rect_faces.append(rect_face)
+			continue
+		rect_faces.append(face)
 	print(
 		"wall_decor_meshes:", wall_decor_meshes.size(),
+		" wall_wedge_decor_meshes:", wall_wedge_decor_meshes.size(),
 		" wall_faces:", _wall_faces.size(),
 		" trapezoids:", trap_count,
 		" skip_trap:", wall_decor_skip_trapezoids,
 		" max_size:", wall_decor_max_size
 	)
 
-	for f: WallFace in faces_for_decor:
-		if f.center.y < wall_decor_min_world_y:
-			continue
-		if wall_decor_skip_trapezoids and f.is_trapezoid:
-			continue
-		if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
-			continue
-		if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
-			continue
-		var idx: int = (f.key + wall_decor_seed) % variant_count
-		counts[idx] += 1
+	if has_rect_decor:
+		for f: WallFace in rect_faces:
+			if f.center.y < wall_decor_min_world_y:
+				continue
+			if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
+				continue
+			if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
+				continue
+			var idx: int = (f.key + wall_decor_seed) % rect_variant_count
+			rect_counts[idx] += 1
 
-	var mmi_by_variant: Array[MultiMeshInstance3D] = []
-	mmi_by_variant.resize(variant_count)
+	if has_wedge_decor:
+		for wf: WallFace in wedge_faces:
+			if wf.center.y < wall_decor_min_world_y:
+				continue
+			if wall_decor_max_size.x > 0.0 and wf.width > wall_decor_max_size.x:
+				continue
+			if wall_decor_max_size.y > 0.0 and wf.height > wall_decor_max_size.y:
+				continue
+			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
+			wedge_counts[widx] += 1
 
-	var aabb_by_variant: Array[AABB] = []
-	aabb_by_variant.resize(variant_count)
+	var rect_mmi_by_variant: Array[MultiMeshInstance3D] = []
+	rect_mmi_by_variant.resize(rect_variant_count)
 
-	for v: int in range(variant_count):
-		if counts[v] <= 0:
-			mmi_by_variant[v] = null
+	var rect_aabb_by_variant: Array[AABB] = []
+	rect_aabb_by_variant.resize(rect_variant_count)
+
+	for v: int in range(rect_variant_count):
+		if rect_counts[v] <= 0:
+			rect_mmi_by_variant[v] = null
 			continue
 
 		var mm: MultiMesh = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.mesh = wall_decor_meshes[v]
-		mm.instance_count = counts[v]
+		mm.instance_count = rect_counts[v]
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 
 		_wall_decor_root.add_child(mmi)
-		mmi_by_variant[v] = mmi
-		aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
+		rect_mmi_by_variant[v] = mmi
+		rect_aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
 
-	var write_i: Array[int] = []
-	write_i.resize(variant_count)
-	for v2: int in range(variant_count):
-		write_i[v2] = 0
+	var wedge_mmi_by_variant: Array[MultiMeshInstance3D] = []
+	wedge_mmi_by_variant.resize(wedge_variant_count)
 
-	var total_instances: int = 0
-	for count in counts:
-		total_instances += count
-	if total_instances <= 0:
-		push_warning("Wall decor: 0 instances after filtering. Check max size or trapezoid skip.")
-		return
+	var wedge_aabb_by_variant: Array[AABB] = []
+	wedge_aabb_by_variant.resize(wedge_variant_count)
 
-	for f2: WallFace in faces_for_decor:
-		if f2.center.y < wall_decor_min_world_y:
-			continue
-		if wall_decor_skip_trapezoids and f2.is_trapezoid:
-			continue
-		if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
-			continue
-		if wall_decor_max_size.y > 0.0 and f2.height > wall_decor_max_size.y:
-			continue
-		var vsel: int = (f2.key + wall_decor_seed) % variant_count
-		var mmi2: MultiMeshInstance3D = mmi_by_variant[vsel]
-		if mmi2 == null:
+	for wv: int in range(wedge_variant_count):
+		if wedge_counts[wv] <= 0:
+			wedge_mmi_by_variant[wv] = null
 			continue
 
-		var aabb: AABB = aabb_by_variant[vsel]
-		var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+		var wmm: MultiMesh = MultiMesh.new()
+		wmm.transform_format = MultiMesh.TRANSFORM_3D
+		wmm.mesh = wall_wedge_decor_meshes[wv]
+		wmm.instance_count = wedge_counts[wv]
 
-		var wi: int = write_i[vsel]
-		mmi2.multimesh.set_instance_transform(wi, xf)
-		write_i[vsel] = wi + 1
+		var wmmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		wmmi.multimesh = wmm
+
+		_wall_decor_root.add_child(wmmi)
+		wedge_mmi_by_variant[wv] = wmmi
+		wedge_aabb_by_variant[wv] = wall_wedge_decor_meshes[wv].get_aabb()
+
+	var rect_write_i: Array[int] = []
+	rect_write_i.resize(rect_variant_count)
+	for v2: int in range(rect_variant_count):
+		rect_write_i[v2] = 0
+
+	var wedge_write_i: Array[int] = []
+	wedge_write_i.resize(wedge_variant_count)
+	for wv2: int in range(wedge_variant_count):
+		wedge_write_i[wv2] = 0
+
+	var total_rect_instances: int = 0
+	for count in rect_counts:
+		total_rect_instances += count
+	if has_rect_decor and total_rect_instances <= 0:
+		push_warning("Wall decor: 0 rectangular instances after filtering. Check max size.")
+
+	var total_wedge_instances: int = 0
+	for wcount in wedge_counts:
+		total_wedge_instances += wcount
+	if has_wedge_decor and total_wedge_instances <= 0:
+		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
+
+	if has_rect_decor:
+		for f2: WallFace in rect_faces:
+			var to_face: Vector3 = f2.center - _arena_center_local()
+			to_face.y = 0.0
+			if to_face.length() > 0.0001:
+				to_face = to_face.normalized()
+				var n: Vector3 = f2.normal
+				n.y = 0.0
+				if n.length() > 0.0001:
+					n = n.normalized()
+					if n.dot(to_face) < 0.0:
+						continue
+			if f2.center.y < wall_decor_min_world_y:
+				continue
+			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
+				continue
+			if wall_decor_max_size.y > 0.0 and f2.height > wall_decor_max_size.y:
+				continue
+			var vsel: int = (f2.key + wall_decor_seed) % rect_variant_count
+			var mmi2: MultiMeshInstance3D = rect_mmi_by_variant[vsel]
+			if mmi2 == null:
+				continue
+
+			var aabb: AABB = rect_aabb_by_variant[vsel]
+			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+
+			var wi: int = rect_write_i[vsel]
+			mmi2.multimesh.set_instance_transform(wi, xf)
+			rect_write_i[vsel] = wi + 1
+
+	if has_wedge_decor:
+		for wf2: WallFace in wedge_faces:
+			var w_to_face: Vector3 = wf2.center - _arena_center_local()
+			w_to_face.y = 0.0
+			if w_to_face.length() > 0.0001:
+				w_to_face = w_to_face.normalized()
+				var w_n: Vector3 = wf2.normal
+				w_n.y = 0.0
+				if w_n.length() > 0.0001:
+					w_n = w_n.normalized()
+					if w_n.dot(w_to_face) < 0.0:
+						continue
+			if wf2.center.y < wall_decor_min_world_y:
+				continue
+			if wall_decor_max_size.x > 0.0 and wf2.width > wall_decor_max_size.x:
+				continue
+			if wall_decor_max_size.y > 0.0 and wf2.height > wall_decor_max_size.y:
+				continue
+			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
+			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
+			if wmmi2 == null:
+				continue
+
+			var waabb: AABB = wedge_aabb_by_variant[wsel]
+			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
+
+			var wwi: int = wedge_write_i[wsel]
+			wmmi2.multimesh.set_instance_transform(wwi, wxf)
+			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
+	if outward.length_squared() < 0.0001:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	_face_flip_if_needed(face, outward)
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
@@ -2561,6 +2806,82 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
+func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
+	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
+	if outward.length_squared() < 0.0001:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	_face_flip_if_needed(face, outward)
+
+	var ab_avg: float = (face.a.y + face.b.y) * 0.5
+	var dc_avg: float = (face.d.y + face.c.y) * 0.5
+
+	var bottom0: Vector3
+	var bottom1: Vector3
+	var top0: Vector3
+	var top1: Vector3
+	if ab_avg <= dc_avg:
+		bottom0 = face.a
+		bottom1 = face.b
+		top0 = face.d
+		top1 = face.c
+	else:
+		bottom0 = face.d
+		bottom1 = face.c
+		top0 = face.a
+		top1 = face.b
+
+	var y_dir := Vector3.UP
+	var x_dir := y_dir.cross(outward).normalized()
+	if x_dir.length_squared() < 0.0001:
+		x_dir = Vector3.RIGHT
+
+	var u_dir := (bottom1 - bottom0)
+	u_dir.y = 0.0
+	if u_dir.length_squared() > 0.0001 and x_dir.dot(u_dir.normalized()) < 0.0:
+		x_dir = -x_dir
+
+	var z_dir := x_dir.cross(y_dir).normalized()
+	if z_dir.dot(outward) < 0.0:
+		z_dir = -z_dir
+		x_dir = -x_dir
+
+	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
+
+	var attach_far: bool = wall_wedge_decor_flip_outward
+	if wall_wedge_decor_flip_facing:
+		rot = Basis(Vector3.UP, PI) * rot
+		attach_far = not attach_far
+
+	var left_avg: float = (bottom0.y + top0.y) * 0.5
+	var right_avg: float = (bottom1.y + top1.y) * 0.5
+	var slope_up_toward_right: bool = right_avg > left_avg
+	if not slope_up_toward_right:
+		rot = rot * Basis(rot.z, PI)
+
+	var ref_w: float = max(aabb.size.x, 0.001)
+	var ref_h: float = max(aabb.size.y, 0.001)
+	var sx: float = 1.0
+	var sy: float = 1.0
+	if wall_wedge_decor_fit_to_face:
+		sx = clamp(face.width / ref_w, 0.1, wall_wedge_decor_max_scale)
+		sy = clamp(face.height / ref_h, 0.1, wall_wedge_decor_max_scale)
+	var sz: float = 1.0
+
+	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+
+	var center_x: float = aabb.position.x + aabb.size.x * 0.5
+	var center_y: float = aabb.position.y + aabb.size.y * 0.5
+	var z_min: float = aabb.position.z
+	var z_max: float = aabb.position.z + aabb.size.z
+	var attach_z: float = z_max if attach_far else z_min
+	var anchor_local := Vector3(center_x, center_y, attach_z)
+
+	var face_p: Vector3 = (face.a + face.b + face.c + face.d) * 0.25
+	var target_world: Vector3 = face_p + outward * outward_offset
+	var origin: Vector3 = target_world - (decor_basis * anchor_local)
+	return Transform3D(decor_basis, origin)
+
 
 func _dominant_plane_axes(normal_axis: int) -> PackedInt32Array:
 	# Returns the two axis indices that form the plane perpendicular to normal_axis.
@@ -2575,19 +2896,25 @@ func _dominant_plane_axes(normal_axis: int) -> PackedInt32Array:
 			return PackedInt32Array([0, 2])
 
 func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	return _floor_transform_for_face_legacy(face, mesh)
+
+func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if mesh == null:
 		return Transform3D()
 
 	var aabb: AABB = mesh.get_aabb()
 	var edge_u: Vector3 = face.b - face.a
 	var edge_v: Vector3 = face.d - face.a
-	var u: Vector3 = edge_u.normalized()
-	# Surface normal (always biased upward so "above" is consistent)
-	var face_n: Vector3 = edge_u.cross(edge_v).normalized()
-	if face_n.y < 0.0:
-		face_n = -face_n
+	var face_n: Vector3 = face.normal.normalized()
+
+	var u: Vector3 = face.b - face.a
+	u -= face_n * u.dot(face_n)
+	if u.length() < 0.0001:
+		u = face.c - face.a
+		u -= face_n * u.dot(face_n)
+	u = u.normalized()
+
 	var v: Vector3 = face_n.cross(u).normalized()
-	u = v.cross(face_n).normalized()
 
 	# Deterministic random yaw per-cell (for variety)
 	var yaw: float = 0.0
@@ -2685,8 +3012,18 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	var local_basis := Basis(cols[0], cols[1], cols[2])
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
-		cols[depth_axis] = -cols[depth_axis]
-		basis = Basis(cols[0], cols[1], cols[2])
+		v = -v
+		local_basis = Basis(u, face_n, v)
+
+	match floor_decor_mesh_normal_axis:
+		0:
+			local_basis = local_basis * Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
+		1:
+			pass
+		2:
+			local_basis = local_basis * Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
+		_:
+			pass
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
@@ -2823,14 +3160,17 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := basis
+	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
 	basis_scaled.z = basis_scaled.z * scale_vec.z
 
 	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
 	var pos: Vector3 = face.center + face_n * floor_decor_offset
-	var origin: Vector3 = pos - basis_scaled * anchor
+	var mesh_n: Vector3 = local_basis.y.normalized()
+	var extent_n: float = abs(mesh_n.x) * aabb.size.x + abs(mesh_n.y) * aabb.size.y + abs(mesh_n.z) * aabb.size.z
+	var mesh_anchor: Vector3 = anchor - mesh_n * (extent_n * 0.5)
+	var origin: Vector3 = pos - basis_scaled * mesh_anchor
 	return Transform3D(basis_scaled, origin)
 func _rebuild_floor_decor() -> void:
 	_clear_floor_decor()
