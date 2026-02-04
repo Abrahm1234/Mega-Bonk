@@ -2713,16 +2713,6 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f2: WallFace in rect_faces:
-			var to_face: Vector3 = f2.center - _arena_center_local()
-			to_face.y = 0.0
-			if to_face.length() > 0.0001:
-				to_face = to_face.normalized()
-				var n: Vector3 = f2.normal
-				n.y = 0.0
-				if n.length() > 0.0001:
-					n = n.normalized()
-					if n.dot(to_face) < 0.0:
-						continue
 			if f2.center.y < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
@@ -2743,16 +2733,6 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
-			var w_to_face: Vector3 = wf2.center - _arena_center_local()
-			w_to_face.y = 0.0
-			if w_to_face.length() > 0.0001:
-				w_to_face = w_to_face.normalized()
-				var w_n: Vector3 = wf2.normal
-				w_n.y = 0.0
-				if w_n.length() > 0.0001:
-					w_n = w_n.normalized()
-					if w_n.dot(w_to_face) < 0.0:
-						continue
 			if wf2.center.y < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and wf2.width > wall_decor_max_size.x:
@@ -2776,6 +2756,14 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
+	var to_face := face.center - _arena_center_local()
+	to_face.y = 0.0
+	outward.y = 0.0
+	if to_face.length() > 0.0001 and outward.length() > 0.0001:
+		to_face = to_face.normalized()
+		outward = outward.normalized()
+		if outward.dot(to_face) < 0.0:
+			outward = -outward
 	_face_flip_if_needed(face, outward)
 	var rot: Basis = _basis_from_outward(outward)
 
@@ -2811,6 +2799,14 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
+	var to_face := face.center - _arena_center_local()
+	to_face.y = 0.0
+	outward.y = 0.0
+	if to_face.length() > 0.0001 and outward.length() > 0.0001:
+		to_face = to_face.normalized()
+		outward = outward.normalized()
+		if outward.dot(to_face) < 0.0:
+			outward = -outward
 	_face_flip_if_needed(face, outward)
 
 	var ab_avg: float = (face.a.y + face.b.y) * 0.5
