@@ -2422,9 +2422,9 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n /= nlen
 
 	var width: float = edge_u.length()
-	var h0: float = (a - d).length()
-	var h1: float = (b - c).length()
-	var height: float = max(h0, h1)
+	var h0: float = absf(a.y - d.y)
+	var h1: float = absf(b.y - c.y)
+	var height: float = maxf(h0, h1)
 
 	if height < wall_decor_min_height:
 		return
@@ -2435,26 +2435,43 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
 func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
-	var e0_lo: Vector3 = face.a
-	var e0_hi: Vector3 = face.d
+	var ad: float = absf(face.a.y - face.d.y)
+	var bc: float = absf(face.b.y - face.c.y)
+	var ab: float = absf(face.a.y - face.b.y)
+	var dc: float = absf(face.d.y - face.c.y)
+	var use_sides_ad_bc: bool = (ad + bc) >= (ab + dc)
+
+	var e0_lo: Vector3
+	var e0_hi: Vector3
+	var e1_lo: Vector3
+	var e1_hi: Vector3
+	if use_sides_ad_bc:
+		e0_lo = face.a
+		e0_hi = face.d
+		e1_lo = face.b
+		e1_hi = face.c
+	else:
+		e0_lo = face.a
+		e0_hi = face.b
+		e1_lo = face.d
+		e1_hi = face.c
+
 	if e0_hi.y < e0_lo.y:
 		var tmp := e0_lo
 		e0_lo = e0_hi
 		e0_hi = tmp
 
-	var e1_lo: Vector3 = face.b
-	var e1_hi: Vector3 = face.c
 	if e1_hi.y < e1_lo.y:
 		var tmp2 := e1_lo
 		e1_lo = e1_hi
 		e1_hi = tmp2
 
-	var h0: float = (e0_hi - e0_lo).length()
-	var h1: float = (e1_hi - e1_lo).length()
+	var h0: float = absf(e0_hi.y - e0_lo.y)
+	var h1: float = absf(e1_hi.y - e1_lo.y)
 	var min_h: float = minf(h0, h1)
 
 	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
-		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
+		return [face]
 
 	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
 	var t1: float = clampf(min_h / maxf(h1, 0.0001), 0.0, 1.0)
@@ -2490,7 +2507,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var wheight: float = maxf((wd - wa).length(), (wc - wb).length())
 	var wkey := face.key ^ 0xA7D3_19C3
 
-	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, true, wkey)
+	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, false, wkey)
 
 	return [rect_face, wedge_face]
 
@@ -2530,8 +2547,10 @@ func _rebuild_wall_decor() -> void:
 			if wall_decor_skip_trapezoids:
 				continue
 			var parts := _split_trapezoid_wall_face_for_decor(face)
+			if parts.is_empty():
+				continue
 			rect_faces.append(parts[0])
-			if parts[1].height > 0.0005:
+			if parts.size() > 1 and parts[1].height > 0.0005:
 				wedge_faces.append(parts[1])
 		else:
 			rect_faces.append(face)
@@ -2712,12 +2731,30 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
 
+	var ab_avg: float = (face.a.y + face.b.y) * 0.5
+	var dc_avg: float = (face.d.y + face.c.y) * 0.5
+
+	var bottom0: Vector3
+	var bottom1: Vector3
+	var top0: Vector3
+	var top1: Vector3
+	if ab_avg <= dc_avg:
+		bottom0 = face.a
+		bottom1 = face.b
+		top0 = face.d
+		top1 = face.c
+	else:
+		bottom0 = face.d
+		bottom1 = face.c
+		top0 = face.a
+		top1 = face.b
+
 	var y_dir := Vector3.UP
 	var x_dir := y_dir.cross(outward).normalized()
 	if x_dir.length_squared() < 0.0001:
 		x_dir = Vector3.RIGHT
 
-	var u_dir := (face.b - face.a)
+	var u_dir := (bottom1 - bottom0)
 	u_dir.y = 0.0
 	if u_dir.length_squared() > 0.0001 and x_dir.dot(u_dir.normalized()) < 0.0:
 		x_dir = -x_dir
@@ -2734,8 +2771,8 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
 
-	var left_avg: float = (face.a.y + face.d.y) * 0.5
-	var right_avg: float = (face.b.y + face.c.y) * 0.5
+	var left_avg: float = (bottom0.y + top0.y) * 0.5
+	var right_avg: float = (bottom1.y + top1.y) * 0.5
 	var slope_up_toward_right: bool = right_avg > left_avg
 	if not slope_up_toward_right:
 		rot = rot * Basis(rot.z, PI)
