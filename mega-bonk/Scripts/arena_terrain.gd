@@ -1,5 +1,5 @@
 extends Node3D
-class_name BlockyTerrain
+class_name ArenaBlockyTerrain
 
 # -----------------------------
 # Arena size (14x14)
@@ -119,6 +119,32 @@ class_name BlockyTerrain
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 @export var debug_vertex_colors: bool = false
 @export var sun_height: float = 200.0
+@export var enable_wall_decor: bool = true
+@export var wall_decor_meshes: Array[Mesh] = []
+@export var wall_decor_offset: float = 0.03
+@export var wall_decor_seed: int = 1337
+@export var wall_decor_min_height: float = 0.25
+@export var wall_decor_skip_trapezoids: bool = false
+@export var wall_decor_fit_to_face: bool = true
+@export var wall_decor_max_scale: float = 3.0
+@export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
+@export var wall_decor_flip_outward: bool = true
+@export var wall_decor_flip_facing: bool = false
+@export var wall_decor_min_world_y: float = -INF
+@export var enable_floor_decor: bool = true
+@export var floor_decor_meshes: Array[Mesh] = []
+@export var floor_decor_seed: int = 24601
+@export var floor_decor_offset: float = 0.01
+@export var floor_decor_fit_to_cell: bool = true
+@export var floor_decor_max_scale: float = 0.0
+@export var floor_decor_min_world_y: float = -INF
+@export var floor_decor_random_yaw_steps: int = 4
+@export var floor_decor_mesh_normal_axis: int = -1
+@export var floor_decor_scale_in_xz: bool = true
+@export var floor_decor_flip_facing: bool = true
+@export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
+@export var floor_decor_local_margin: float = 0.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -152,6 +178,64 @@ const SURF_TOP := 0.0
 const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
+
+class WallFace:
+	var a: Vector3
+	var b: Vector3
+	var c: Vector3
+	var d: Vector3
+	var center: Vector3
+	var normal: Vector3
+	var width: float
+	var height: float
+	var is_trapezoid: bool
+	var key: int
+
+	func _init(
+		a0: Vector3, b0: Vector3, c0: Vector3, d0: Vector3,
+		center0: Vector3, n0: Vector3, w: float, h: float, trapezoid: bool, k: int
+	) -> void:
+		self.a = a0
+		self.b = b0
+		self.c = c0
+		self.d = d0
+		self.center = center0
+		self.normal = n0
+		self.width = w
+		self.height = h
+		self.is_trapezoid = trapezoid
+		self.key = k
+
+var _wall_faces: Array[WallFace] = []
+var _wall_decor_root: Node3D = null
+var _floor_mesh_normal_axis_cache: Dictionary = {}
+var _floor_mesh_cap_cache: Dictionary = {}
+
+class FloorFace extends RefCounted:
+	var a: Vector3
+	var b: Vector3
+	var c: Vector3
+	var d: Vector3
+	var center: Vector3
+	var normal: Vector3
+	var width: float
+	var depth: float
+	var key: int
+
+	func _init(a0: Vector3, b0: Vector3, c0: Vector3, d0: Vector3, center0: Vector3, normal0: Vector3, width0: float, depth0: float, key0: int) -> void:
+		a = a0
+		b = b0
+		c = c0
+		d = d0
+		center = center0
+		normal = normal0
+		width = width0
+		depth = depth0
+		key = key0
+
+var _floor_faces: Array[FloorFace] = []
+var _floor_decor_root: Node3D
+var _floor_decor_instances: Array[MultiMeshInstance3D] = []
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 	match dir:
@@ -684,7 +768,7 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
-		push_error("BlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
+		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
 		return
 
 	if use_rock_shader:
@@ -965,7 +1049,7 @@ func _resolve_tunnel_layer(n: int) -> void:
 	for z in range(n):
 		for x in range(n):
 			var c := _cell_corners(x, z)
-			var roof: float = min(min(c.x, c.y), min(c.z, c.w))
+			var roof: float = minf(minf(c.x, c.y), minf(c.z, c.w))
 			roof_min = minf(roof_min, roof)
 
 	var max_ceiling: float = roof_min - tunnel_ceiling_clearance
@@ -1835,6 +1919,8 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 func _build_mesh_and_collision(n: int) -> void:
 	n = max(2, n)
+	_wall_faces.clear()
+	_floor_faces.clear()
 	var tunnel_ceil_y: float = _tunnel_ceil_resolved
 	if tunnel_ceil_y == 0.0:
 		tunnel_ceil_y = tunnel_floor_y + tunnel_height
@@ -1941,27 +2027,30 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0 > ceil_pair.x + eps or top1 > ceil_pair.y + eps:
 							if b_is_hole:
 								# Face into the +X cell (the hole is in cell B)
-								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv, true, false)
 							else:
 								# Face into the -X cell (the hole is in cell A) by flipping z order
-								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv)
+								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv, false, false)
 						continue
-				if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
-					pass
-				else:
-					var cB := _cell_corners(x + 1, z)
-					var a_e := _edge_pair(cA, 0)
-					var b_w := _edge_pair(cB, 1)
+					if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
+						pass
+					else:
+						var cB := _cell_corners(x + 1, z)
+						var a_e := _edge_pair(cA, 0)
+						var b_w := _edge_pair(cB, 1)
 
-					var top0 := maxf(a_e.x, b_w.x)
-					var top1 := maxf(a_e.y, b_w.y)
-					var bot0 := minf(a_e.x, b_w.x)
-					var bot1 := minf(a_e.y, b_w.y)
+						var top0 := maxf(a_e.x, b_w.x)
+						var top1 := maxf(a_e.y, b_w.y)
+						var bot0 := minf(a_e.x, b_w.x)
+						var bot1 := minf(a_e.y, b_w.y)
 
-					if (top0 - bot0) > eps or (top1 - bot1) > eps:
-						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv
-						)
+						if (top0 - bot0) > eps or (top1 - bot1) > eps:
+							var mean_a: float = (a_e.x + a_e.y) * 0.5
+							var mean_b: float = (b_w.x + b_w.y) * 0.5
+							var normal_pos_x: bool = mean_a > mean_b
+							_add_wall_x_between(
+								st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x
+							)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
@@ -1984,27 +2073,30 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0z > ceil_pair_z.x + eps or top1z > ceil_pair_z.y + eps:
 							if d_is_hole:
 								# Face into the +Z cell (the hole is in cell D)
-								_add_wall_z_between(st, z1, x0, x1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, x0, x1, z1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv, true, false)
 							else:
 								# Face into the -Z cell (the hole is in cell C) by flipping x order
-								_add_wall_z_between(st, z1, x1, x0, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv)
+								_add_wall_z_between(st, x1, x0, z1, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv, false, false)
 						continue
-				if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
-					pass
-				else:
-					var cC := _cell_corners(x, z + 1)
-					var a_s := _edge_pair(cA, 3)
-					var c_n := _edge_pair(cC, 2)
+					if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
+						pass
+					else:
+						var cC := _cell_corners(x, z + 1)
+						var a_s := _edge_pair(cA, 3)
+						var c_n := _edge_pair(cC, 2)
 
-					var top0z := maxf(a_s.x, c_n.x)
-					var top1z := maxf(a_s.y, c_n.y)
-					var bot0z := minf(a_s.x, c_n.x)
-					var bot1z := minf(a_s.y, c_n.y)
+						var top0z := maxf(a_s.x, c_n.x)
+						var top1z := maxf(a_s.y, c_n.y)
+						var bot0z := minf(a_s.x, c_n.x)
+						var bot1z := minf(a_s.y, c_n.y)
 
-					if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
-						_add_wall_z_between(
-							st, z1, x0, x1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv
-						)
+						if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
+							var mean_a: float = (a_s.x + a_s.y) * 0.5
+							var mean_c: float = (c_n.x + c_n.y) * 0.5
+							var normal_pos_z: bool = mean_a > mean_c
+							_add_wall_z_between(
+								st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z
+							)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
@@ -2017,6 +2109,768 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
+	_rebuild_wall_decor()
+	_rebuild_floor_decor()
+
+func _ensure_wall_decor_root() -> void:
+	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
+		return
+	_wall_decor_root = get_node_or_null("WallDecor") as Node3D
+	if _wall_decor_root == null:
+		_wall_decor_root = Node3D.new()
+		_wall_decor_root.name = "WallDecor"
+		add_child(_wall_decor_root)
+
+func _ensure_floor_decor_root() -> void:
+	if _floor_decor_root != null and is_instance_valid(_floor_decor_root):
+		return
+	_floor_decor_root = get_node_or_null("FloorDecor") as Node3D
+	if _floor_decor_root == null:
+		_floor_decor_root = Node3D.new()
+		_floor_decor_root.name = "FloorDecor"
+		add_child(_floor_decor_root)
+
+func _clear_floor_decor() -> void:
+	if _floor_decor_root != null and is_instance_valid(_floor_decor_root):
+		for child: Node in _floor_decor_root.get_children():
+			child.queue_free()
+	_floor_decor_instances.clear()
+
+func _basis_from_face(face: WallFace) -> Basis:
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length() < 0.0001:
+		n = face.normal.normalized()
+	else:
+		n = n.normalized()
+
+	if wall_decor_flip_outward:
+		n = -n
+
+	var u: Vector3 = Vector3.UP.cross(n)
+	if u.length() < 0.0001:
+		u = Vector3.RIGHT
+	else:
+		u = u.normalized()
+
+	var v: Vector3 = n.cross(u).normalized()
+	return Basis(u, v, n)
+
+func _basis_from_outward(outward: Vector3) -> Basis:
+	var z_axis: Vector3 = outward.normalized()
+	var x_axis: Vector3 = Vector3.UP.cross(z_axis)
+	if x_axis.length() < 0.0001:
+		x_axis = Vector3.RIGHT
+	else:
+		x_axis = x_axis.normalized()
+	var y_axis: Vector3 = z_axis.cross(x_axis).normalized()
+	return Basis(x_axis, y_axis, z_axis)
+
+func _sample_surface_y(world_x: float, world_z: float) -> float:
+	var n: int = max(2, cells_per_side)
+	var fx: float = (world_x - _ox) / _cell_size
+	var fz: float = (world_z - _oz) / _cell_size
+	var ix: int = clampi(int(floor(fx)), 0, n - 1)
+	var iz: int = clampi(int(floor(fz)), 0, n - 1)
+	var tx: float = clampf(fx - float(ix), 0.0, 1.0)
+	var tz: float = clampf(fz - float(iz), 0.0, 1.0)
+
+	var corners: Vector4 = _cell_corners(ix, iz)
+	var y0: float = lerpf(corners.x, corners.y, tx)
+	var y1: float = lerpf(corners.z, corners.w, tx)
+	return lerpf(y0, y1, tz)
+
+func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
+	return a.y > b.y
+
+func _axis_min3(v: Vector3) -> int:
+	if v.x <= v.y and v.x <= v.z:
+		return 0
+	if v.y <= v.x and v.y <= v.z:
+		return 1
+	return 2
+
+func _infer_floor_mesh_normal_axis(mesh: Mesh) -> int:
+	# Goal: infer which LOCAL axis is the mesh's 'up' (its cap normal).
+	# Prefer Y when the mesh is clearly a thin slab (typical floor tile),
+	# otherwise fall back to area-weighted dominant normals (robust for spiky meshes).
+	var aabb := mesh.get_aabb()
+	var abs_size := Vector3(absf(aabb.size.x), absf(aabb.size.y), absf(aabb.size.z))
+	var maxv := maxf(abs_size.x, maxf(abs_size.y, abs_size.z))
+	if maxv <= 0.000001:
+		return 1
+	var min_axis := _axis_min3(abs_size)
+	var minv := minf(abs_size.x, minf(abs_size.y, abs_size.z))
+	var thin_ratio := minv / maxv
+	# Only trust "thin axis" when it is the Y axis and very thin.
+	# This prevents choosing X/Z on long skinny meshes where the thin axis is NOT the cap normal.
+	if min_axis == 1 and thin_ratio <= 0.20:
+		return 1
+	return _dominant_normal_axis_for_mesh(mesh)
+
+func _dominant_normal_axis_for_mesh(mesh: Mesh) -> int:
+	# Area-weighted accumulation of ABS(normal) to find the predominant axis.
+	# Bias toward Y when it is close to the top contender (helps floor meshes that also have side walls).
+	var sum := Vector3.ZERO
+	if mesh.get_surface_count() == 0:
+		return 1
+	for si in range(mesh.get_surface_count()):
+		var arrays := mesh.surface_get_arrays(si)
+		if arrays.is_empty():
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if verts.is_empty() or norms.is_empty() or idx.is_empty():
+			continue
+		for i in range(0, idx.size(), 3):
+			var i0 := int(idx[i])
+			var i1 := int(idx[i + 1])
+			var i2 := int(idx[i + 2])
+			var p0: Vector3 = verts[i0]
+			var p1: Vector3 = verts[i1]
+			var p2: Vector3 = verts[i2]
+			var area := ((p1 - p0).cross(p2 - p0)).length() * 0.5
+			if area <= 0.0000001:
+				continue
+			var n: Vector3 = (Vector3(norms[i0]) + Vector3(norms[i1]) + Vector3(norms[i2])) * (1.0 / 3.0)
+			sum += Vector3(absf(n.x), absf(n.y), absf(n.z)) * area
+	if sum.length() <= 0.000001:
+		return 1
+	var best := maxf(sum.x, maxf(sum.y, sum.z))
+	# If Y is within ~8% of the best axis, pick Y.
+	if sum.y >= best * 0.92:
+		return 1
+	# Otherwise pick the max axis.
+	if sum.x >= sum.z:
+		return 0
+	return 2
+
+func _mesh_cap_extents(mesh: Mesh, normal_axis: int, axis0: int, axis1: int, use_top: bool) -> Dictionary:
+	# Robustly estimate the planar bounds of the top/bottom cap.
+	# This is used to scale decor so the *visible cap* fills the cell, even if the mesh has beveled sides
+	# or a wider underside. We avoid latching onto tiny outlier spikes by sampling a band near the cap.
+	var out: Dictionary = {
+		"valid": false,
+		"size_w": 0.0,
+		"size_d": 0.0,
+		"center_w": 0.0,
+		"center_d": 0.0,
+		"plane_n": 0.0,
+	}
+	if mesh == null:
+		return out
+
+	# Cache per mesh + axis + cap side.
+	var key := str(mesh.get_rid().get_id()) + ":" + str(normal_axis) + ":" + str(axis0) + ":" + str(axis1) + ":" + ("t" if use_top else "b")
+	if _floor_mesh_cap_cache.has(key):
+		return _floor_mesh_cap_cache[key]
+
+	var verts: PackedVector3Array
+	if mesh.get_surface_count() > 0:
+		var arrays := mesh.surface_get_arrays(0)
+		verts = arrays[Mesh.ARRAY_VERTEX]
+	else:
+		verts = PackedVector3Array()
+
+	if verts.size() < 3:
+		_floor_mesh_cap_cache[key] = out
+		return out
+
+	# Find min/max along the normal axis.
+	var min_n := INF
+	var max_n := -INF
+	for p in verts:
+		var nval := float(p[normal_axis])
+		min_n = minf(min_n, nval)
+		max_n = maxf(max_n, nval)
+
+	var thickness := max_n - min_n
+	# Sample a band near the cap instead of the single extreme plane.
+	# This avoids tiny outlier spikes selecting a near-zero cap, which would explode scaling.
+	var band := maxf(0.002, thickness * 0.06)  # 6% of thickness, min 2mm
+
+	var lo: float = (max_n - band) if use_top else min_n
+	var hi: float = max_n if use_top else (min_n + band)
+
+	var min0 := INF
+	var max0 := -INF
+	var min1 := INF
+	var max1 := -INF
+	var found := 0
+
+	for p in verts:
+		var nval := float(p[normal_axis])
+		if use_top:
+			if nval < lo:
+				continue
+		else:
+			if nval > hi:
+				continue
+
+		var a0 := float(p[axis0])
+		var a1 := float(p[axis1])
+		min0 = minf(min0, a0)
+		max0 = maxf(max0, a0)
+		min1 = minf(min1, a1)
+		max1 = maxf(max1, a1)
+		found += 1
+
+	# Need enough points to represent an actual cap.
+	if found < 3:
+		_floor_mesh_cap_cache[key] = out
+		return out
+
+	var size_w := max0 - min0
+	var size_d := max1 - min1
+
+	# Reject pathological caps (near-zero planar size).
+	if size_w <= 0.001 or size_d <= 0.001:
+		_floor_mesh_cap_cache[key] = out
+		return out
+
+	out["valid"] = true
+	out["size_w"] = size_w
+	out["size_d"] = size_d
+	out["center_w"] = (min0 + max0) * 0.5
+	out["center_d"] = (min1 + max1) * 0.5
+	# Anchor to the true extreme plane so the cap sits flush.
+	out["plane_n"] = max_n if use_top else min_n
+
+	_floor_mesh_cap_cache[key] = out
+	return out
+
+
+func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
+	var axes := PackedInt32Array()
+	for i in [0, 1, 2]:
+		if i != n_axis:
+			axes.append(i)
+	return axes
+
+func _safe_dim(x: float) -> float:
+	return maxf(0.0001, absf(x))
+
+func _pick_open_side_outward(face: WallFace) -> Vector3:
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length_squared() < 0.0001:
+		n = Vector3.RIGHT
+	n = n.normalized()
+
+	var probe: Vector3 = face.center
+	probe.y += 0.02
+
+	var eps_side: float = max(0.25, _cell_size * 0.05)
+	var p_plus: Vector3 = probe + n * eps_side
+	var p_minus: Vector3 = probe - n * eps_side
+	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
+	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
+
+	return n if h_plus < h_minus else -n
+
+func _is_trapezoid(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> bool:
+	return ((a + d) - (b + c)).length() > 0.001
+
+func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
+	var n: Vector3 = (b - a).cross(d - a)
+	if n.length() < 0.000001:
+		return
+	n = n.normalized()
+	if n.y < 0.0:
+		n = -n
+
+	var center: Vector3 = (a + b + c + d) * 0.25
+	if center.y < floor_decor_min_world_y:
+		return
+
+	var width: float = (b - a).length()
+	var depth: float = (d - a).length()
+	_floor_faces.append(FloorFace.new(a, b, c, d, center, n, width, depth, key))
+
+func _hash_wall_face(center: Vector3, n: Vector3) -> int:
+	var qx: int = int(floor(center.x * 10.0))
+	var qy: int = int(floor(center.y * 10.0))
+	var qz: int = int(floor(center.z * 10.0))
+
+	var dir: int = 0
+	if absf(n.x) > absf(n.z):
+		dir = 1 if n.x > 0.0 else 2
+	else:
+		dir = 3 if n.z > 0.0 else 4
+
+	var h: int = (qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791) ^ (dir * 2654435761)
+	if h < 0:
+		h = -h
+	return h
+
+func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	if not enable_wall_decor:
+		return
+
+	var edge_u: Vector3 = b - a
+	var edge_v: Vector3 = d - a
+	var n: Vector3 = edge_u.cross(edge_v)
+	var nlen: float = n.length()
+	if nlen < 0.0001:
+		return
+	n /= nlen
+
+	var width: float = edge_u.length()
+	var h0: float = (a - d).length()
+	var h1: float = (b - c).length()
+	var height: float = max(h0, h1)
+
+	if height < wall_decor_min_height:
+		return
+
+	var center: Vector3 = (a + b + c + d) * 0.25
+	var trapezoid: bool = _is_trapezoid(a, b, c, d)
+	var key: int = _hash_wall_face(center, n)
+	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
+
+func _rebuild_wall_decor() -> void:
+	if not enable_wall_decor or wall_decor_meshes.is_empty():
+		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
+			for child: Node in _wall_decor_root.get_children():
+				child.queue_free()
+		return
+
+	_ensure_wall_decor_root()
+
+	for child: Node in _wall_decor_root.get_children():
+		child.queue_free()
+
+	var variant_count: int = wall_decor_meshes.size()
+
+	var counts: Array[int] = []
+	counts.resize(variant_count)
+	for i: int in range(variant_count):
+		counts[i] = 0
+
+	var faces_for_decor: Array[WallFace] = []
+	faces_for_decor.assign(_wall_faces)
+	var trap_count: int = 0
+	for face in _wall_faces:
+		if face.is_trapezoid:
+			trap_count += 1
+	print(
+		"wall_decor_meshes:", wall_decor_meshes.size(),
+		" wall_faces:", _wall_faces.size(),
+		" trapezoids:", trap_count,
+		" skip_trap:", wall_decor_skip_trapezoids,
+		" max_size:", wall_decor_max_size
+	)
+
+	for f: WallFace in faces_for_decor:
+		if f.center.y < wall_decor_min_world_y:
+			continue
+		if wall_decor_skip_trapezoids and f.is_trapezoid:
+			continue
+		if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
+			continue
+		if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
+			continue
+		var idx: int = (f.key + wall_decor_seed) % variant_count
+		counts[idx] += 1
+
+	var mmi_by_variant: Array[MultiMeshInstance3D] = []
+	mmi_by_variant.resize(variant_count)
+
+	var aabb_by_variant: Array[AABB] = []
+	aabb_by_variant.resize(variant_count)
+
+	for v: int in range(variant_count):
+		if counts[v] <= 0:
+			mmi_by_variant[v] = null
+			continue
+
+		var mm: MultiMesh = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = wall_decor_meshes[v]
+		mm.instance_count = counts[v]
+
+		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+
+		_wall_decor_root.add_child(mmi)
+		mmi_by_variant[v] = mmi
+		aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
+
+	var write_i: Array[int] = []
+	write_i.resize(variant_count)
+	for v2: int in range(variant_count):
+		write_i[v2] = 0
+
+	var total_instances: int = 0
+	for count in counts:
+		total_instances += count
+	if total_instances <= 0:
+		push_warning("Wall decor: 0 instances after filtering. Check max size or trapezoid skip.")
+		return
+
+	for f2: WallFace in faces_for_decor:
+		if f2.center.y < wall_decor_min_world_y:
+			continue
+		if wall_decor_skip_trapezoids and f2.is_trapezoid:
+			continue
+		if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
+			continue
+		if wall_decor_max_size.y > 0.0 and f2.height > wall_decor_max_size.y:
+			continue
+		var vsel: int = (f2.key + wall_decor_seed) % variant_count
+		var mmi2: MultiMeshInstance3D = mmi_by_variant[vsel]
+		if mmi2 == null:
+			continue
+
+		var aabb: AABB = aabb_by_variant[vsel]
+		var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+
+		var wi: int = write_i[vsel]
+		mmi2.multimesh.set_instance_transform(wi, xf)
+		write_i[vsel] = wi + 1
+
+func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
+	var outward: Vector3 = _pick_open_side_outward(face)
+	var rot: Basis = _basis_from_outward(outward)
+
+	var attach_far: bool = wall_decor_flip_outward
+	if wall_decor_flip_facing:
+		rot = Basis(Vector3.UP, PI) * rot
+		attach_far = not attach_far
+
+	var ref_w: float = max(aabb.size.x, 0.001)
+	var ref_h: float = max(aabb.size.y, 0.001)
+	var sx: float = 1.0
+	var sy: float = 1.0
+	if wall_decor_fit_to_face:
+		sx = clamp(face.width / ref_w, 0.1, wall_decor_max_scale)
+		sy = clamp(face.height / ref_h, 0.1, wall_decor_max_scale)
+	var sz: float = wall_decor_depth_scale
+
+	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+
+	var center_x: float = aabb.position.x + aabb.size.x * 0.5
+	var center_y: float = aabb.position.y + aabb.size.y * 0.5
+	var z_min: float = aabb.position.z
+	var z_max: float = aabb.position.z + aabb.size.z
+	var attach_z: float = z_max if attach_far else z_min
+	var anchor_local := Vector3(center_x, center_y, attach_z)
+
+	var target_world: Vector3 = face.center + outward * outward_offset
+	var origin: Vector3 = target_world - (decor_basis * anchor_local)
+	return Transform3D(decor_basis, origin)
+
+
+func _dominant_plane_axes(normal_axis: int) -> PackedInt32Array:
+	# Returns the two axis indices that form the plane perpendicular to normal_axis.
+	match normal_axis:
+		0:
+			return PackedInt32Array([1, 2])
+		1:
+			return PackedInt32Array([0, 2])
+		2:
+			return PackedInt32Array([0, 1])
+		_:
+			return PackedInt32Array([0, 2])
+
+func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	if mesh == null:
+		return Transform3D()
+
+	var aabb: AABB = mesh.get_aabb()
+	var edge_u: Vector3 = face.b - face.a
+	var edge_v: Vector3 = face.d - face.a
+	var u: Vector3 = edge_u.normalized()
+	# Surface normal (always biased upward so "above" is consistent)
+	var face_n: Vector3 = edge_u.cross(edge_v).normalized()
+	if face_n.y < 0.0:
+		face_n = -face_n
+	var v: Vector3 = face_n.cross(u).normalized()
+	u = v.cross(face_n).normalized()
+
+	# Deterministic random yaw per-cell (for variety)
+	var yaw: float = 0.0
+	if floor_decor_random_yaw_steps > 0:
+		var n_cells: int = max(2, cells_per_side)
+		var cx: int = int(face.key) % n_cells
+		var cz: int = int(face.key) / n_cells
+		var h: int = (cx * 73856093) ^ (cz * 19349663) ^ int(floor_decor_seed * 83492791)
+		h = (h ^ (h >> 13)) * 1274126177
+		var steps: int = max(1, floor_decor_random_yaw_steps)
+		var step: int = absi(h) % steps
+		yaw = float(step) * (TAU / float(steps))
+	if absf(yaw) > 0.00001:
+		u = u.rotated(face_n, yaw)
+		v = v.rotated(face_n, yaw)
+
+	# Determine which mesh axis is the plane normal (thin axis)
+	var axis_thin: int = 1
+	var thx: float = absf(aabb.size.x)
+	var thy: float = absf(aabb.size.y)
+	var thz: float = absf(aabb.size.z)
+	var min_th: float = minf(thx, minf(thy, thz))
+
+	# Only accept "thin Y" if it's clearly the minimum.
+	# If everything is similar, fall back to "dominant normal" inference.
+	var thin_ratio_xy: float = (thy + 1e-6) / (thx + 1e-6)
+	var thin_ratio_zy: float = (thy + 1e-6) / (thz + 1e-6)
+	if thy <= min_th * 1.05 and thin_ratio_xy < 0.6 and thin_ratio_zy < 0.6:
+		axis_thin = 1
+	elif thx <= min_th * 1.05:
+		axis_thin = 0
+	elif thz <= min_th * 1.05:
+		axis_thin = 2
+	else:
+		# Fallback: use dominant normal from geometry; bias toward Y to avoid sideways scaling.
+		# If the face is close to flat, prefer Y.
+		if absf(face_n.y) >= 0.75:
+			axis_thin = 1
+		else:
+			# Pick the axis most aligned with the face normal.
+			var an: Vector3 = Vector3(absf(face_n.x), absf(face_n.y), absf(face_n.z))
+			if an.x >= an.y and an.x >= an.z:
+				axis_thin = 0
+			elif an.z >= an.y:
+				axis_thin = 2
+			else:
+				axis_thin = 1
+
+	var normal_axis: int = axis_thin
+	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
+	var axis0: int = plane_axes[0]
+	var axis1: int = plane_axes[1]
+
+	# Pick which local axes map to u/v by matching aspect ratios
+	var face_w: float = edge_u.length()
+	var face_d: float = edge_v.length()
+	if floor_decor_scale_in_xz:
+		# Use horizontal footprint lengths so ramps don't inflate scale
+		face_w = Vector2(edge_u.x, edge_u.z).length()
+		face_d = Vector2(edge_v.x, edge_v.z).length()
+	if floor_decor_fit_to_cell:
+		face_w = _cell_size
+		face_d = _cell_size
+	var long_face: float = maxf(face_w, face_d)
+	var short_face: float = maxf(0.0001, minf(face_w, face_d))
+	var face_ratio: float = long_face / short_face
+	var a0: float = absf(aabb.size[axis0])
+	var a1: float = absf(aabb.size[axis1])
+	if a0 < 0.0001 or a1 < 0.0001:
+		# degenerate, default mapping
+		pass
+	var a_long: float = maxf(a0, a1)
+	var a_short: float = maxf(0.0001, minf(a0, a1))
+	var a_ratio: float = a_long / a_short
+	var swap_axes: bool = false
+	# If ratios are closer when swapped, swap.
+	var diff_keep: float = absf(face_ratio - a_ratio)
+	var diff_swap: float = absf(face_ratio - (1.0 / a_ratio))
+	if diff_swap + 1e-6 < diff_keep:
+		swap_axes = true
+
+	var width_axis: int = axis0 if not swap_axes else axis1
+	var depth_axis: int = axis1 if not swap_axes else axis0
+
+	# Build basis columns (map chosen local axes to u/v/normal)
+	var cols: Array = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	var basis_n: Vector3 = face_n
+	if floor_decor_flip_facing:
+		# Flip the mesh's "up" axis relative to the surface normal, but keep placement "above" using face_n.
+		v = -v
+		basis_n = -basis_n
+	cols[normal_axis] = basis_n
+	cols[width_axis] = u
+	cols[depth_axis] = v
+	var local_basis := Basis(cols[0], cols[1], cols[2])
+	# Ensure right-handed basis
+	if local_basis.determinant() < 0.0:
+		cols[depth_axis] = -cols[depth_axis]
+		basis = Basis(cols[0], cols[1], cols[2])
+
+	# Determine which side should sit on the surface.
+	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
+	var mesh_up_dot: float = basis_n.dot(face_n)
+	var use_bottom_cap: bool = mesh_up_dot > 0.0
+
+	# Compute cap bounds near the extreme planes along normal_axis
+	var eps: float = 1e-4
+	var min_n: float = aabb.position[normal_axis]
+	var max_n: float = aabb.position[normal_axis] + aabb.size[normal_axis]
+	var band: float = maxf(absf(aabb.size[normal_axis]) * 0.10, 0.002)
+	var cap_top := {"valid": false, "min0": 0.0, "max0": 0.0, "min1": 0.0, "max1": 0.0, "plane_n": max_n}
+	var cap_bottom := {"valid": false, "min0": 0.0, "max0": 0.0, "min1": 0.0, "max1": 0.0, "plane_n": min_n}
+
+	var arrays: Array = mesh.surface_get_arrays(0)
+	if arrays.size() > 0:
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		# top cap band
+		var tmin0: float = 1e20
+		var tmax0: float = -1e20
+		var tmin1: float = 1e20
+		var tmax1: float = -1e20
+		var tc: int = 0
+		# bottom cap band
+		var bmin0: float = 1e20
+		var bmax0: float = -1e20
+		var bmin1: float = 1e20
+		var bmax1: float = -1e20
+		var bc: int = 0
+		for p in verts:
+			var pn: float = p[normal_axis]
+			if pn >= max_n - band - eps:
+				var p0: float = p[axis0]
+				var p1: float = p[axis1]
+				tmin0 = minf(tmin0, p0)
+				tmax0 = maxf(tmax0, p0)
+				tmin1 = minf(tmin1, p1)
+				tmax1 = maxf(tmax1, p1)
+				tc += 1
+			if pn <= min_n + band + eps:
+				var q0: float = p[axis0]
+				var q1: float = p[axis1]
+				bmin0 = minf(bmin0, q0)
+				bmax0 = maxf(bmax0, q0)
+				bmin1 = minf(bmin1, q1)
+				bmax1 = maxf(bmax1, q1)
+				bc += 1
+		if tc >= 8 and tmax0 > tmin0 + eps and tmax1 > tmin1 + eps:
+			cap_top.valid = true
+			cap_top.min0 = tmin0
+			cap_top.max0 = tmax0
+			cap_top.min1 = tmin1
+			cap_top.max1 = tmax1
+		if bc >= 8 and bmax0 > bmin0 + eps and bmax1 > bmin1 + eps:
+			cap_bottom.valid = true
+			cap_bottom.min0 = bmin0
+			cap_bottom.max0 = bmax0
+			cap_bottom.min1 = bmin1
+			cap_bottom.max1 = bmax1
+
+	var cap_anchor: Dictionary = cap_bottom if use_bottom_cap else cap_top
+	var _cap_other: Dictionary = cap_top if use_bottom_cap else cap_bottom
+
+	# Trim margins from the mesh footprint (optional)
+	var margin: float = maxf(0.0, floor_decor_local_margin)
+
+	# Size and center used for scaling in the plane.
+	# When fitting to cell, prefer the full AABB footprint so beveled edges still reach the cell borders.
+	var size_w: float
+	var size_d: float
+	var anchor: Vector3 = aabb.position + aabb.size * 0.5
+	if floor_decor_fit_to_cell:
+		size_w = _safe_dim(aabb.size[width_axis] - 2.0 * margin)
+		size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * margin)
+	else:
+		var use_cap_for_size: bool = cap_anchor.has("valid") and bool(cap_anchor.valid)
+		if use_cap_for_size:
+			var cap_w: float = maxf(eps, absf(float(cap_anchor.max0) - float(cap_anchor.min0)) - 2.0 * margin)
+			var cap_d: float = maxf(eps, absf(float(cap_anchor.max1) - float(cap_anchor.min1)) - 2.0 * margin)
+			# reject pathological spikes (cap way smaller than AABB plane)
+			var aabb_w: float = maxf(eps, absf(aabb.size[axis0]) - 2.0 * margin)
+			var aabb_d: float = maxf(eps, absf(aabb.size[axis1]) - 2.0 * margin)
+			var cap_area: float = cap_w * cap_d
+			var aabb_area: float = aabb_w * aabb_d
+			if cap_area < aabb_area * 0.12:
+				use_cap_for_size = false
+			if use_cap_for_size:
+				# Map cap extents into chosen width/depth axes
+				if width_axis == axis0:
+					size_w = cap_w
+					size_d = cap_d
+				else:
+					size_w = cap_d
+					size_d = cap_w
+				# center on cap
+				var cap_c0: float = (float(cap_anchor.min0) + float(cap_anchor.max0)) * 0.5
+				var cap_c1: float = (float(cap_anchor.min1) + float(cap_anchor.max1)) * 0.5
+				var cap_center: Vector3 = aabb.position + aabb.size * 0.5
+				cap_center[axis0] = cap_c0
+				cap_center[axis1] = cap_c1
+				anchor[width_axis] = cap_center[width_axis]
+				anchor[depth_axis] = cap_center[depth_axis]
+		if not use_cap_for_size:
+			size_w = _safe_dim(aabb.size[width_axis] - 2.0 * margin)
+			size_d = _safe_dim(aabb.size[depth_axis] - 2.0 * margin)
+
+	# Determine anchor plane along the normal axis.
+	# Prefer cap anchor if valid; otherwise use the AABB extreme that corresponds to the surface side.
+	if cap_anchor.has("valid") and bool(cap_anchor.valid):
+		anchor[normal_axis] = float(cap_anchor.plane_n)
+	else:
+		if use_bottom_cap:
+			anchor[normal_axis] = aabb.position[normal_axis]
+		else:
+			anchor[normal_axis] = aabb.position[normal_axis] + aabb.size[normal_axis]
+
+	# Apply fill ratio and optional cap
+	var fill: float = maxf(0.001, floor_decor_fill_ratio)
+	var sx: float = (face_w / size_w) * fill
+	var sd: float = (face_d / size_d) * fill
+	if floor_decor_max_scale > 0.0:
+		if sx > floor_decor_max_scale:
+			sx = floor_decor_max_scale
+		if sd > floor_decor_max_scale:
+			sd = floor_decor_max_scale
+	if not floor_decor_fit_to_cell:
+		# keep uniform scale for non-cell-fitted decals
+		var s: float = minf(sx, sd)
+		sx = s
+		sd = s
+
+	# Scale in local space (do not scale thickness)
+	var scale_vec := Vector3.ONE
+	scale_vec[width_axis] = sx
+	scale_vec[depth_axis] = sd
+	scale_vec[normal_axis] = 1.0
+	var basis_scaled := basis
+	basis_scaled.x = basis_scaled.x * scale_vec.x
+	basis_scaled.y = basis_scaled.y * scale_vec.y
+	basis_scaled.z = basis_scaled.z * scale_vec.z
+
+	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
+	var pos: Vector3 = face.center + face_n * floor_decor_offset
+	var origin: Vector3 = pos - basis_scaled * anchor
+	return Transform3D(basis_scaled, origin)
+func _rebuild_floor_decor() -> void:
+	_clear_floor_decor()
+
+	if not enable_floor_decor:
+		return
+	if floor_decor_meshes.is_empty():
+		return
+	if _floor_faces.is_empty():
+		return
+
+	_ensure_floor_decor_root()
+
+	var buckets: Array[Array] = []
+	buckets.resize(floor_decor_meshes.size())
+	for i in range(buckets.size()):
+		buckets[i] = []
+
+	for face in _floor_faces:
+		var pick: int = int(abs(face.key ^ floor_decor_seed)) % floor_decor_meshes.size()
+		buckets[pick].append(face)
+
+	for i in range(floor_decor_meshes.size()):
+		var faces_i: Array = buckets[i]
+		if faces_i.is_empty():
+			continue
+
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.instance_count = faces_i.size()
+		mm.mesh = floor_decor_meshes[i]
+
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		_floor_decor_root.add_child(inst)
+		_floor_decor_instances.append(inst)
+
+		for j in range(faces_i.size()):
+			var f: FloorFace = faces_i[j]
+			mm.set_instance_transform(j, _floor_transform_for_face(f, floor_decor_meshes[i]))
 
 func _add_wall_x_colored(st: SurfaceTool, x_edge: float, z0: float, z1: float, y_top0: float, y_top1: float, y_bot: float, uv_scale: float, color: Color) -> void:
 	if (maxf(y_top0, y_top1) - y_bot) <= 0.001:
@@ -2258,7 +3112,8 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # Terrain wall helpers (between unequal cells)
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
+	normal_pos_x: bool, capture_decor: bool = true) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2279,6 +3134,15 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
+	if not normal_pos_x:
+		var tmp: Vector3 = a
+		a = b
+		b = tmp
+		tmp = c
+		c = d
+		d = tmp
+	if capture_decor:
+		_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -2305,8 +3169,9 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
 	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
 
-func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
-	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int) -> void:
+func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
+	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
+	normal_pos_z: bool, capture_decor: bool = true) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2327,6 +3192,15 @@ func _add_wall_z_between(st: SurfaceTool, z_edge: float, x0: float, x1: float,
 	ub.x *= uv_scale
 	uc.x *= uv_scale
 	ud.x *= uv_scale
+	if normal_pos_z:
+		var tmp: Vector3 = a
+		a = b
+		b = tmp
+		tmp = c
+		c = d
+		d = tmp
+	if capture_decor:
+		_capture_wall_face(a, b, c, d)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -2413,6 +3287,13 @@ func _add_cell_top_grid(
 	var idx: int = cell_z * max(2, cells_per_side) + cell_x
 	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
 	var is_ramp: bool = ramp_dir != RAMP_NONE
+	if enable_floor_decor and not floor_decor_meshes.is_empty():
+		var f_a := Vector3(x0, h00, z0)
+		var f_b := Vector3(x1, h10, z0)
+		var f_c := Vector3(x1, h11, z1)
+		var f_d := Vector3(x0, h01, z1)
+		var key: int = _idx2(cell_x, cell_z, max(2, cells_per_side))
+		_capture_floor_face(f_a, f_b, f_c, f_d, key)
 
 	for iz in range(sdiv):
 		var t0 := float(iz) / float(sdiv)
