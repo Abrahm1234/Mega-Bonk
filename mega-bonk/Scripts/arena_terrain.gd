@@ -148,7 +148,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
-@export var floor_decor_mesh_normal_axis: int = -1
+@export var floor_decor_mesh_normal_axis: int = 2
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
@@ -2965,6 +2965,9 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 				axis_thin = 2
 			else:
 				axis_thin = 1
+
+	if floor_decor_mesh_normal_axis >= 0 and floor_decor_mesh_normal_axis <= 2:
+		axis_thin = floor_decor_mesh_normal_axis
 
 	var normal_axis: int = axis_thin
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
