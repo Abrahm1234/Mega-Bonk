@@ -2752,18 +2752,7 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
-	if outward.length_squared() < 0.0001:
-		outward = Vector3.FORWARD
-	outward = outward.normalized()
-	var to_face := face.center - _arena_center_local()
-	to_face.y = 0.0
-	outward.y = 0.0
-	if to_face.length() > 0.0001 and outward.length() > 0.0001:
-		to_face = to_face.normalized()
-		outward = outward.normalized()
-		if outward.dot(to_face) < 0.0:
-			outward = -outward
+	var outward: Vector3 = _outward_from_center(face)
 	_face_flip_if_needed(face, outward)
 	var rot: Basis = _basis_from_outward(outward)
 
@@ -2795,18 +2784,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = Vector3(face.normal.x, 0.0, face.normal.z)
-	if outward.length_squared() < 0.0001:
-		outward = Vector3.FORWARD
-	outward = outward.normalized()
-	var to_face := face.center - _arena_center_local()
-	to_face.y = 0.0
-	outward.y = 0.0
-	if to_face.length() > 0.0001 and outward.length() > 0.0001:
-		to_face = to_face.normalized()
-		outward = outward.normalized()
-		if outward.dot(to_face) < 0.0:
-			outward = -outward
+	var outward: Vector3 = _outward_from_center(face)
 	_face_flip_if_needed(face, outward)
 
 	var ab_avg: float = (face.a.y + face.b.y) * 0.5
