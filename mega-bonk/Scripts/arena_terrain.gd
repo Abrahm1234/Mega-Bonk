@@ -2542,22 +2542,18 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var rheight: float = maxf((rd - ra).length(), (rc - rb).length())
 	var rkey := face.key ^ 0x51ED_0A11
 
-	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, false, rkey)
+	var rect_face := WallFace.new(ra, rb, rc, rd, face.center, face.normal, rwidth, min_h, false, rkey)
 
 	var wa := p0
 	var wb := p1
 	var wc := e1_hi
 	var wd := e0_hi
 
-	var wcenter := (wa + wb + wc + wd) * 0.25
-	var wu := wb - wa
-	var wv := wd - wa
-	var wn := wu.cross(wv).normalized()
-	var wwidth := wu.length()
-	var wheight: float = maxf((wd - wa).length(), (wc - wb).length())
+	var wwidth := rwidth
+	var wheight: float = ((h0 + h1) * 0.5) - min_h
 	var wkey := face.key ^ 0xA7D3_19C3
 
-	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, false, wkey)
+	var wedge_face := WallFace.new(wa, wb, wc, wd, face.center, face.normal, wwidth, wheight, false, wkey)
 
 	return [rect_face, wedge_face]
 
@@ -2594,15 +2590,16 @@ func _rebuild_wall_decor() -> void:
 	for face in _wall_faces:
 		if face.is_trapezoid:
 			trap_count += 1
-			if wall_decor_skip_trapezoids:
-				continue
 			var parts := _split_trapezoid_wall_face_for_decor(face)
-			if parts.is_empty():
-				continue
-			if parts.size() > 1 and parts[1].height > 0.0005:
-				wedge_faces.append(parts[1])
-		else:
-			rect_faces.append(face)
+			if parts.size() == 2:
+				var rect_face: WallFace = parts[0]
+				var wedge_face: WallFace = parts[1]
+				if has_wedge_decor:
+					wedge_faces.append(wedge_face)
+				if has_rect_decor and not wall_decor_skip_trapezoids and rect_face.height > 0.01:
+					rect_faces.append(rect_face)
+			continue
+		rect_faces.append(face)
 	print(
 		"wall_decor_meshes:", wall_decor_meshes.size(),
 		" wall_wedge_decor_meshes:", wall_wedge_decor_meshes.size(),
@@ -2774,8 +2771,10 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _outward_from_center(face)
+	var outward: Vector3 = face.normal
 	outward.y = 0.0
+	if outward.length_squared() < 0.0001:
+		outward = Vector3(face.normal.x, 0.0, face.normal.z)
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
