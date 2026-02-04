@@ -2,11 +2,11 @@
 
 [ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://Scripts/arena_terrain.gd" id="1"]
 [ext_resource type="Script" uid="uid://c5fqv7m0847vy" path="res://Scripts/free_camera.gd" id="2_u45fm"]
-[ext_resource type="Texture2D" uid="uid://72bovohy4xfm" path="res://Mesh/Terrain-Meshs/Wall-Meshs/Screenshot 2026-02-01 130909.png" id="2_uj4qe"]
-[ext_resource type="Texture2D" uid="uid://csgye13tt2sjw" path="res://Mesh/Terrain-Meshs/Wall-Meshs/Screenshot 2026-02-01 033929.png" id="3_8qske"]
-[ext_resource type="Texture2D" uid="uid://cf0t5kaupfje5" path="res://Mesh/Terrain-Meshs/Wall-Meshs/ComfyU7_.png" id="3_ml6qp"]
-[ext_resource type="ArrayMesh" uid="uid://ce8aoj315w5t0" path="res://Mesh/Enemy-Meshs/Claw.res" id="5_jycnn"]
-[ext_resource type="ArrayMesh" uid="uid://diu36c3pmnaxd" path="res://Mesh/Terrain-Meshs/Wall-Meshs/Wall1/Wall1.res" id="7_8qske"]
+[ext_resource type="ArrayMesh" uid="uid://8gvpcunv53gt" path="res://Mesh/Meshes/Walls/Wall1/Wall1.res" id="2_uj4qe"]
+[ext_resource type="ArrayMesh" uid="uid://biqp5os4cby30" path="res://Mesh/Meshes/Walls/Wall2/Wall2.res" id="3_jycnn"]
+[ext_resource type="ArrayMesh" uid="uid://c14eaulkcktpe" path="res://Mesh/Meshes/Floor/Floor1/Floor1.res" id="4_ml6qp"]
+[ext_resource type="ArrayMesh" uid="uid://ce8aoj315w5t0" path="res://Mesh/Enemy-Meshs/Claw/Claw.res" id="5_jycnn"]
+[ext_resource type="ArrayMesh" uid="uid://88you33nfbyj" path="res://Mesh/Enemy-Meshs/Behemoth/Behemoth.res" id="7_8qske"]
 
 [sub_resource type="StandardMaterial3D" id="2"]
 albedo_color = Color(0.32, 0.68, 0.34, 1)
@@ -23,12 +23,13 @@ min_height = 1.0
 max_height = 500.0
 box_height = 500.0
 tunnel_occluder_color = Color(0, 0.4206377, 0.9538303, 1)
-use_rock_shader = false
 top_subdiv = 1
 wall_subdiv = 1
-noise_top_tex = ExtResource("2_uj4qe")
-noise_wall_tex = ExtResource("3_ml6qp")
-noise_ramp_tex = ExtResource("3_8qske")
+wall_decor_meshes = Array[Mesh]([ExtResource("2_uj4qe"), ExtResource("3_jycnn")])
+wall_decor_flip_outward = false
+wall_decor_flip_facing = true
+floor_decor_meshes = Array[Mesh]([ExtResource("4_ml6qp")])
+floor_decor_scale_in_xz = false
 
 [node name="TerrainBody" type="StaticBody3D" parent="."]
 
@@ -43,8 +44,6 @@ current = true
 fov = 82.2
 far = 1000000.0
 script = ExtResource("2_u45fm")
-move_speed = 40.0
-mouse_sensitivity = 0.001
 
 [node name="Enemy" type="MeshInstance3D" parent="TerrainBody"]
 transform = Transform3D(10.000004, 6.7055225e-07, -5.9604645e-08, -7.599592e-07, 10.000003, -9.536743e-07, -5.9604645e-08, 4.7683716e-07, 10.000004, 5.719101, 205.93633, 2.6671944)
@@ -52,7 +51,7 @@ mesh = ExtResource("5_jycnn")
 skeleton = NodePath("../..")
 
 [node name="Player" type="MeshInstance3D" parent="TerrainBody/Enemy"]
-transform = Transform3D(0.0095106205, 0.001276921, -0.0028138154, -0.0017639206, 0.009720248, -0.0015509155, 0.002537059, 0.0019713517, 0.009469799, 8.128905, -2.9461002, 4.3188257)
+transform = Transform3D(0.9510621, 0.1276921, -0.28138155, -0.17639206, 0.97202486, -0.15509157, 0.2537059, 0.1971352, 0.94697994, 8.128905, -2.9461002, 4.3188257)
 mesh = ExtResource("7_8qske")
 skeleton = NodePath("../../DebugCamera")
 
@@ -60,7 +59,7 @@ skeleton = NodePath("../../DebugCamera")
 environment = SubResource("Environment_u45fm")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-transform = Transform3D(-0.9002276, -0.018650414, -0.43502015, 0.43541986, -0.038561326, -0.89940137, -7.5198227e-07, -0.9990822, 0.042834718, 0, 0, 0)
+transform = Transform3D(-0.99999684, -0.00010691206, -0.0025112333, 0.0025134087, -0.04283459, -0.999079, -7.501959e-07, -0.99908215, 0.04283472, 0, 0, 0)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.005235962, 0.9999863, 0, -0.9999863, 0.005235962, 0, 0, 0)
