@@ -2681,7 +2681,7 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = face.normal
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
@@ -2712,7 +2712,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = face.normal
 	outward.y = 0.0
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
