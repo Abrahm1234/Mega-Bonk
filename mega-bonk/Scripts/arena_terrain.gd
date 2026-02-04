@@ -297,10 +297,12 @@ func _count_ramps() -> int:
 	return count
 
 func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: PackedInt32Array) -> bool:
-	if _ramp_up_dir[a_idx] == dir_a_to_b and levels[b_idx] == levels[a_idx] + want:
+	var delta_ab: int = levels[b_idx] - levels[a_idx]
+	if _ramp_up_dir[a_idx] == dir_a_to_b and delta_ab >= 1 and delta_ab <= want:
 		return true
 	var dir_b_to_a: int = _opposite_dir(dir_a_to_b)
-	if _ramp_up_dir[b_idx] == dir_b_to_a and levels[a_idx] == levels[b_idx] + want:
+	var delta_ba: int = levels[a_idx] - levels[b_idx]
+	if _ramp_up_dir[b_idx] == dir_b_to_a and delta_ba >= 1 and delta_ba <= want:
 		return true
 	return false
 
@@ -349,7 +351,8 @@ func _is_stacked_with_this(down_x: int, down_z: int, up_x: int, up_z: int, dir_u
 		return false
 	var down_lvl: int = _h_to_level(_cell_h(down_x, down_z))
 	var up_lvl: int = _h_to_level(_cell_h(up_x, up_z))
-	return (down_lvl + want) == up_lvl
+	var rise_levels: int = up_lvl - down_lvl
+	return rise_levels >= 1 and rise_levels <= want
 
 func _apply_levels_to_heights(n: int, levels: PackedInt32Array) -> void:
 	var min_lvl: int = _h_to_level(min_height)
@@ -371,7 +374,8 @@ func _try_place_ramp_candidate(low_idx: int, dir_up: int, n: int, levels: Packed
 	if high.x < 0 or high.x >= n or high.y < 0 or high.y >= n:
 		return false
 	var high_idx: int = high.y * n + high.x
-	if levels[high_idx] != low_level + want_levels:
+	var rise_levels: int = levels[high_idx] - low_level
+	if rise_levels < 1 or rise_levels > want_levels:
 		return false
 
 	if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up:
@@ -456,7 +460,7 @@ func _can_move_edge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: 
 	if da == 0:
 		return true
 
-	if abs(da) == want and _is_ramp_bridge(a_idx, b_idx, dir_a_to_b, want, levels):
+	if abs(da) <= want and _is_ramp_bridge(a_idx, b_idx, dir_a_to_b, want, levels):
 		return true
 
 	if da > 0:
@@ -554,7 +558,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 					var j: int = nb.y * n + nb.x
 					if reach[j] != 0:
 						continue
-					if levels[j] == levels[i] + want:
+					if levels[j] > levels[i] and levels[j] <= levels[i] + want:
 						cands.append([i, d])
 
 			if not cands.is_empty():
@@ -589,7 +593,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 				if nb2.x < 0 or nb2.x >= n or nb2.y < 0 or nb2.y >= n:
 					continue
 				var j2: int = nb2.y * n + nb2.x
-				if good[j2] != 0 and levels[j2] == levels[i] + want:
+				if good[j2] != 0 and levels[j2] > levels[i] and levels[j2] <= levels[i] + want:
 					exit_cands.append([i, d2])
 
 		if not exit_cands.is_empty():
@@ -623,8 +627,10 @@ func _ramp_is_valid_strict(x: int, z: int, _dir_up_unused: int) -> bool:
 
 	var high_h: float = _cell_h(nb.x, nb.y)
 	var want: int = maxi(1, ramp_step_count)
-	var rise_h: float = float(want) * height_step
-	if absf((high_h - low_h) - rise_h) > 0.001:
+	var low_lvl: int = _h_to_level(low_h)
+	var high_lvl: int = _h_to_level(high_h)
+	var rise_levels: int = high_lvl - low_lvl
+	if rise_levels < 1 or rise_levels > want:
 		return false
 
 	var top_a: Vector2 = _cell_edge_dir(x, z, dir_up)
@@ -1671,7 +1677,8 @@ func _generate_ramps() -> void:
 					continue
 
 				var dh: int = levels[nb_idx] - levels[idx]
-				if abs(dh) != want_levels:
+				var rise_levels: int = abs(dh)
+				if rise_levels < 1 or rise_levels > want_levels:
 					continue
 
 				var low_cid: int
@@ -1679,7 +1686,7 @@ func _generate_ramps() -> void:
 				var low_idx: int
 				var dir_up: int
 
-				if dh == want_levels:
+				if dh > 0:
 					low_cid = cid
 					high_cid = nb_cid
 					low_idx = idx
