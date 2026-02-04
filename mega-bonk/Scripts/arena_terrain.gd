@@ -3148,17 +3148,25 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 		sd = s
 
 	# Scale in local space (do not scale thickness)
-	var scale_vec := Vector3.ONE
+	var scale_vec: Vector3 = Vector3.ONE
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := local_basis
-	basis_scaled.set_column(width_axis, basis_scaled.get_column(width_axis) * scale_vec[width_axis])
-	basis_scaled.set_column(depth_axis, basis_scaled.get_column(depth_axis) * scale_vec[depth_axis])
+	var basis_scaled: Basis = local_basis
+	basis_scaled.x *= scale_vec.x
+	basis_scaled.y *= scale_vec.y
+	basis_scaled.z *= scale_vec.z
 
 	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
 	var pos: Vector3 = face.center + face_n * floor_decor_offset
-	var mesh_n: Vector3 = basis_scaled.get_column(normal_axis).normalized()
+	var mesh_n: Vector3 = Vector3.UP
+	match normal_axis:
+		0:
+			mesh_n = basis_scaled.x.normalized()
+		1:
+			mesh_n = basis_scaled.y.normalized()
+		2:
+			mesh_n = basis_scaled.z.normalized()
 	var extent_n: float = abs(mesh_n.x) * aabb.size.x + abs(mesh_n.y) * aabb.size.y + abs(mesh_n.z) * aabb.size.z
 	var mesh_anchor: Vector3 = anchor - mesh_n * (extent_n * 0.5)
 	var origin: Vector3 = pos - basis_scaled * mesh_anchor
