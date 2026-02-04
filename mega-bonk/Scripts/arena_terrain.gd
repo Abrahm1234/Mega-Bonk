@@ -2903,6 +2903,8 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 		return Transform3D()
 
 	var aabb: AABB = mesh.get_aabb()
+	var edge_u: Vector3 = face.b - face.a
+	var edge_v: Vector3 = face.d - face.a
 	var face_n: Vector3 = face.normal.normalized()
 
 	var u: Vector3 = face.b - face.a
