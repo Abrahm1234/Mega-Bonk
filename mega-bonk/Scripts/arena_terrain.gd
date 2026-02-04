@@ -2377,20 +2377,17 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	return n if h_plus < h_minus else -n
 
-func _arena_center_world() -> Vector3:
-	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+func _arena_center_local() -> Vector3:
+	return Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
 func _outward_from_center(face: WallFace) -> Vector3:
 	var n: Vector3 = face.normal
 	n.y = 0.0
 	if n.length_squared() < 0.000001:
-		n = face.normal
-		n.y = 0.0
-	if n.length_squared() < 0.000001:
 		n = Vector3.FORWARD
 	n = n.normalized()
 
-	var to_face: Vector3 = face.center - _arena_center_world()
+	var to_face: Vector3 = face.center - _arena_center_local()
 	to_face.y = 0.0
 	if to_face.length_squared() > 0.000001 and n.dot(to_face) < 0.0:
 		n = -n
@@ -2602,7 +2599,6 @@ func _rebuild_wall_decor() -> void:
 			var parts := _split_trapezoid_wall_face_for_decor(face)
 			if parts.is_empty():
 				continue
-			rect_faces.append(parts[0])
 			if parts.size() > 1 and parts[1].height > 0.0005:
 				wedge_faces.append(parts[1])
 		else:
@@ -2978,7 +2974,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
 		cols[depth_axis] = -cols[depth_axis]
-		basis = Basis(cols[0], cols[1], cols[2])
+		local_basis = Basis(cols[0], cols[1], cols[2])
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
