@@ -3160,14 +3160,17 @@ func _floor_transform_for_face_legacy(face: FloorFace, mesh: Mesh) -> Transform3
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := basis
+	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
 	basis_scaled.z = basis_scaled.z * scale_vec.z
 
 	# Place ABOVE the surface consistently (use face_n, not the possibly flipped basis normal)
 	var pos: Vector3 = face.center + face_n * floor_decor_offset
-	var origin: Vector3 = pos - basis_scaled * anchor
+	var mesh_n: Vector3 = local_basis.y.normalized()
+	var extent_n: float = abs(mesh_n.x) * aabb.size.x + abs(mesh_n.y) * aabb.size.y + abs(mesh_n.z) * aabb.size.z
+	var cap_anchor := anchor - mesh_n * (extent_n * 0.5)
+	var origin: Vector3 = pos - basis_scaled * cap_anchor
 	return Transform3D(basis_scaled, origin)
 func _rebuild_floor_decor() -> void:
 	_clear_floor_decor()
