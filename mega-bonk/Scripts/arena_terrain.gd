@@ -2451,13 +2451,13 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 
 	var h0 := (e0_hi - e0_lo).length()
 	var h1 := (e1_hi - e1_lo).length()
-	var min_h := min(h0, h1)
+	var min_h: float = minf(h0, h1)
 
 	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
 		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
 
-	var t0 := clamp(min_h / max(h0, 0.0001), 0.0, 1.0)
-	var t1 := clamp(min_h / max(h1, 0.0001), 0.0, 1.0)
+	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
+	var t1: float = clampf(min_h / maxf(h1, 0.0001), 0.0, 1.0)
 
 	var p0 := e0_lo.lerp(e0_hi, t0)
 	var p1 := e1_lo.lerp(e1_hi, t1)
@@ -2472,7 +2472,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var rv := rd - ra
 	var rn := ru.cross(rv).normalized()
 	var rwidth := ru.length()
-	var rheight := max((rd - ra).length(), (rc - rb).length())
+	var rheight: float = maxf((rd - ra).length(), (rc - rb).length())
 	var rkey := face.key ^ 0x51ED_0A11
 
 	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, false, rkey)
@@ -2487,7 +2487,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var wv := wd - wa
 	var wn := wu.cross(wv).normalized()
 	var wwidth := wu.length()
-	var wheight := max((wd - wa).length(), (wc - wb).length())
+	var wheight: float = maxf((wd - wa).length(), (wc - wb).length())
 	var wkey := face.key ^ 0xA7D3_19C3
 
 	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, true, wkey)
