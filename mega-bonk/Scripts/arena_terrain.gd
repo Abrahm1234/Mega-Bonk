@@ -2434,6 +2434,66 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
 
+func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
+	var e0_lo: Vector3 = face.a
+	var e0_hi: Vector3 = face.d
+	if e0_hi.y < e0_lo.y:
+		var tmp := e0_lo
+		e0_lo = e0_hi
+		e0_hi = tmp
+
+	var e1_lo: Vector3 = face.b
+	var e1_hi: Vector3 = face.c
+	if e1_hi.y < e1_lo.y:
+		var tmp2 := e1_lo
+		e1_lo = e1_hi
+		e1_hi = tmp2
+
+	var h0 := (e0_hi - e0_lo).length()
+	var h1 := (e1_hi - e1_lo).length()
+	var min_h := min(h0, h1)
+
+	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
+		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
+
+	var t0 := clamp(min_h / max(h0, 0.0001), 0.0, 1.0)
+	var t1 := clamp(min_h / max(h1, 0.0001), 0.0, 1.0)
+
+	var p0 := e0_lo.lerp(e0_hi, t0)
+	var p1 := e1_lo.lerp(e1_hi, t1)
+
+	var ra := e0_lo
+	var rb := e1_lo
+	var rc := p1
+	var rd := p0
+
+	var rcenter := (ra + rb + rc + rd) * 0.25
+	var ru := rb - ra
+	var rv := rd - ra
+	var rn := ru.cross(rv).normalized()
+	var rwidth := ru.length()
+	var rheight := max((rd - ra).length(), (rc - rb).length())
+	var rkey := face.key ^ 0x51ED_0A11
+
+	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, false, rkey)
+
+	var wa := p0
+	var wb := p1
+	var wc := e1_hi
+	var wd := e0_hi
+
+	var wcenter := (wa + wb + wc + wd) * 0.25
+	var wu := wb - wa
+	var wv := wd - wa
+	var wn := wu.cross(wv).normalized()
+	var wwidth := wu.length()
+	var wheight := max((wd - wa).length(), (wc - wb).length())
+	var wkey := face.key ^ 0xA7D3_19C3
+
+	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, true, wkey)
+
+	return [rect_face, wedge_face]
+
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
 	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
@@ -2467,7 +2527,12 @@ func _rebuild_wall_decor() -> void:
 	for face in _wall_faces:
 		if face.is_trapezoid:
 			trap_count += 1
-			wedge_faces.append(face)
+			if wall_decor_skip_trapezoids:
+				continue
+			var parts := _split_trapezoid_wall_face_for_decor(face)
+			rect_faces.append(parts[0])
+			if parts[1].height > 0.0005:
+				wedge_faces.append(parts[1])
 		else:
 			rect_faces.append(face)
 	print(
@@ -2642,20 +2707,27 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = _pick_open_side_outward(face)
-	var z_dir: Vector3 = outward
-	z_dir.y = 0.0
-	if z_dir.length_squared() < 0.0001:
-		z_dir = Vector3.FORWARD
-	z_dir = z_dir.normalized()
+	outward.y = 0.0
+	if outward.length_squared() < 0.0001:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
 
-	var y_dir: Vector3 = Vector3.UP
-	var x_dir: Vector3 = y_dir.cross(z_dir)
+	var y_dir := Vector3.UP
+	var x_dir := y_dir.cross(outward).normalized()
 	if x_dir.length_squared() < 0.0001:
 		x_dir = Vector3.RIGHT
-	x_dir = x_dir.normalized()
-	y_dir = z_dir.cross(x_dir).normalized()
 
-	var rot := Basis(x_dir, y_dir, z_dir)
+	var u_dir := (face.b - face.a)
+	u_dir.y = 0.0
+	if u_dir.length_squared() > 0.0001 and x_dir.dot(u_dir.normalized()) < 0.0:
+		x_dir = -x_dir
+
+	var z_dir := x_dir.cross(y_dir).normalized()
+	if z_dir.dot(outward) < 0.0:
+		z_dir = -z_dir
+		x_dir = -x_dir
+
+	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
 
 	var attach_far: bool = wall_wedge_decor_flip_outward
 	if wall_wedge_decor_flip_facing:
