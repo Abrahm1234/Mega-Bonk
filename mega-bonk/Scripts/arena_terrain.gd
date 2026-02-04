@@ -2864,8 +2864,11 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	var sx: float = 1.0
 	var sy: float = 1.0
 	if wall_wedge_decor_fit_to_face:
-		sx = clamp(face.width / ref_w, 0.1, wall_wedge_decor_max_scale)
-		sy = clamp(face.height / ref_h, 0.1, wall_wedge_decor_max_scale)
+		sx = max(face.width / ref_w, 0.1)
+		sy = max(face.height / ref_h, 0.1)
+		if wall_wedge_decor_max_scale > 0.0:
+			sx = min(sx, wall_wedge_decor_max_scale)
+			sy = min(sy, wall_wedge_decor_max_scale)
 	var sz: float = 1.0
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
