@@ -2377,6 +2377,34 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	return n if h_plus < h_minus else -n
 
+func _arena_center_world() -> Vector3:
+	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+
+func _outward_from_center(face: WallFace) -> Vector3:
+	var n: Vector3 = face.normal
+	n.y = 0.0
+	if n.length_squared() < 0.000001:
+		n = face.normal
+		n.y = 0.0
+	if n.length_squared() < 0.000001:
+		n = Vector3.FORWARD
+	n = n.normalized()
+
+	var to_face: Vector3 = face.center - _arena_center_world()
+	to_face.y = 0.0
+	if to_face.length_squared() > 0.000001 and n.dot(to_face) < 0.0:
+		n = -n
+
+	return n
+
+func _edge_vertical_score(p0: Vector3, p1: Vector3) -> float:
+	var d := p1 - p0
+	var len := maxf(0.000001, d.length())
+	return absf(d.y) / len
+
+func _edge_vertical_height(p0: Vector3, p1: Vector3) -> float:
+	return absf(p0.y - p1.y)
+
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
 	if n.length() < 0.000001:
@@ -2422,8 +2450,33 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n /= nlen
 
 	var width: float = edge_u.length()
-	var h0: float = absf(a.y - d.y)
-	var h1: float = absf(b.y - c.y)
+	var edges := [
+		[a, b],
+		[b, c],
+		[c, d],
+		[d, a],
+	]
+
+	var best0_i := 0
+	var best1_i := 1
+	var best0_s := -1.0
+	var best1_s := -1.0
+
+	for i in range(4):
+		var p0: Vector3 = edges[i][0]
+		var p1: Vector3 = edges[i][1]
+		var s := _edge_vertical_score(p0, p1)
+		if s > best0_s:
+			best1_s = best0_s
+			best1_i = best0_i
+			best0_s = s
+			best0_i = i
+		elif s > best1_s:
+			best1_s = s
+			best1_i = i
+
+	var h0: float = _edge_vertical_height(edges[best0_i][0], edges[best0_i][1])
+	var h1: float = _edge_vertical_height(edges[best1_i][0], edges[best1_i][1])
 	var height: float = maxf(h0, h1)
 
 	if height < wall_decor_min_height:
@@ -2694,7 +2747,7 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = _outward_from_center(face)
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
@@ -2725,7 +2778,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = _outward_from_center(face)
 	outward.y = 0.0
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
@@ -2795,7 +2848,8 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
-	var target_world: Vector3 = face.center + outward * outward_offset
+	var face_p: Vector3 = (face.a + face.b + face.c + face.d) * 0.25
+	var target_world: Vector3 = face_p + outward * outward_offset
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
