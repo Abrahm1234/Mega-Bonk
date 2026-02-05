@@ -2644,11 +2644,7 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
-			if wf.center.y < wall_wedge_decor_min_world_y:
-				continue
-			if wall_wedge_decor_max_size.x > 0.0 and wf.width > wall_wedge_decor_max_size.x:
-				continue
-			if wall_wedge_decor_max_size.y > 0.0 and wf.height > wall_wedge_decor_max_size.y:
+			if not _allow_wedge_decor_face(wf):
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			wedge_counts[widx] += 1
@@ -2743,11 +2739,7 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
-			if wf2.center.y < wall_wedge_decor_min_world_y:
-				continue
-			if wall_wedge_decor_max_size.x > 0.0 and wf2.width > wall_wedge_decor_max_size.x:
-				continue
-			if wall_wedge_decor_max_size.y > 0.0 and wf2.height > wall_wedge_decor_max_size.y:
+			if not _allow_wedge_decor_face(wf2):
 				continue
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
@@ -2760,6 +2752,15 @@ func _rebuild_wall_decor() -> void:
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
 			wedge_write_i[wsel] = wwi + 1
+
+func _allow_wedge_decor_face(face: WallFace) -> bool:
+	if face.center.y < wall_wedge_decor_min_world_y:
+		return false
+	if wall_wedge_decor_max_size.x > 0.0 and face.width > wall_wedge_decor_max_size.x:
+		return false
+	if wall_wedge_decor_max_size.y > 0.0 and face.height > wall_wedge_decor_max_size.y:
+		return false
+	return true
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = face.normal
