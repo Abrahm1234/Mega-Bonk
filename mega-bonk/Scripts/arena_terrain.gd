@@ -2422,98 +2422,112 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	if not enable_wall_decor:
 		return
 
-	var eps: float = 0.001
-	var p0 := a
-	var p1 := b
-	var p2 := c
-	var p3 := d
-	var pts := [p0, p1, p2, p3]
+	var pts: Array[Vector3] = [a, b, c, d]
+
+	var xz_eps: float = 0.001
 	var used := [false, false, false, false]
-	var edges: Array = []
+	var pairs: Array = []
 
 	for i in range(4):
-		if used[i]:
-			continue
-		var found: int = -1
 		for j in range(i + 1, 4):
-			if used[j]:
-				continue
-			if absf(pts[i].x - pts[j].x) <= eps and absf(pts[i].z - pts[j].z) <= eps:
-				found = j
-				break
-		if found != -1:
-			edges.append([i, found])
-			used[i] = true
-			used[found] = true
+			var pi := pts[i]
+			var pj := pts[j]
+			var dxz := Vector2(pi.x - pj.x, pi.z - pj.z).length()
+			pairs.append([dxz, i, j])
 
-	if edges.size() == 2:
-		var e0_a: Vector3 = pts[int(edges[0][0])]
-		var e0_b: Vector3 = pts[int(edges[0][1])]
-		var e1_a: Vector3 = pts[int(edges[1][0])]
-		var e1_b: Vector3 = pts[int(edges[1][1])]
+	pairs.sort_custom(func(p, q): return p[0] < q[0])
 
-		var e0_lo: Vector3 = e0_a
-		var e0_hi: Vector3 = e0_b
-		if e0_hi.y < e0_lo.y:
-			var tmp0 := e0_lo
-			e0_lo = e0_hi
-			e0_hi = tmp0
+	var edge0 := [-1, -1]
+	var edge1 := [-1, -1]
 
-		var e1_lo: Vector3 = e1_a
-		var e1_hi: Vector3 = e1_b
-		if e1_hi.y < e1_lo.y:
-			var tmp1 := e1_lo
-			e1_lo = e1_hi
-			e1_hi = tmp1
-
-		var edge_center: Vector3 = (e0_hi + e0_lo + e1_hi + e1_lo) * 0.25
-		var outward_ref := Vector3(edge_center.x, 0.0, edge_center.z)
-		if outward_ref.length_squared() < 0.0001:
-			outward_ref = Vector3.FORWARD
-		var right_ref := Vector3.UP.cross(outward_ref)
-		if right_ref.length_squared() < 0.0001:
-			right_ref = Vector3.RIGHT
+	for p in pairs:
+		var dist: float = p[0]
+		var i: int = p[1]
+		var j: int = p[2]
+		if dist > xz_eps:
+			break
+		if used[i] or used[j]:
+			continue
+		if edge0[0] == -1:
+			edge0 = [i, j]
 		else:
-			right_ref = right_ref.normalized()
+			edge1 = [i, j]
+			break
+		used[i] = true
+		used[j] = true
 
-		if (e1_hi - e0_hi).dot(right_ref) < 0.0:
-			var tmp_hi := e0_hi
-			var tmp_lo := e0_lo
-			e0_hi = e1_hi
-			e0_lo = e1_lo
-			e1_hi = tmp_hi
-			e1_lo = tmp_lo
+	if edge0[0] == -1 or edge1[0] == -1:
+		edge0 = [0, 3]
+		edge1 = [1, 2]
 
-		a = e0_hi
-		b = e1_hi
-		c = e1_lo
-		d = e0_lo
+	func _lo_hi(i0: int, i1: int) -> Array[Vector3]:
+		var p0 := pts[i0]
+		var p1 := pts[i1]
+		return [p0, p1] if p0.y <= p1.y else [p1, p0]
 
-	var edge_u: Vector3 = b - a
-	var edge_v: Vector3 = d - a
-	var n: Vector3 = edge_u.cross(edge_v)
-	var nlen: float = n.length()
-	if nlen < 0.0001:
+	var e0 := _lo_hi(edge0[0], edge0[1])
+	var e1 := _lo_hi(edge1[0], edge1[1])
+
+	var a0: Vector3 = e0[0]
+	var d0: Vector3 = e0[1]
+	var b0: Vector3 = e1[0]
+	var c0: Vector3 = e1[1]
+
+	var m0 := (a0 + d0) * 0.5
+	var m1 := (b0 + c0) * 0.5
+	if absf(m0.x - m1.x) >= absf(m0.z - m1.z):
+		if m0.x > m1.x:
+			var ta := a0
+			a0 = b0
+			b0 = ta
+			var tc := c0
+			c0 = d0
+			d0 = tc
+	else:
+		if m0.z > m1.z:
+			var ta := a0
+			a0 = b0
+			b0 = ta
+			var tc := c0
+			c0 = d0
+			d0 = tc
+
+	a = a0
+	b = b0
+	c = c0
+	d = d0
+
+	var center := (a + b + c + d) * 0.25
+
+	var n := (b - a).cross(d - a)
+	if n.length() < 0.00001:
 		return
-	n /= nlen
+	n = n.normalized()
+	n.y = 0.0
+	if n.length() > 0.00001:
+		n = n.normalized()
 
-	var width: float = edge_u.length()
-	var h0: float = (a - d).length()
-	var h1: float = (b - c).length()
-	var height: float = max(h0, h1)
+	var to_face := Vector3(center.x, 0.0, center.z)
+	if to_face.length() > 0.00001 and n.dot(to_face) < 0.0:
+		var ta := a
+		a = b
+		b = ta
+		var td := d
+		d = c
+		c = td
+		n = -n
 
+	var height: float = ((c.y + d.y) * 0.5) - ((a.y + b.y) * 0.5)
 	if height < wall_decor_min_height:
 		return
 
-	var center: Vector3 = (a + b + c + d) * 0.25
-	var outward_ref2 := Vector3(center.x, 0.0, center.z)
-	if outward_ref2.length_squared() < 0.0001:
-		outward_ref2 = Vector3.FORWARD
-	if n.dot(outward_ref2) < 0.0:
-		n = -n
-	var trapezoid: bool = absf(h0 - h1) > 0.001
-	var key: int = _hash_wall_face(center, n)
-	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
+	var edge0_len := (d - a).length()
+	var edge1_len := (c - b).length()
+	var is_trapezoid := absf(edge0_len - edge1_len) > 0.005
+	var width: float = (b - a).length()
+	var key := _hash_wall_face(center, n)
+
+	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, is_trapezoid, key))
 
 func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var e0_lo: Vector3 = face.a
