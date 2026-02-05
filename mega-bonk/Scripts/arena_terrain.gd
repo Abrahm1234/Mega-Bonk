@@ -2379,12 +2379,21 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	probe.y += 0.02
 
 	var eps_side: float = max(0.25, _cell_size * 0.05)
-	var p_plus: Vector3 = probe + n * eps_side
-	var p_minus: Vector3 = probe - n * eps_side
+	var option_a: Vector3 = n
+	var option_b: Vector3 = -n
+	var p_plus: Vector3 = probe + option_a * eps_side
+	var p_minus: Vector3 = probe + option_b * eps_side
 	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
 	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
 
-	return n if h_plus < h_minus else -n
+	if h_plus < h_minus:
+		return option_a
+	if h_minus < h_plus:
+		return option_b
+	var to_face := Vector3(probe.x, 0.0, probe.z)
+	if to_face.length() > 0.00001:
+		return option_a if option_a.dot(to_face) >= option_b.dot(to_face) else option_b
+	return option_a
 
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
