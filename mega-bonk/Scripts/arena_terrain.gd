@@ -2641,7 +2641,7 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f: WallFace in rect_faces:
-			if f.center.y < wall_decor_min_world_y:
+			if _wall_face_top_world_y(f) < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
 				continue
@@ -2727,7 +2727,7 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f2: WallFace in rect_faces:
-			if f2.center.y < wall_decor_min_world_y:
+			if _wall_face_top_world_y(f2) < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
 				continue
@@ -2769,6 +2769,13 @@ func _allow_wedge_decor_face(face: WallFace) -> bool:
 	if wall_wedge_decor_max_size.y > 0.0 and face.height > wall_wedge_decor_max_size.y:
 		return false
 	return true
+
+func _wall_face_top_world_y(face: WallFace) -> float:
+	var ya: float = to_global(face.a).y
+	var yb: float = to_global(face.b).y
+	var yc: float = to_global(face.c).y
+	var yd: float = to_global(face.d).y
+	return max(max(ya, yb), max(yc, yd))
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = face.normal
