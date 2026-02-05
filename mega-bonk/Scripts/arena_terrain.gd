@@ -2427,6 +2427,22 @@ func _hash_wall_face(center: Vector3, n: Vector3) -> int:
 		h = -h
 	return h
 
+static func _lo_hi_pts(pts: Array[Vector3], i0: int, i1: int) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	out.resize(2)
+
+	var p0: Vector3 = pts[i0]
+	var p1: Vector3 = pts[i1]
+
+	if p0.y <= p1.y:
+		out[0] = p0
+		out[1] = p1
+	else:
+		out[0] = p1
+		out[1] = p0
+
+	return out
+
 func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	if not enable_wall_decor:
 		return
@@ -2469,13 +2485,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		edge0 = [0, 3]
 		edge1 = [1, 2]
 
-	func _lo_hi(i0: int, i1: int) -> Array[Vector3]:
-		var p0 := pts[i0]
-		var p1 := pts[i1]
-		return [p0, p1] if p0.y <= p1.y else [p1, p0]
-
-	var e0 := _lo_hi(edge0[0], edge0[1])
-	var e1 := _lo_hi(edge1[0], edge1[1])
+	var e0: Array[Vector3] = _lo_hi_pts(pts, edge0[0], edge0[1])
+	var e1: Array[Vector3] = _lo_hi_pts(pts, edge1[0], edge1[1])
 
 	var a0: Vector3 = e0[0]
 	var d0: Vector3 = e0[1]
