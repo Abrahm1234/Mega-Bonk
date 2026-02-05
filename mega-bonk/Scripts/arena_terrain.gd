@@ -2751,7 +2751,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	var right_avg: float = (face.b.y + face.c.y) * 0.5
 	var slope_up_toward_right: bool = right_avg > left_avg
 	if not slope_up_toward_right:
-		rot = rot * Basis(rot.z, PI)
+		rot = Basis(-rot.x, rot.y, rot.z)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
