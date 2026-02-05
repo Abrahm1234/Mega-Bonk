@@ -135,6 +135,8 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
 @export var wall_wedge_decor_max_scale: float = 2.5
+@export var wall_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export var wall_wedge_decor_min_world_y: float = -INF
 @export var wall_wedge_decor_flip_outward: bool = true
 @export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_decor_flip_outward: bool = true
@@ -297,10 +299,12 @@ func _count_ramps() -> int:
 	return count
 
 func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: PackedInt32Array) -> bool:
-	if _ramp_up_dir[a_idx] == dir_a_to_b and levels[b_idx] == levels[a_idx] + want:
+	var delta_ab: int = levels[b_idx] - levels[a_idx]
+	if _ramp_up_dir[a_idx] == dir_a_to_b and delta_ab >= 1 and delta_ab <= want:
 		return true
 	var dir_b_to_a: int = _opposite_dir(dir_a_to_b)
-	if _ramp_up_dir[b_idx] == dir_b_to_a and levels[a_idx] == levels[b_idx] + want:
+	var delta_ba: int = levels[a_idx] - levels[b_idx]
+	if _ramp_up_dir[b_idx] == dir_b_to_a and delta_ba >= 1 and delta_ba <= want:
 		return true
 	return false
 
@@ -349,7 +353,8 @@ func _is_stacked_with_this(down_x: int, down_z: int, up_x: int, up_z: int, dir_u
 		return false
 	var down_lvl: int = _h_to_level(_cell_h(down_x, down_z))
 	var up_lvl: int = _h_to_level(_cell_h(up_x, up_z))
-	return (down_lvl + want) == up_lvl
+	var rise_levels: int = up_lvl - down_lvl
+	return rise_levels >= 1 and rise_levels <= want
 
 func _apply_levels_to_heights(n: int, levels: PackedInt32Array) -> void:
 	var min_lvl: int = _h_to_level(min_height)
@@ -371,7 +376,8 @@ func _try_place_ramp_candidate(low_idx: int, dir_up: int, n: int, levels: Packed
 	if high.x < 0 or high.x >= n or high.y < 0 or high.y >= n:
 		return false
 	var high_idx: int = high.y * n + high.x
-	if levels[high_idx] != low_level + want_levels:
+	var rise_levels: int = levels[high_idx] - low_level
+	if rise_levels < 1 or rise_levels > want_levels:
 		return false
 
 	if _ramp_up_dir[high_idx] != RAMP_NONE and _ramp_up_dir[high_idx] != dir_up:
@@ -456,7 +462,7 @@ func _can_move_edge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: 
 	if da == 0:
 		return true
 
-	if abs(da) == want and _is_ramp_bridge(a_idx, b_idx, dir_a_to_b, want, levels):
+	if abs(da) <= want and _is_ramp_bridge(a_idx, b_idx, dir_a_to_b, want, levels):
 		return true
 
 	if da > 0:
@@ -554,7 +560,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 					var j: int = nb.y * n + nb.x
 					if reach[j] != 0:
 						continue
-					if levels[j] == levels[i] + want:
+					if levels[j] > levels[i] and levels[j] <= levels[i] + want:
 						cands.append([i, d])
 
 			if not cands.is_empty():
@@ -589,7 +595,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 				if nb2.x < 0 or nb2.x >= n or nb2.y < 0 or nb2.y >= n:
 					continue
 				var j2: int = nb2.y * n + nb2.x
-				if good[j2] != 0 and levels[j2] == levels[i] + want:
+				if good[j2] != 0 and levels[j2] > levels[i] and levels[j2] <= levels[i] + want:
 					exit_cands.append([i, d2])
 
 		if not exit_cands.is_empty():
@@ -623,8 +629,10 @@ func _ramp_is_valid_strict(x: int, z: int, _dir_up_unused: int) -> bool:
 
 	var high_h: float = _cell_h(nb.x, nb.y)
 	var want: int = maxi(1, ramp_step_count)
-	var rise_h: float = float(want) * height_step
-	if absf((high_h - low_h) - rise_h) > 0.001:
+	var low_lvl: int = _h_to_level(low_h)
+	var high_lvl: int = _h_to_level(high_h)
+	var rise_levels: int = high_lvl - low_lvl
+	if rise_levels < 1 or rise_levels > want:
 		return false
 
 	var top_a: Vector2 = _cell_edge_dir(x, z, dir_up)
@@ -1671,7 +1679,8 @@ func _generate_ramps() -> void:
 					continue
 
 				var dh: int = levels[nb_idx] - levels[idx]
-				if abs(dh) != want_levels:
+				var rise_levels: int = abs(dh)
+				if rise_levels < 1 or rise_levels > want_levels:
 					continue
 
 				var low_cid: int
@@ -1679,7 +1688,7 @@ func _generate_ramps() -> void:
 				var low_idx: int
 				var dir_up: int
 
-				if dh == want_levels:
+				if dh > 0:
 					low_cid = cid
 					high_cid = nb_cid
 					low_idx = idx
@@ -2413,6 +2422,73 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	if not enable_wall_decor:
 		return
 
+	var eps: float = 0.001
+	var p0 := a
+	var p1 := b
+	var p2 := c
+	var p3 := d
+	var pts := [p0, p1, p2, p3]
+	var used := [false, false, false, false]
+	var edges: Array = []
+
+	for i in range(4):
+		if used[i]:
+			continue
+		var found: int = -1
+		for j in range(i + 1, 4):
+			if used[j]:
+				continue
+			if absf(pts[i].x - pts[j].x) <= eps and absf(pts[i].z - pts[j].z) <= eps:
+				found = j
+				break
+		if found != -1:
+			edges.append([i, found])
+			used[i] = true
+			used[found] = true
+
+	if edges.size() == 2:
+		var e0_a: Vector3 = pts[int(edges[0][0])]
+		var e0_b: Vector3 = pts[int(edges[0][1])]
+		var e1_a: Vector3 = pts[int(edges[1][0])]
+		var e1_b: Vector3 = pts[int(edges[1][1])]
+
+		var e0_lo: Vector3 = e0_a
+		var e0_hi: Vector3 = e0_b
+		if e0_hi.y < e0_lo.y:
+			var tmp0 := e0_lo
+			e0_lo = e0_hi
+			e0_hi = tmp0
+
+		var e1_lo: Vector3 = e1_a
+		var e1_hi: Vector3 = e1_b
+		if e1_hi.y < e1_lo.y:
+			var tmp1 := e1_lo
+			e1_lo = e1_hi
+			e1_hi = tmp1
+
+		var edge_center: Vector3 = (e0_hi + e0_lo + e1_hi + e1_lo) * 0.25
+		var outward_ref := Vector3(edge_center.x, 0.0, edge_center.z)
+		if outward_ref.length_squared() < 0.0001:
+			outward_ref = Vector3.FORWARD
+		var right_ref := Vector3.UP.cross(outward_ref)
+		if right_ref.length_squared() < 0.0001:
+			right_ref = Vector3.RIGHT
+		else:
+			right_ref = right_ref.normalized()
+
+		if (e1_hi - e0_hi).dot(right_ref) < 0.0:
+			var tmp_hi := e0_hi
+			var tmp_lo := e0_lo
+			e0_hi = e1_hi
+			e0_lo = e1_lo
+			e1_hi = tmp_hi
+			e1_lo = tmp_lo
+
+		a = e0_hi
+		b = e1_hi
+		c = e1_lo
+		d = e0_lo
+
 	var edge_u: Vector3 = b - a
 	var edge_v: Vector3 = d - a
 	var n: Vector3 = edge_u.cross(edge_v)
@@ -2430,6 +2506,11 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		return
 
 	var center: Vector3 = (a + b + c + d) * 0.25
+	var outward_ref2 := Vector3(center.x, 0.0, center.z)
+	if outward_ref2.length_squared() < 0.0001:
+		outward_ref2 = Vector3.FORWARD
+	if n.dot(outward_ref2) < 0.0:
+		n = -n
 	var trapezoid: bool = absf(h0 - h1) > 0.001
 	var key: int = _hash_wall_face(center, n)
 	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, trapezoid, key))
@@ -2453,7 +2534,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var h1: float = (e1_hi - e1_lo).length()
 	var min_h: float = minf(h0, h1)
 
-	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
+	if absf(h0 - h1) < 0.0001:
 		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
 
 	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
@@ -2470,7 +2551,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var rcenter := (ra + rb + rc + rd) * 0.25
 	var ru := rb - ra
 	var rv := rd - ra
-	var rn := ru.cross(rv).normalized()
+	var rn := face.normal
 	var rwidth := ru.length()
 	var rheight: float = maxf((rd - ra).length(), (rc - rb).length())
 	var rkey := face.key ^ 0x51ED_0A11
@@ -2482,10 +2563,16 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var wc := e1_hi
 	var wd := e0_hi
 
-	var wcenter := (wa + wb + wc + wd) * 0.25
+	var wcenter: Vector3
+	if wa == wd:
+		wcenter = (wa + wb + wc) / 3.0
+	elif wb == wc:
+		wcenter = (wa + wb + wd) / 3.0
+	else:
+		wcenter = (wa + wb + wc + wd) * 0.25
 	var wu := wb - wa
 	var wv := wd - wa
-	var wn := wu.cross(wv).normalized()
+	var wn := face.normal
 	var wwidth := wu.length()
 	var wheight: float = maxf((wd - wa).length(), (wc - wb).length())
 	var wkey := face.key ^ 0xA7D3_19C3
@@ -2557,11 +2644,11 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
-			if wf.center.y < wall_decor_min_world_y:
+			if wf.center.y < wall_wedge_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and wf.width > wall_decor_max_size.x:
+			if wall_wedge_decor_max_size.x > 0.0 and wf.width > wall_wedge_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and wf.height > wall_decor_max_size.y:
+			if wall_wedge_decor_max_size.y > 0.0 and wf.height > wall_wedge_decor_max_size.y:
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			wedge_counts[widx] += 1
@@ -2656,11 +2743,11 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
-			if wf2.center.y < wall_decor_min_world_y:
+			if wf2.center.y < wall_wedge_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and wf2.width > wall_decor_max_size.x:
+			if wall_wedge_decor_max_size.x > 0.0 and wf2.width > wall_wedge_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and wf2.height > wall_decor_max_size.y:
+			if wall_wedge_decor_max_size.y > 0.0 and wf2.height > wall_wedge_decor_max_size.y:
 				continue
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
@@ -2675,7 +2762,7 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = face.normal
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
@@ -2688,8 +2775,11 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var sx: float = 1.0
 	var sy: float = 1.0
 	if wall_decor_fit_to_face:
-		sx = clamp(face.width / ref_w, 0.1, wall_decor_max_scale)
-		sy = clamp(face.height / ref_h, 0.1, wall_decor_max_scale)
+		sx = max(face.width / ref_w, 0.1)
+		sy = max(face.height / ref_h, 0.1)
+		if wall_decor_max_scale > 0.0:
+			sx = min(sx, wall_decor_max_scale)
+			sy = min(sy, wall_decor_max_scale)
 	var sz: float = wall_decor_depth_scale
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
@@ -2706,7 +2796,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = _pick_open_side_outward(face)
+	var outward: Vector3 = face.normal
 	outward.y = 0.0
 	if outward.length_squared() < 0.0001:
 		outward = Vector3.FORWARD
@@ -2738,15 +2828,18 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	var right_avg: float = (face.b.y + face.c.y) * 0.5
 	var slope_up_toward_right: bool = right_avg > left_avg
 	if not slope_up_toward_right:
-		rot = rot * Basis(rot.z, PI)
+		rot = Basis(-rot.x, rot.y, rot.z)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = 1.0
 	var sy: float = 1.0
 	if wall_wedge_decor_fit_to_face:
-		sx = clamp(face.width / ref_w, 0.1, wall_wedge_decor_max_scale)
-		sy = clamp(face.height / ref_h, 0.1, wall_wedge_decor_max_scale)
+		sx = max(face.width / ref_w, 0.1)
+		sy = max(face.height / ref_h, 0.1)
+		if wall_wedge_decor_max_scale > 0.0:
+			sx = min(sx, wall_wedge_decor_max_scale)
+			sy = min(sy, wall_wedge_decor_max_scale)
 	var sz: float = 1.0
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
