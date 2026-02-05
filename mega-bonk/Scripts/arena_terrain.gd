@@ -2427,127 +2427,99 @@ func _hash_wall_face(center: Vector3, n: Vector3) -> int:
 		h = -h
 	return h
 
-static func _lo_hi_pts(pts: Array[Vector3], i0: int, i1: int) -> Array[Vector3]:
-	var out: Array[Vector3] = []
-	out.resize(2)
-
-	var p0: Vector3 = pts[i0]
-	var p1: Vector3 = pts[i1]
-
-	if p0.y <= p1.y:
-		out[0] = p0
-		out[1] = p1
-	else:
-		out[0] = p1
-		out[1] = p0
-
-	return out
+func _get_arena_center_approx() -> Vector3:
+	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
 func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	if not enable_wall_decor:
+	if not (enable_wall_decor or enable_wall_wedge_decor):
 		return
 
 	var pts: Array[Vector3] = [a, b, c, d]
+	pts.sort_custom(func(p: Vector3, q: Vector3) -> bool: return p.y < q.y)
 
-	var xz_eps: float = 0.001
-	var used := [false, false, false, false]
-	var pairs: Array = []
+	var lo0: Vector3 = pts[0]
+	var lo1: Vector3 = pts[1]
+	var hi0: Vector3 = pts[2]
+	var hi1: Vector3 = pts[3]
 
-	for i in range(4):
-		for j in range(i + 1, 4):
-			var pi := pts[i]
-			var pj := pts[j]
-			var dxz := Vector2(pi.x - pj.x, pi.z - pj.z).length()
-			pairs.append([dxz, i, j])
+	var lo0_xz := Vector2(lo0.x, lo0.z)
+	var d0 := lo0_xz.distance_squared_to(Vector2(hi0.x, hi0.z))
+	var d1 := lo0_xz.distance_squared_to(Vector2(hi1.x, hi1.z))
 
-	pairs.sort_custom(func(p, q): return p[0] < q[0])
+	var e0_lo := lo0
+	var e0_hi: Vector3
+	var e1_lo := lo1
+	var e1_hi: Vector3
 
-	var edge0 := [-1, -1]
-	var edge1 := [-1, -1]
-
-	for p in pairs:
-		var dist: float = p[0]
-		var i: int = p[1]
-		var j: int = p[2]
-		if dist > xz_eps:
-			break
-		if used[i] or used[j]:
-			continue
-		if edge0[0] == -1:
-			edge0 = [i, j]
-		else:
-			edge1 = [i, j]
-			break
-		used[i] = true
-		used[j] = true
-
-	if edge0[0] == -1 or edge1[0] == -1:
-		edge0 = [0, 3]
-		edge1 = [1, 2]
-
-	var e0: Array[Vector3] = _lo_hi_pts(pts, edge0[0], edge0[1])
-	var e1: Array[Vector3] = _lo_hi_pts(pts, edge1[0], edge1[1])
-
-	var a0: Vector3 = e0[0]
-	var d0: Vector3 = e0[1]
-	var b0: Vector3 = e1[0]
-	var c0: Vector3 = e1[1]
-
-	var m0 := (a0 + d0) * 0.5
-	var m1 := (b0 + c0) * 0.5
-	if absf(m0.x - m1.x) >= absf(m0.z - m1.z):
-		if m0.x > m1.x:
-			var ta := a0
-			a0 = b0
-			b0 = ta
-			var tc := c0
-			c0 = d0
-			d0 = tc
+	if d0 <= d1:
+		e0_hi = hi0
+		e1_hi = hi1
 	else:
-		if m0.z > m1.z:
-			var ta := a0
-			a0 = b0
-			b0 = ta
-			var tc := c0
-			c0 = d0
-			d0 = tc
+		e0_hi = hi1
+		e1_hi = hi0
 
-	a = a0
-	b = b0
-	c = c0
-	d = d0
+	var span := (e1_lo - e0_lo)
+	span.y = 0.0
+	if span.length_squared() < 1e-10:
+		span = (e1_hi - e0_hi)
+		span.y = 0.0
 
-	var center := (a + b + c + d) * 0.25
+	if span.length_squared() > 1e-10:
+		var u := span.normalized()
+		if e1_lo.dot(u) < e0_lo.dot(u):
+			var tlo := e0_lo
+			e0_lo = e1_lo
+			e1_lo = tlo
+			var thi := e0_hi
+			e0_hi = e1_hi
+			e1_hi = thi
 
-	var n := (b - a).cross(d - a)
-	if n.length() < 0.00001:
+	var aa := e0_lo
+	var bb := e1_lo
+	var cc := e1_hi
+	var dd := e0_hi
+
+	var uvec := bb - aa
+	var vvec := dd - aa
+	var n := uvec.cross(vvec)
+	if n.length_squared() < 1e-10:
 		return
 	n = n.normalized()
-	n.y = 0.0
-	if n.length() > 0.00001:
-		n = n.normalized()
 
-	var to_face := Vector3(center.x, 0.0, center.z)
-	if to_face.length() > 0.00001 and n.dot(to_face) < 0.0:
-		var ta := a
-		a = b
-		b = ta
-		var td := d
-		d = c
-		c = td
-		n = -n
+	var center := (aa + bb + cc + dd) * 0.25
+	var arena_center := _get_arena_center_approx()
+	var to_center := arena_center - center
+	to_center.y = 0.0
 
-	var height: float = ((c.y + d.y) * 0.5) - ((a.y + b.y) * 0.5)
-	if height < wall_decor_min_height:
+	var n_flat := n
+	n_flat.y = 0.0
+
+	if to_center.length_squared() > 1e-10:
+		var ref := to_center.normalized()
+		var test := n_flat.normalized() if n_flat.length_squared() > 1e-10 else n
+		if test.dot(ref) > 0.0:
+			var t := aa
+			aa = bb
+			bb = t
+			t = dd
+			dd = cc
+			cc = t
+			n = -n
+
+	var edge0 := dd - aa
+	var edge1 := cc - bb
+	var h0 := edge0.length()
+	var h1 := edge1.length()
+	var is_trap := absf(h0 - h1) > 0.01
+
+	if maxf(h0, h1) < wall_decor_min_height:
 		return
 
-	var edge0_len := (d - a).length()
-	var edge1_len := (c - b).length()
-	var is_trapezoid := absf(edge0_len - edge1_len) > 0.005
-	var width: float = (b - a).length()
-	var key := _hash_wall_face(center, n)
+	var width := (bb - aa).length()
+	var height := maxf(h0, h1)
+	var key: int = _hash_wall_face(center, n)
 
-	_wall_faces.append(WallFace.new(a, b, c, d, center, n, width, height, is_trapezoid, key))
+	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
 func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var e0_lo: Vector3 = face.a
@@ -2591,6 +2563,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var rkey := face.key ^ 0x51ED_0A11
 
 	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, false, rkey)
+	rect_face.normal = face.normal
 
 	var wa := p0
 	var wb := p1
@@ -2612,6 +2585,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var wkey := face.key ^ 0xA7D3_19C3
 
 	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, true, wkey)
+	wedge_face.normal = face.normal
 
 	return [rect_face, wedge_face]
 
