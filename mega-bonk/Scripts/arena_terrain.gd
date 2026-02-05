@@ -135,6 +135,8 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
 @export var wall_wedge_decor_max_scale: float = 2.5
+@export var wall_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export var wall_wedge_decor_min_world_y: float = -INF
 @export var wall_wedge_decor_flip_outward: bool = true
 @export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_decor_flip_outward: bool = true
@@ -2570,11 +2572,11 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
-			if wf.center.y < wall_decor_min_world_y:
+			if wf.center.y < wall_wedge_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and wf.width > wall_decor_max_size.x:
+			if wall_wedge_decor_max_size.x > 0.0 and wf.width > wall_wedge_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and wf.height > wall_decor_max_size.y:
+			if wall_wedge_decor_max_size.y > 0.0 and wf.height > wall_wedge_decor_max_size.y:
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			wedge_counts[widx] += 1
@@ -2669,11 +2671,11 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
-			if wf2.center.y < wall_decor_min_world_y:
+			if wf2.center.y < wall_wedge_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and wf2.width > wall_decor_max_size.x:
+			if wall_wedge_decor_max_size.x > 0.0 and wf2.width > wall_wedge_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and wf2.height > wall_decor_max_size.y:
+			if wall_wedge_decor_max_size.y > 0.0 and wf2.height > wall_wedge_decor_max_size.y:
 				continue
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
