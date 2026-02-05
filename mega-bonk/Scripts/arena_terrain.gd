@@ -2460,7 +2460,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var h1: float = (e1_hi - e1_lo).length()
 	var min_h: float = minf(h0, h1)
 
-	if absf(h0 - h1) < 0.0001 or min_h < 0.0001:
+	if absf(h0 - h1) < 0.0001:
 		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
 
 	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
