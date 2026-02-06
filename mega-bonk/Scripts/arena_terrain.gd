@@ -2271,6 +2271,23 @@ func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO)
 	var s4: float = _sample_surface_y_open(x, z - e)
 	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
+func _sample_top_surface_y_wide(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
+	# Wider neighborhood sample used for placement validation/guarding.
+	var d := Vector3(hint_dir.x, 0.0, hint_dir.z)
+	var e: float = _cell_size * 0.35
+	if d.length_squared() > 1e-8:
+		d = d.normalized()
+		var a: float = _sample_top_surface_y(x + d.x * e, z + d.z * e, d)
+		var b: float = _sample_top_surface_y(x - d.x * e, z - d.z * e, d)
+		return maxf(_sample_top_surface_y(x, z, d), maxf(a, b))
+
+	var s0: float = _sample_top_surface_y(x, z)
+	var s1: float = _sample_top_surface_y(x + e, z)
+	var s2: float = _sample_top_surface_y(x - e, z)
+	var s3: float = _sample_top_surface_y(x, z + e)
+	var s4: float = _sample_top_surface_y(x, z - e)
+	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
+
 func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
 	var to := from + dir * dist
 	var q := PhysicsRayQueryParameters3D.create(from, to)
@@ -2923,13 +2940,13 @@ func _rebuild_wall_decor() -> void:
 			var aabb: AABB = rect_aabb_by_variant[vsel]
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
 			var outward := _wall_place_outward(f2)
-			var origin := xf.origin
-			var sy_p: float = _sample_top_surface_y(origin.x, origin.z, outward)
+			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
+			var sy_p: float = _sample_top_surface_y_wide(f2.center.x, f2.center.z, outward)
 			var margin_p: float = wall_decor_surface_margin * _cell_size
-			var under_now: bool = (sy_p > -1e19) and (origin.y < sy_p - margin_p)
+			var under_now: bool = (sy_p > -1e19) and (top_y < sy_p - margin_p)
 			if under_now:
-				_wd("PLACED_UNDER fi=%d origin=%s sy=%.3f dy=%.3f face_center=%s n=%s outward=%s offset=%.3f" % [placement_fi, _fmt_v3(origin), sy_p, (sy_p - origin.y), _fmt_v3(f2.center), _fmt_v3(f2.normal), _fmt_v3(outward), wall_decor_offset])
-				# continue
+				_wd("SKIP PLACED_UNDER fi=%d top=%.3f sy=%.3f dy=%.3f center=%s n=%s" % [placement_fi, top_y, sy_p, (sy_p - top_y), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
+				continue
 
 			var wi: int = rect_write_i[vsel]
 			mmi2.multimesh.set_instance_transform(wi, xf)
