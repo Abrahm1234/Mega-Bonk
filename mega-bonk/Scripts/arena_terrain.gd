@@ -2884,6 +2884,12 @@ func _rebuild_wall_decor() -> void:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
+			if wall_decor_surface_only:
+				var wtop_y: float = maxf(maxf(wf.a.y, wf.b.y), maxf(wf.c.y, wf.d.y))
+				var wdir_h := Vector3(wf.normal.x, 0.0, wf.normal.z)
+				var wcov := _wall_face_covered_both_sides(wf.center, wtop_y, wdir_h)
+				if wcov["covered"]:
+					continue
 			if not _allow_wedge_decor_face(wf):
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
@@ -2993,6 +2999,14 @@ func _rebuild_wall_decor() -> void:
 		for wf2: WallFace in wedge_faces:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+					continue
+			if wall_decor_surface_only:
+				var wtop_y2: float = maxf(maxf(wf2.a.y, wf2.b.y), maxf(wf2.c.y, wf2.d.y))
+				var wdir_h2 := Vector3(wf2.normal.x, 0.0, wf2.normal.z)
+				var wcov2 := _wall_face_covered_both_sides(wf2.center, wtop_y2, wdir_h2)
+				if wcov2["covered"]:
+					if wall_decor_debug_dump_under_surface:
+						_wd("SKIP WEDGE_COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f center=%s n=%s" % [wtop_y2, float(wcov2["h_f"]), float(wcov2["h_b"]), _fmt_v3(wf2.center), _fmt_v3(wf2.normal)])
 					continue
 			if not _allow_wedge_decor_face(wf2):
 				continue
