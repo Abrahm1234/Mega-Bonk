@@ -125,6 +125,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_fix_open_side: bool = true
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
+@export var wall_decor_open_side_use_raycast: bool = true
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_debug_log: bool = false
 @export var wall_decor_debug_verbose: bool = false
@@ -2270,6 +2271,14 @@ func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO)
 	var s4: float = _sample_surface_y_open(x, z - e)
 	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
+func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
+	var to := from + dir * dist
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.hit_from_inside = true
+	q.hit_back_faces = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	return hit.is_empty()
+
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
 
@@ -2604,28 +2613,48 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 			# IMPORTANT: probe must cross into the neighboring column.
 			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
-
-			var sy_f := _sample_top_surface_y(center.x + dir.x * probe, center.z + dir.z * probe, dir)
-			var sy_b := _sample_top_surface_y(center.x - dir.x * probe, center.z - dir.z * probe, dir)
-			open_sy_f = sy_f
-			open_sy_b = sy_b
-
 			var chosen := "TIE"
-			# Open side tends to have LOWER surface height (or -INF out of bounds).
-			if sy_f < sy_b - 0.001:
-				n = dir
-				chosen = "FWD"
-			elif sy_b < sy_f - 0.001:
-				n = -dir
-				chosen = "BACK"
-			else:
-				# Tie-break: choose the direction that points away from map center in XZ.
-				var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
-				n = dir if away else -dir
-				chosen = "FWD" if away else "BACK"
 
-			if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-				_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
+			if wall_decor_open_side_use_raycast:
+				var eps: float = wall_decor_open_side_epsilon
+				var f_from := center + dir * eps
+				var b_from := center - dir * eps
+				var open_f := _is_open_air_ray(f_from, dir, probe)
+				var open_b := _is_open_air_ray(b_from, -dir, probe)
+				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b)])
+
+				if open_f and not open_b:
+					n = dir
+					chosen = "FWD"
+				elif open_b and not open_f:
+					n = -dir
+					chosen = "BACK"
+				else:
+					var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
+					n = dir if away else -dir
+					chosen = "FWD" if away else "BACK"
+			else:
+				var sy_f := _sample_top_surface_y(center.x + dir.x * probe, center.z + dir.z * probe, dir)
+				var sy_b := _sample_top_surface_y(center.x - dir.x * probe, center.z - dir.z * probe, dir)
+				open_sy_f = sy_f
+				open_sy_b = sy_b
+
+				# Open side tends to have LOWER surface height (or -INF out of bounds).
+				if sy_f < sy_b - 0.001:
+					n = dir
+					chosen = "FWD"
+				elif sy_b < sy_f - 0.001:
+					n = -dir
+					chosen = "BACK"
+				else:
+					# Tie-break: choose the direction that points away from map center in XZ.
+					var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
+					n = dir if away else -dir
+					chosen = "FWD" if away else "BACK"
+
+				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
 	# ---- END NEW ----
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
