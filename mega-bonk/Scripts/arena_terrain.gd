@@ -122,6 +122,10 @@ class_name ArenaBlockyTerrain
 @export var enable_wall_decor: bool = true
 @export var wall_decor_meshes: Array[Mesh] = []
 @export var wall_decor_offset: float = 0.03
+@export var wall_decor_fix_open_side: bool = true
+@export var wall_decor_debug_open_side: bool = false
+@export var wall_decor_open_side_epsilon: float = 0.05
+@export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
@@ -2499,24 +2503,37 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n = n.normalized()
 
 	var center := (aa + bb + cc + dd) * 0.25
-	var arena_center := _get_arena_center_approx()
-	var to_center := arena_center - center
-	to_center.y = 0.0
 
-	var n_flat := n
-	n_flat.y = 0.0
+	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
+	# Skip near-horizontal quads that can accidentally get captured as "walls".
+	if abs(n.y) > wall_decor_max_abs_normal_y:
+		return
 
-	if to_center.length_squared() > 1e-10:
-		var ref := to_center.normalized()
-		var test := n_flat.normalized() if n_flat.length_squared() > 1e-10 else n
-		if test.dot(ref) > 0.0:
+	if wall_decor_fix_open_side:
+		# Test direction in XZ so we don't decide "open side" based on Y tilt.
+		var test_dir := Vector3(n.x, 0.0, n.z)
+		if test_dir.length_squared() > 1e-8:
+			test_dir = test_dir.normalized()
+		else:
+			test_dir = n.normalized()
+
+		var test_pos := center + test_dir * wall_decor_open_side_epsilon
+
+		# If the test point is still "inside solid", flip winding/normal.
+		var surface_y := _sample_surface_y(test_pos.x, test_pos.z)
+		var is_solid := test_pos.y <= surface_y + 0.01
+		if is_solid:
 			var t := aa
 			aa = bb
 			bb = t
-			t = dd
-			dd = cc
-			cc = t
+			t = cc
+			cc = dd
+			dd = t
 			n = -n
+
+			if wall_decor_debug_open_side:
+				print("WallFace flipped to open side. center=", center, " normal=", n)
+	# ---- END NEW ----
 
 	var edge0 := dd - aa
 	var edge1 := cc - bb
@@ -2798,6 +2815,12 @@ func _allow_wedge_decor_face(face: WallFace) -> bool:
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = face.normal
+	# Wall decor should not move up/down because a wall face has slight Y in its normal.
+	var outward_flat := Vector3(outward.x, 0.0, outward.z)
+	if outward_flat.length_squared() > 1e-8:
+		outward = outward_flat.normalized()
+	else:
+		outward = outward.normalized()
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
