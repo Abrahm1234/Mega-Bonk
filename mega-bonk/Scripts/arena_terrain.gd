@@ -2528,7 +2528,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			dir = dir.normalized()
 
 			# IMPORTANT: probe must cross into the neighboring column.
-			var probe := max(wall_decor_open_side_epsilon, _cell_size * 0.55)
+			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
 
 			var sy_f := _sample_surface_y_open(center.x + dir.x * probe, center.z + dir.z * probe)
 			var sy_b := _sample_surface_y_open(center.x - dir.x * probe, center.z - dir.z * probe)
