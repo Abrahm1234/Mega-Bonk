@@ -2772,6 +2772,7 @@ func _rebuild_wall_decor() -> void:
 			wedge_write_i[wsel] = wwi + 1
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
+	# Note: wedge decor filtering must rely on wedge-specific settings only.
 	if _wall_face_min_world_y(face) < wall_wedge_decor_min_world_y:
 		return false
 	if wall_wedge_decor_max_size.x > 0.0 and face.width > wall_wedge_decor_max_size.x:
