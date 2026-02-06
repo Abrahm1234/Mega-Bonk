@@ -126,6 +126,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
 @export var wall_decor_open_side_use_raycast: bool = true
+@export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_debug_log: bool = false
 @export var wall_decor_debug_verbose: bool = false
@@ -2315,6 +2316,7 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
 	var to := from + dir * dist
 	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = wall_decor_open_side_raycast_mask
 	q.hit_from_inside = true
 	q.hit_back_faces = true
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -2670,7 +2672,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				var open_f := _is_open_air_ray(f_from, dir, probe)
 				var open_b := _is_open_air_ray(b_from, -dir, probe)
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b)])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask])
 
 				if open_f and not open_b:
 					n = dir
