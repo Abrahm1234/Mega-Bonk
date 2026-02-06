@@ -2489,6 +2489,9 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	if not (enable_wall_decor or enable_wall_wedge_decor):
 		return
 
+	_wd_face_i += 1
+	var fi: int = _wd_face_i
+
 	var pts: Array[Vector3] = [a, b, c, d]
 	pts.sort_custom(func(p: Vector3, q: Vector3) -> bool: return p.y < q.y)
 
@@ -2542,17 +2545,24 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n = n.normalized()
 
 	var center := (aa + bb + cc + dd) * 0.25
-	var surface_y_center := _sample_surface_y_open(center.x, center.z)
+	var top_y := _face_max_y(aa, bb, cc, dd)
+	var bot_y := _face_min_y(aa, bb, cc, dd)
+	var sy := _sample_surface_y_open(center.x, center.z)
+	var margin_y := wall_decor_surface_margin_cells * _cell_size
+	var below_surface := sy > -INF and top_y < sy - margin_y
+
+	if wall_decor_debug_verbose and (below_surface or (fi % maxi(1, wall_decor_debug_print_every) == 0)):
+		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f sy=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, sy, str(below_surface)])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
 	if abs(n.y) > wall_decor_max_abs_normal_y:
 		return
 
-	if wall_decor_surface_only and surface_y_center != -INF:
-		var margin: float = wall_decor_surface_margin_cells * _cell_size
-		if center.y < surface_y_center - margin:
-			return
+	if wall_decor_surface_only and below_surface:
+		if wall_decor_debug_dump_under_faces:
+			_wd("SKIP below-surface fi=%d center=%s top=%.3f sy=%.3f" % [fi, _fmt_v3(center), top_y, sy])
+		return
 
 	var open_sy_f: float = INF
 	var open_sy_b: float = INF
@@ -2582,20 +2592,16 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	# ---- END NEW ----
 
 	if wall_decor_debug_log:
-		_wd_face_i += 1
-		var min_y := _face_min_y(aa, bb, cc, dd)
-		var max_y := _face_max_y(aa, bb, cc, dd)
-		var under_surface := surface_y_center != -INF and max_y < surface_y_center - (wall_decor_surface_margin_cells * _cell_size)
-		var should_log := _wd_face_i % maxi(wall_decor_debug_print_every, 1) == 0
-		if wall_decor_debug_dump_under_faces and under_surface:
+		var should_log := fi % maxi(wall_decor_debug_print_every, 1) == 0
+		if wall_decor_debug_dump_under_faces and below_surface:
 			should_log = true
 		if should_log:
 			var msg := "center=%s normal=%s y=[%.3f..%.3f] surf=%.3f sy_f=%.3f sy_b=%.3f" % [
 				_fmt_v3(center),
 				_fmt_v3(n),
-				min_y,
-				max_y,
-				surface_y_center,
+				bot_y,
+				top_y,
+				sy,
 				open_sy_f,
 				open_sy_b
 			]
