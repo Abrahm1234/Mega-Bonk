@@ -226,6 +226,7 @@ const SURF_TOP := 0.0
 const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
+const _NEG_INF := -1.0e20
 
 class WallFace:
 	var a: Vector3
@@ -2287,6 +2288,30 @@ func _sample_top_surface_y_wide(x: float, z: float, hint_dir: Vector3 = Vector3.
 
 	return best
 
+func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
+	dir_h.y = 0.0
+	if dir_h.length() < 1e-6:
+		return {"covered": false, "h_f": _NEG_INF, "h_b": _NEG_INF, "cover_f": false, "cover_b": false}
+
+	dir_h = dir_h.normalized()
+
+	var probe: float = _cell_size * wall_decor_surface_probe_radius_cells
+	var margin_world: float = wall_decor_surface_margin
+
+	var h_f: float = _sample_top_surface_y_wide(center.x + dir_h.x * probe, center.z + dir_h.z * probe, dir_h)
+	var h_b: float = _sample_top_surface_y_wide(center.x - dir_h.x * probe, center.z - dir_h.z * probe, -dir_h)
+
+	var cover_f: bool = (h_f > _NEG_INF * 0.5) and (h_f > top_y + margin_world)
+	var cover_b: bool = (h_b > _NEG_INF * 0.5) and (h_b > top_y + margin_world)
+
+	return {
+		"covered": cover_f and cover_b,
+		"h_f": h_f, "h_b": h_b,
+		"cover_f": cover_f, "cover_b": cover_b,
+		"probe": probe,
+		"margin": margin_world
+	}
+
 func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
 	var to := from + dir * dist
 	var q := PhysicsRayQueryParameters3D.create(from, to)
@@ -2599,13 +2624,11 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
-	var sy: float = _sample_top_surface_y_wide(center.x, center.z, dir_h)
-	var margin: float = wall_decor_surface_margin
-	var has_surface: bool = sy > -1e19
-	var below_surface: bool = has_surface and (top_y < sy - margin)
+	var cov := _wall_face_covered_both_sides(center, top_y, dir_h)
+	var below_surface: bool = cov["covered"]
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f sy=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, sy, str(below_surface)])
+		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(below_surface)])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
@@ -2616,7 +2639,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	if wall_decor_surface_only and below_surface:
 		if wall_decor_debug_dump_under_surface:
-			_wd("SKIP fi=%d BELOW_SURFACE top=%.3f sy=%.3f margin=%.3f center=%s n=%s" % [fi, top_y, sy, margin, _fmt_v3(center), _fmt_v3(n)])
+			_wd("SKIP fi=%d COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [fi, top_y, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	var open_sy_f: float = INF
@@ -2687,12 +2710,13 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		if wall_decor_debug_dump_under_surface and below_surface:
 			should_log = true
 		if should_log:
-			var msg := "center=%s normal=%s y=[%.3f..%.3f] surf=%.3f sy_f=%.3f sy_b=%.3f" % [
+			var msg := "center=%s normal=%s y=[%.3f..%.3f] h_f=%.3f h_b=%.3f sy_f=%.3f sy_b=%.3f" % [
 				_fmt_v3(center),
 				_fmt_v3(n),
 				bot_y,
 				top_y,
-				sy,
+				float(cov["h_f"]),
+				float(cov["h_b"]),
 				open_sy_f,
 				open_sy_b
 			]
@@ -2946,11 +2970,10 @@ func _rebuild_wall_decor() -> void:
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
-			var sy_p: float = _sample_top_surface_y_wide(f2.center.x, f2.center.z, outward)
-			var margin_p: float = wall_decor_surface_margin
-			var under_now: bool = (sy_p > -1e19) and (top_y < sy_p - margin_p)
+			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
+			var under_now: bool = cov_p["covered"]
 			if under_now:
-				_wd("SKIP PLACED_UNDER fi=%d top=%.3f sy=%.3f dy=%.3f center=%s n=%s" % [placement_fi, top_y, sy_p, (sy_p - top_y), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
+				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
 
 			var wi: int = rect_write_i[vsel]
