@@ -2600,7 +2600,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
 	var sy: float = _sample_top_surface_y_wide(center.x, center.z, dir_h)
-	var margin: float = wall_decor_surface_margin * _cell_size
+	var margin: float = wall_decor_surface_margin
 	var has_surface: bool = sy > -1e19
 	var below_surface: bool = has_surface and (top_y < sy - margin)
 
@@ -2947,7 +2947,7 @@ func _rebuild_wall_decor() -> void:
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var sy_p: float = _sample_top_surface_y_wide(f2.center.x, f2.center.z, outward)
-			var margin_p: float = wall_decor_surface_margin * _cell_size
+			var margin_p: float = wall_decor_surface_margin
 			var under_now: bool = (sy_p > -1e19) and (top_y < sy_p - margin_p)
 			if under_now:
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f sy=%.3f dy=%.3f center=%s n=%s" % [placement_fi, top_y, sy_p, (sy_p - top_y), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
