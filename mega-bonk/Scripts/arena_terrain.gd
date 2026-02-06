@@ -3096,26 +3096,24 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = face.normal
+	# Use the same open-side/uncovered-side logic as rectangular wall decor.
+	var outward := _wall_place_outward(face)
 	outward.y = 0.0
-	if outward.length_squared() < 0.0001:
-		outward = Vector3.FORWARD
+	if outward.length_squared() < 1e-8:
+		outward = Vector3(face.normal.x, 0.0, face.normal.z)
+		if outward.length_squared() < 1e-8:
+			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
 	var y_dir := Vector3.UP
-	var x_dir := y_dir.cross(outward).normalized()
-	if x_dir.length_squared() < 0.0001:
+
+	var left_avg: float = (face.a.y + face.d.y) * 0.5
+	var right_avg: float = (face.b.y + face.c.y) * 0.5
+	var slope_up_toward_right: bool = right_avg > left_avg
+	var x_dir := (outward.cross(y_dir) if slope_up_toward_right else y_dir.cross(outward)).normalized()
+	if x_dir.length_squared() < 1e-8:
 		x_dir = Vector3.RIGHT
-
-	var u_dir := (face.b - face.a)
-	u_dir.y = 0.0
-	if u_dir.length_squared() > 0.0001 and x_dir.dot(u_dir.normalized()) < 0.0:
-		x_dir = -x_dir
-
-	var z_dir := x_dir.cross(y_dir).normalized()
-	if z_dir.dot(outward) < 0.0:
-		z_dir = -z_dir
-		x_dir = -x_dir
+	var z_dir := outward
 
 	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
 
@@ -3123,12 +3121,6 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	if wall_wedge_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
-
-	var left_avg: float = (face.a.y + face.d.y) * 0.5
-	var right_avg: float = (face.b.y + face.c.y) * 0.5
-	var slope_up_toward_right: bool = right_avg > left_avg
-	if not slope_up_toward_right:
-		rot = Basis(-rot.x, rot.y, rot.z)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
