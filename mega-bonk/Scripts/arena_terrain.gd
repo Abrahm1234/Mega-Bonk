@@ -2631,10 +2631,12 @@ func _rebuild_wall_decor() -> void:
 		if face.is_trapezoid:
 			trap_count += 1
 			var parts := _split_trapezoid_wall_face_for_decor(face)
-			if not wall_decor_skip_trapezoids:
-				rect_faces.append(parts[0])
-			if not wall_wedge_decor_skip_trapezoids and parts[1].height > 0.0005:
-				wedge_faces.append(parts[1])
+			var rect: WallFace = parts[0]
+			var wedge: WallFace = parts[1]
+			if rect != null and not wall_decor_skip_trapezoids:
+				rect_faces.append(rect)
+			if wedge != null and not wall_wedge_decor_skip_trapezoids and wedge.height > 0.0005:
+				wedge_faces.append(wedge)
 		else:
 			rect_faces.append(face)
 	print(
