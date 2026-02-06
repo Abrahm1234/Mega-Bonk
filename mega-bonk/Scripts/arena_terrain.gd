@@ -2580,16 +2580,26 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			open_sy_f = sy_f
 			open_sy_b = sy_b
 
+			var chosen := "TIE"
 			# Open side tends to have LOWER surface height (or -INF out of bounds).
 			if sy_f < sy_b - 0.001:
 				n = dir
+				chosen = "FWD"
 			elif sy_b < sy_f - 0.001:
 				n = -dir
+				chosen = "BACK"
 			else:
 				# Tie-break: choose the direction that points away from map center in XZ.
 				var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
 				n = dir if away else -dir
+				chosen = "FWD" if away else "BACK"
+
+			if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+				_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
 	# ---- END NEW ----
+
+	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+		_wd("OUT fi=%d outward_final=%s offset=%.3f" % [fi, _fmt_v3(n), wall_decor_offset])
 
 	if wall_decor_debug_log:
 		var should_log := fi % maxi(wall_decor_debug_print_every, 1) == 0
