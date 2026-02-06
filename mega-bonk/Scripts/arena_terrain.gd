@@ -2313,13 +2313,15 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 		"margin": margin_world
 	}
 
-func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
-	var to := from + dir * dist
+func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
+	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collide_with_bodies = true
+	q.collide_with_areas = false
 	q.collision_mask = wall_decor_open_side_raycast_mask
 	q.hit_from_inside = true
 	q.hit_back_faces = true
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := space.intersect_ray(q)
 	return hit.is_empty()
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
@@ -2669,8 +2671,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				var eps: float = wall_decor_open_side_epsilon
 				var f_from := center + dir * eps
 				var b_from := center - dir * eps
-				var open_f := _is_open_air_ray(f_from, dir, probe)
-				var open_b := _is_open_air_ray(b_from, -dir, probe)
+				var open_f := _is_open_air_ray(f_from, f_from + dir * probe)
+				var open_b := _is_open_air_ray(b_from, b_from - dir * probe)
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask])
 
