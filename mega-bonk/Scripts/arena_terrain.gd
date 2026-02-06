@@ -2653,8 +2653,17 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			# IMPORTANT: probe must cross into the neighboring column.
 			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
 			var chosen := "TIE"
+			var cover_f: bool = bool(cov["cover_f"])
+			var cover_b: bool = bool(cov["cover_b"])
 
-			if wall_decor_open_side_use_raycast:
+			# Prefer uncovered side when only one side is covered.
+			if cover_f and not cover_b:
+				n = -dir
+				chosen = "BACK"
+			elif cover_b and not cover_f:
+				n = dir
+				chosen = "FWD"
+			elif wall_decor_open_side_use_raycast:
 				var eps: float = wall_decor_open_side_epsilon
 				var f_from := center + dir * eps
 				var b_from := center - dir * eps
@@ -3016,7 +3025,16 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
 	if wall_decor_fix_open_side:
-		outward = _pick_open_side_outward(face)
+		var top_y: float = maxf(maxf(face.a.y, face.b.y), maxf(face.c.y, face.d.y))
+		var cov := _wall_face_covered_both_sides(face.center, top_y, outward)
+		var cover_f: bool = bool(cov["cover_f"])
+		var cover_b: bool = bool(cov["cover_b"])
+		if cover_f and not cover_b:
+			outward = -outward
+		elif cover_b and not cover_f:
+			outward = outward
+		else:
+			outward = _pick_open_side_outward(face)
 	return outward
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
