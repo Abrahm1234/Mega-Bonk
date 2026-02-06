@@ -130,9 +130,9 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_verbose: bool = false
 @export var wall_decor_debug_max_logs: int = 300
 @export var wall_decor_debug_print_every: int = 50
-@export var wall_decor_debug_dump_under_faces: bool = true
+@export var wall_decor_debug_dump_under_surface: bool = true
 @export var wall_decor_surface_only: bool = false
-@export var wall_decor_surface_margin_cells: float = 0.10
+@export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
@@ -2565,23 +2565,33 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n = n.normalized()
 
 	var center := (aa + bb + cc + dd) * 0.25
-	var top_y := _face_max_y(aa, bb, cc, dd)
-	var bot_y := _face_min_y(aa, bb, cc, dd)
-	var sy := _sample_top_surface_y(center.x, center.z, n)
-	var margin_y := wall_decor_surface_margin_cells * _cell_size
-	var below_surface := sy > -INF and top_y < sy - margin_y
+	var dir_h := Vector3(n.x, 0.0, n.z)
+	if dir_h.length_squared() < 1e-8:
+		if wall_decor_debug_verbose:
+			_wd("SKIP fi=%d DEGENERATE_DIR center=%s n=%s" % [fi, _fmt_v3(center), _fmt_v3(n)])
+		return
+	dir_h = dir_h.normalized()
 
-	if wall_decor_debug_verbose and (below_surface or (fi % maxi(1, wall_decor_debug_print_every) == 0)):
+	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
+	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
+	var sy: float = _sample_top_surface_y(center.x, center.z, dir_h)
+	var margin: float = wall_decor_surface_margin * _cell_size
+	var has_surface: bool = sy > -1e19
+	var below_surface: bool = has_surface and (top_y < sy - margin)
+
+	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f sy=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, sy, str(below_surface)])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
 	if abs(n.y) > wall_decor_max_abs_normal_y:
+		if wall_decor_debug_verbose:
+			_wd("SKIP fi=%d NEAR_HORIZONTAL n=%s" % [fi, _fmt_v3(n)])
 		return
 
 	if wall_decor_surface_only and below_surface:
-		if wall_decor_debug_dump_under_faces:
-			_wd("SKIP below-surface fi=%d center=%s top=%.3f sy=%.3f" % [fi, _fmt_v3(center), top_y, sy])
+		if wall_decor_debug_dump_under_surface:
+			_wd("SKIP fi=%d BELOW_SURFACE top=%.3f sy=%.3f margin=%.3f center=%s n=%s" % [fi, top_y, sy, margin, _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	var open_sy_f: float = INF
@@ -2623,7 +2633,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	if wall_decor_debug_log:
 		var should_log := fi % maxi(wall_decor_debug_print_every, 1) == 0
-		if wall_decor_debug_dump_under_faces and below_surface:
+		if wall_decor_debug_dump_under_surface and below_surface:
 			should_log = true
 		if should_log:
 			var msg := "center=%s normal=%s y=[%.3f..%.3f] surf=%.3f sy_f=%.3f sy_b=%.3f" % [
