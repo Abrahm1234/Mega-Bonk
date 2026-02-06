@@ -2874,7 +2874,9 @@ func _rebuild_wall_decor() -> void:
 		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
 
 	if has_rect_decor:
+		var placement_fi: int = 0
 		for f2: WallFace in rect_faces:
+			placement_fi += 1
 			if wall_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(f2) <= tunnel_occluder_y + wall_decor_occluder_epsilon:
 					continue
@@ -2891,6 +2893,14 @@ func _rebuild_wall_decor() -> void:
 
 			var aabb: AABB = rect_aabb_by_variant[vsel]
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+			var outward := _wall_place_outward(f2)
+			var origin := xf.origin
+			var sy_p: float = _sample_top_surface_y(origin.x, origin.z, outward)
+			var margin_p: float = wall_decor_surface_margin * _cell_size
+			var under_now: bool = (sy_p > -1e19) and (origin.y < sy_p - margin_p)
+			if under_now:
+				_wd("PLACED_UNDER fi=%d origin=%s sy=%.3f dy=%.3f face_center=%s n=%s outward=%s offset=%.3f" % [placement_fi, _fmt_v3(origin), sy_p, (sy_p - origin.y), _fmt_v3(f2.center), _fmt_v3(f2.normal), _fmt_v3(outward), wall_decor_offset])
+				# continue
 
 			var wi: int = rect_write_i[vsel]
 			mmi2.multimesh.set_instance_transform(wi, xf)
@@ -2925,7 +2935,7 @@ func _allow_wedge_decor_face(face: WallFace) -> bool:
 		return false
 	return true
 
-func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
+func _wall_place_outward(face: WallFace) -> Vector3:
 	var outward: Vector3 = face.normal
 	outward.y = 0.0
 	if outward.length_squared() < 1e-8:
@@ -2933,6 +2943,10 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	outward = outward.normalized()
 	if wall_decor_fix_open_side:
 		outward = _pick_open_side_outward(face)
+	return outward
+
+func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
+	var outward: Vector3 = _wall_place_outward(face)
 
 	var place_dir := outward
 	var fwd_dir := place_dir
