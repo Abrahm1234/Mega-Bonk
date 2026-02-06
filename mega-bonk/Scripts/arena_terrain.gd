@@ -2203,10 +2203,12 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	var n: int = max(2, cells_per_side)
 	var fx: float = (world_x - _ox) / _cell_size
 	var fz: float = (world_z - _oz) / _cell_size
-	var ix: int = clampi(int(floor(fx)), 0, n - 1)
-	var iz: int = clampi(int(floor(fz)), 0, n - 1)
-	var tx: float = clampf(fx - float(ix), 0.0, 1.0)
-	var tz: float = clampf(fz - float(iz), 0.0, 1.0)
+	if fx < 0.0 or fx > float(n - 1) or fz < 0.0 or fz > float(n - 1):
+		return -INF
+	var ix: int = clampi(int(floor(fx)), 0, n - 2)
+	var iz: int = clampi(int(floor(fz)), 0, n - 2)
+	var tx: float = fx - float(ix)
+	var tz: float = fz - float(iz)
 
 	var corners: Vector4 = _cell_corners(ix, iz)
 	var y0: float = lerpf(corners.x, corners.y, tx)
@@ -2387,29 +2389,31 @@ func _safe_dim(x: float) -> float:
 func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var n: Vector3 = face.normal
 	n.y = 0.0
-	if n.length_squared() < 0.0001:
-		n = Vector3.RIGHT
+	if n.length_squared() < 1e-8:
+		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: Vector3 = face.center
-	probe.y += 0.02
-
-	var eps_side: float = max(0.25, _cell_size * 0.05)
-	var option_a: Vector3 = n
-	var option_b: Vector3 = -n
-	var p_plus: Vector3 = probe + option_a * eps_side
-	var p_minus: Vector3 = probe + option_b * eps_side
+	var probe: float = max(0.25, _cell_size * 0.55)
+	var p_plus: Vector3 = face.center + n * probe
+	var p_minus: Vector3 = face.center - n * probe
 	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
 	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
 
-	if h_plus < h_minus:
-		return option_a
-	if h_minus < h_plus:
-		return option_b
-	var to_face := Vector3(probe.x, 0.0, probe.z)
-	if to_face.length() > 0.00001:
-		return option_a if option_a.dot(to_face) >= option_b.dot(to_face) else option_b
-	return option_a
+	if h_plus == -INF and h_minus != -INF:
+		return n
+	if h_minus == -INF and h_plus != -INF:
+		return -n
+
+	if abs(h_plus - h_minus) < 0.001:
+		var side: float = float(max(2, cells_per_side) - 1) * _cell_size
+		var map_center := Vector3(_ox + side * 0.5, face.center.y, _oz + side * 0.5)
+		var to_center := map_center - face.center
+		to_center.y = 0.0
+		if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
+			return -n
+		return n
+
+	return n if h_plus < h_minus else -n
 
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
 	var n: Vector3 = (b - a).cross(d - a)
@@ -2815,12 +2819,12 @@ func _allow_wedge_decor_face(face: WallFace) -> bool:
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
 	var outward: Vector3 = face.normal
-	# Wall decor should not move up/down because a wall face has slight Y in its normal.
-	var outward_flat := Vector3(outward.x, 0.0, outward.z)
-	if outward_flat.length_squared() > 1e-8:
-		outward = outward_flat.normalized()
-	else:
-		outward = outward.normalized()
+	outward.y = 0.0
+	if outward.length_squared() < 1e-8:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	if wall_decor_fix_open_side:
+		outward = _pick_open_side_outward(face)
 	var rot: Basis = _basis_from_outward(outward)
 
 	var attach_far: bool = wall_decor_flip_outward
