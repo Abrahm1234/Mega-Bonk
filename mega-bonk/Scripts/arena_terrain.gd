@@ -126,6 +126,13 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
+@export var wall_decor_debug_log: bool = false
+@export var wall_decor_debug_verbose: bool = false
+@export var wall_decor_debug_max_logs: int = 300
+@export var wall_decor_debug_print_every: int = 50
+@export var wall_decor_debug_dump_under_faces: bool = true
+@export var wall_decor_surface_only: bool = false
+@export var wall_decor_surface_margin_cells: float = 0.10
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
@@ -186,6 +193,26 @@ var _tunnel_floor_resolved: float = 0.0
 var _tunnel_ceil_resolved: float = 0.0
 var _tunnel_base_floor_y: float = 0.0
 var _tunnel_base_ceil_y: float = 0.0
+
+var _wd_logs: int = 0
+var _wd_face_i: int = 0
+
+func _wd(msg: String) -> void:
+	if not wall_decor_debug_log:
+		return
+	if _wd_logs >= wall_decor_debug_max_logs:
+		return
+	_wd_logs += 1
+	print("[WALL_DECOR] ", msg)
+
+func _fmt_v3(v: Vector3) -> String:
+	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
+
+func _face_min_y(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> float:
+	return minf(minf(a.y, b.y), minf(c.y, d.y))
+
+func _face_max_y(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> float:
+	return maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 
 const RAMP_NONE := -1
 const RAMP_EAST := 0
@@ -2515,12 +2542,20 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	n = n.normalized()
 
 	var center := (aa + bb + cc + dd) * 0.25
+	var surface_y_center := _sample_surface_y_open(center.x, center.z)
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
 	if abs(n.y) > wall_decor_max_abs_normal_y:
 		return
 
+	if wall_decor_surface_only and surface_y_center != -INF:
+		var margin: float = wall_decor_surface_margin_cells * _cell_size
+		if center.y < surface_y_center - margin:
+			return
+
+	var open_sy_f: float = INF
+	var open_sy_b: float = INF
 	if wall_decor_fix_open_side:
 		# Open-side direction for decor placement (robust for large cell sizes).
 		var dir := Vector3(n.x, 0.0, n.z)
@@ -2532,6 +2567,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 			var sy_f := _sample_surface_y_open(center.x + dir.x * probe, center.z + dir.z * probe)
 			var sy_b := _sample_surface_y_open(center.x - dir.x * probe, center.z - dir.z * probe)
+			open_sy_f = sy_f
+			open_sy_b = sy_b
 
 			# Open side tends to have LOWER surface height (or -INF out of bounds).
 			if sy_f < sy_b - 0.001:
@@ -2543,6 +2580,26 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
 				n = dir if away else -dir
 	# ---- END NEW ----
+
+	if wall_decor_debug_log:
+		_wd_face_i += 1
+		var min_y := _face_min_y(aa, bb, cc, dd)
+		var max_y := _face_max_y(aa, bb, cc, dd)
+		var under_surface := surface_y_center != -INF and max_y < surface_y_center - (wall_decor_surface_margin_cells * _cell_size)
+		var should_log := _wd_face_i % maxi(wall_decor_debug_print_every, 1) == 0
+		if wall_decor_debug_dump_under_faces and under_surface:
+			should_log = true
+		if should_log:
+			var msg := "center=%s normal=%s y=[%.3f..%.3f] surf=%.3f sy_f=%.3f sy_b=%.3f" % [
+				_fmt_v3(center),
+				_fmt_v3(n),
+				min_y,
+				max_y,
+				surface_y_center,
+				open_sy_f,
+				open_sy_b
+			]
+			_wd(msg)
 
 	var edge0 := dd - aa
 	var edge1 := cc - bb
