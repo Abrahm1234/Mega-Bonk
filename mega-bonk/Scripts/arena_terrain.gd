@@ -2250,6 +2250,10 @@ func _sample_surface_y_open(x: float, z: float) -> float:
 		return -INF
 	return _sample_surface_y(x, z)
 
+func _sample_top_surface_y(x: float, z: float) -> float:
+	# Hook for future robust cell-adjacent/topology-aware surface sampling.
+	return _sample_surface_y_open(x, z)
+
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
 
@@ -2547,7 +2551,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var center := (aa + bb + cc + dd) * 0.25
 	var top_y := _face_max_y(aa, bb, cc, dd)
 	var bot_y := _face_min_y(aa, bb, cc, dd)
-	var sy := _sample_surface_y_open(center.x, center.z)
+	var sy := _sample_top_surface_y(center.x, center.z)
 	var margin_y := wall_decor_surface_margin_cells * _cell_size
 	var below_surface := sy > -INF and top_y < sy - margin_y
 
@@ -2575,8 +2579,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			# IMPORTANT: probe must cross into the neighboring column.
 			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
 
-			var sy_f := _sample_surface_y_open(center.x + dir.x * probe, center.z + dir.z * probe)
-			var sy_b := _sample_surface_y_open(center.x - dir.x * probe, center.z - dir.z * probe)
+			var sy_f := _sample_top_surface_y(center.x + dir.x * probe, center.z + dir.z * probe)
+			var sy_b := _sample_top_surface_y(center.x - dir.x * probe, center.z - dir.z * probe)
 			open_sy_f = sy_f
 			open_sy_b = sy_b
 
