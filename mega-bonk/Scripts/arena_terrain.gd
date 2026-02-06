@@ -2644,13 +2644,12 @@ func _rebuild_wall_decor() -> void:
 		else:
 			rect_faces.append(face)
 	print(
-		"wall_decor_meshes:", wall_decor_meshes.size(),
-		" wall_wedge_decor_meshes:", wall_wedge_decor_meshes.size(),
-		" wall_faces:", _wall_faces.size(),
+		"wall_faces:", _wall_faces.size(),
 		" trapezoids:", trap_count,
-		" skip_trap:", wall_decor_skip_trapezoids,
-		" skip_wedge_trap:", wall_wedge_decor_skip_trapezoids,
-		" max_size:", wall_decor_max_size
+		" rect_faces:", rect_faces.size(),
+		" wedge_faces:", wedge_faces.size(),
+		" wall_skip_trap:", wall_decor_skip_trapezoids,
+		" wedge_skip_trap:", wall_wedge_decor_skip_trapezoids
 	)
 
 	if has_rect_decor:
