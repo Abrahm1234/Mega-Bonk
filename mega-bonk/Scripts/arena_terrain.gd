@@ -125,7 +125,11 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
+@export var wall_decor_skip_occluder_caps: bool = true
+@export var wall_decor_occluder_epsilon: float = 0.05
 @export var wall_wedge_decor_skip_trapezoids: bool = false
+@export var wall_wedge_decor_skip_occluder_caps: bool = true
+@export var wall_wedge_decor_occluder_epsilon: float = 0.05
 @export var wall_decor_fit_to_face: bool = true
 @export var wall_decor_max_scale: float = 3.0
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
@@ -2651,6 +2655,9 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f: WallFace in rect_faces:
+			if wall_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(f) <= tunnel_occluder_y + wall_decor_occluder_epsilon:
+					continue
 			if _wall_face_min_world_y(f) < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
@@ -2662,6 +2669,9 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
+			if wall_wedge_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+					continue
 			if not _allow_wedge_decor_face(wf):
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
@@ -2737,6 +2747,9 @@ func _rebuild_wall_decor() -> void:
 
 	if has_rect_decor:
 		for f2: WallFace in rect_faces:
+			if wall_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(f2) <= tunnel_occluder_y + wall_decor_occluder_epsilon:
+					continue
 			if _wall_face_min_world_y(f2) < wall_decor_min_world_y:
 				continue
 			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
@@ -2757,6 +2770,9 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf2: WallFace in wedge_faces:
+			if wall_wedge_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+					continue
 			if not _allow_wedge_decor_face(wf2):
 				continue
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
