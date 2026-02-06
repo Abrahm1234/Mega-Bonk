@@ -2250,9 +2250,25 @@ func _sample_surface_y_open(x: float, z: float) -> float:
 		return -INF
 	return _sample_surface_y(x, z)
 
-func _sample_top_surface_y(x: float, z: float) -> float:
-	# Hook for future robust cell-adjacent/topology-aware surface sampling.
-	return _sample_surface_y_open(x, z)
+func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
+	# We want the TOPMOST surface at (x,z). Wall centers often lie on cell boundaries,
+	# so sample both sides and take the max to avoid picking the lower neighbor.
+	var e: float = _cell_size * 0.02
+
+	var d := Vector3(hint_dir.x, 0.0, hint_dir.z)
+	if d.length_squared() > 1e-8:
+		d = d.normalized()
+		var a: float = _sample_surface_y_open(x + d.x * e, z + d.z * e)
+		var b: float = _sample_surface_y_open(x - d.x * e, z - d.z * e)
+		return maxf(a, b)
+
+	# Fallback: small cross pattern and take max.
+	var s0: float = _sample_surface_y_open(x, z)
+	var s1: float = _sample_surface_y_open(x + e, z)
+	var s2: float = _sample_surface_y_open(x - e, z)
+	var s3: float = _sample_surface_y_open(x, z + e)
+	var s4: float = _sample_surface_y_open(x, z - e)
+	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
@@ -2551,7 +2567,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var center := (aa + bb + cc + dd) * 0.25
 	var top_y := _face_max_y(aa, bb, cc, dd)
 	var bot_y := _face_min_y(aa, bb, cc, dd)
-	var sy := _sample_top_surface_y(center.x, center.z)
+	var sy := _sample_top_surface_y(center.x, center.z, n)
 	var margin_y := wall_decor_surface_margin_cells * _cell_size
 	var below_surface := sy > -INF and top_y < sy - margin_y
 
@@ -2579,8 +2595,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			# IMPORTANT: probe must cross into the neighboring column.
 			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
 
-			var sy_f := _sample_top_surface_y(center.x + dir.x * probe, center.z + dir.z * probe)
-			var sy_b := _sample_top_surface_y(center.x - dir.x * probe, center.z - dir.z * probe)
+			var sy_f := _sample_top_surface_y(center.x + dir.x * probe, center.z + dir.z * probe, dir)
+			var sy_b := _sample_top_surface_y(center.x - dir.x * probe, center.z - dir.z * probe, dir)
 			open_sy_f = sy_f
 			open_sy_b = sy_b
 
