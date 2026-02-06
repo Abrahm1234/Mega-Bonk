@@ -2830,7 +2830,13 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	outward = outward.normalized()
 	if wall_decor_fix_open_side:
 		outward = _pick_open_side_outward(face)
-	var rot: Basis = _basis_from_outward(outward)
+
+	var place_dir := outward
+	var fwd_dir := place_dir
+	if wall_decor_flip_facing:
+		fwd_dir = -fwd_dir
+
+	var rot: Basis = _basis_from_outward(fwd_dir)
 
 	var attach_far: bool = wall_decor_flip_outward
 	if wall_decor_flip_facing:
@@ -2858,7 +2864,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
-	var target_world: Vector3 = face.center + outward * outward_offset
+	var target_world: Vector3 = face.center + place_dir * outward_offset
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
