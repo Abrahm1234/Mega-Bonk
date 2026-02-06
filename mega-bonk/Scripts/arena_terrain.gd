@@ -2890,7 +2890,8 @@ func _rebuild_wall_decor() -> void:
 					continue
 			if wall_decor_surface_only:
 				var wtop_y: float = maxf(maxf(wf.a.y, wf.b.y), maxf(wf.c.y, wf.d.y))
-				var wdir_h := Vector3(wf.normal.x, 0.0, wf.normal.z)
+				var wdir_h := _wall_place_outward(wf)
+				wdir_h.y = 0.0
 				var wcov := _wall_face_covered_both_sides(wf.center, wtop_y, wdir_h)
 				if wcov["covered"]:
 					continue
@@ -3006,7 +3007,8 @@ func _rebuild_wall_decor() -> void:
 					continue
 			if wall_decor_surface_only:
 				var wtop_y2: float = maxf(maxf(wf2.a.y, wf2.b.y), maxf(wf2.c.y, wf2.d.y))
-				var wdir_h2 := Vector3(wf2.normal.x, 0.0, wf2.normal.z)
+				var wdir_h2 := _wall_place_outward(wf2)
+				wdir_h2.y = 0.0
 				var wcov2 := _wall_face_covered_both_sides(wf2.center, wtop_y2, wdir_h2)
 				if wcov2["covered"]:
 					if wall_decor_debug_dump_under_surface:
