@@ -134,6 +134,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_dump_under_surface: bool = true
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
+@export var wall_decor_surface_probe_radius_cells: float = 0.55
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
@@ -2272,21 +2273,19 @@ func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO)
 	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
 func _sample_top_surface_y_wide(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
-	# Wider neighborhood sample used for placement validation/guarding.
-	var d := Vector3(hint_dir.x, 0.0, hint_dir.z)
-	var e: float = _cell_size * 0.35
-	if d.length_squared() > 1e-8:
-		d = d.normalized()
-		var a: float = _sample_top_surface_y(x + d.x * e, z + d.z * e, d)
-		var b: float = _sample_top_surface_y(x - d.x * e, z - d.z * e, d)
-		return maxf(_sample_top_surface_y(x, z, d), maxf(a, b))
+	var r: float = wall_decor_surface_probe_radius_cells * _cell_size
+	var best: float = _sample_top_surface_y(x, z, hint_dir)
 
-	var s0: float = _sample_top_surface_y(x, z)
-	var s1: float = _sample_top_surface_y(x + e, z)
-	var s2: float = _sample_top_surface_y(x - e, z)
-	var s3: float = _sample_top_surface_y(x, z + e)
-	var s4: float = _sample_top_surface_y(x, z - e)
-	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
+	var dirs: Array[Vector3] = [
+		Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
+		Vector3(1, 0, 1).normalized(), Vector3(1, 0, -1).normalized(),
+		Vector3(-1, 0, 1).normalized(), Vector3(-1, 0, -1).normalized()
+	]
+
+	for d: Vector3 in dirs:
+		best = maxf(best, _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir))
+
+	return best
 
 func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
 	var to := from + dir * dist
@@ -2600,7 +2599,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
-	var sy: float = _sample_top_surface_y(center.x, center.z, dir_h)
+	var sy: float = _sample_top_surface_y_wide(center.x, center.z, dir_h)
 	var margin: float = wall_decor_surface_margin * _cell_size
 	var has_surface: bool = sy > -1e19
 	var below_surface: bool = has_surface and (top_y < sy - margin)
