@@ -2511,27 +2511,40 @@ func _safe_dim(x: float) -> float:
 	return maxf(0.0001, absf(x))
 
 func _pick_open_side_outward(face: WallFace) -> Vector3:
-	var n: Vector3 = face.normal
+	var n := face.normal
 	n.y = 0.0
 	if n.length_squared() < 1e-8:
 		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: float = max(0.25, _cell_size * 0.55)
-	var p_plus: Vector3 = face.center + n * probe
-	var p_minus: Vector3 = face.center - n * probe
-	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
-	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
+	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
+	var center := face.center
 
+	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
+	if wall_decor_open_side_use_raycast:
+		var eps := 0.05
+		var open_f := _is_open_air_ray(center + n * eps, center + n * probe)
+		var open_b := _is_open_air_ray(center - n * eps, center - n * probe)
+		if open_f != open_b:
+			return n if open_f else -n
+
+	# Height fallback (use MIN-sampled top surface on each side)
+	var p_plus := center + n * probe
+	var p_minus := center - n * probe
+	var h_plus := _sample_top_surface_y_wide(p_plus.x, p_plus.z, n, true)
+	var h_minus := _sample_top_surface_y_wide(p_minus.x, p_minus.z, -n, true)
+
+	# If one side has no surface at all, treat it as open
 	if h_plus == -INF and h_minus != -INF:
 		return n
 	if h_minus == -INF and h_plus != -INF:
 		return -n
 
-	if abs(h_plus - h_minus) < 0.001:
+	# If essentially equal, prefer pointing away from arena center (stable tie-break)
+	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
 		var side: float = float(max(2, cells_per_side) - 1) * _cell_size
-		var map_center := Vector3(_ox + side * 0.5, face.center.y, _oz + side * 0.5)
-		var to_center := map_center - face.center
+		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
+		var to_center := map_center - center
 		to_center.y = 0.0
 		if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
 			return -n
