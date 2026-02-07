@@ -133,6 +133,8 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_max_logs: int = 300
 @export var wall_decor_debug_print_every: int = 50
 @export var wall_decor_debug_dump_under_surface: bool = true
+@export var wall_decor_debug_focus_fi: int = -1
+@export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
@@ -208,6 +210,11 @@ func _wd(msg: String) -> void:
 		return
 	_wd_logs += 1
 	print("[WALL_DECOR] ", msg)
+
+func _wd_fi(fi: int, msg: String) -> void:
+	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
+		return
+	_wd(msg)
 
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
