@@ -2314,8 +2314,8 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 	var probe: float = _cell_size * wall_decor_surface_probe_radius_cells
 	var margin_world: float = wall_decor_surface_margin
 
-	var h_f: float = _sample_top_surface_y_wide(center.x + dir_h.x * probe, center.z + dir_h.z * probe, dir_h)
-	var h_b: float = _sample_top_surface_y_wide(center.x - dir_h.x * probe, center.z - dir_h.z * probe, -dir_h)
+	var h_f: float = _sample_top_surface_y_wide(center.x + dir_h.x * probe, center.z + dir_h.z * probe, dir_h, true)
+	var h_b: float = _sample_top_surface_y_wide(center.x - dir_h.x * probe, center.z - dir_h.z * probe, -dir_h, true)
 
 	var cover_f: bool = (h_f > _NEG_INF * 0.5) and (h_f > top_y + margin_world)
 	var cover_b: bool = (h_b > _NEG_INF * 0.5) and (h_b > top_y + margin_world)
