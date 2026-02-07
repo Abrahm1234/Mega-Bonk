@@ -2322,6 +2322,11 @@ func _sample_top_surface_y_wide(
 
 	return agg
 
+func _wd_surface_only_ceiling_y_at(p: Vector3) -> float:
+	# Use max aggregation so any nearby top surface counts as overhead terrain.
+	return _sample_top_surface_y_wide(p.x, p.z, Vector3.ZERO, false)
+
+
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
 	var dir := dir_h
 	dir.y = 0.0
@@ -2685,21 +2690,18 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
 	var cov := _wall_face_covered_both_sides(center, top_y, dir_h)
-	var below_surface: bool = cov["covered"]
+	var below_surface: bool = false
+	var h_side: float = _NEG_INF
+	var p_side: Vector3 = Vector3.ZERO
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(below_surface)])
+		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below_both=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(bool(cov["covered"]))])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
 	if abs(n.y) > wall_decor_max_abs_normal_y:
 		if wall_decor_debug_verbose:
 			_wd("SKIP fi=%d NEAR_HORIZONTAL n=%s" % [fi, _fmt_v3(n)])
-		return
-
-	if wall_decor_surface_only and below_surface:
-		if wall_decor_debug_dump_under_surface:
-			_wd("SKIP fi=%d COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [fi, top_y, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	var open_sy_f: float = INF
@@ -2775,6 +2777,22 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
 	# ---- END NEW ----
+
+	if wall_decor_surface_only:
+		var eps := maxf(wall_decor_open_side_epsilon + 0.001, wall_decor_offset)
+		p_side = center + n * eps
+		h_side = _wd_surface_only_ceiling_y_at(p_side)
+
+		# Terrain above the placement-side column means the face is under a ceiling/overhang.
+		below_surface = h_side > top_y + wall_decor_surface_margin
+
+		if wall_decor_debug_cov_details:
+			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%.3f margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, h_side, wall_decor_surface_margin, str(below_surface), _fmt_v3(p_side), _fmt_v3(n)])
+
+	if below_surface:
+		if wall_decor_debug_dump_under_surface:
+			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
+		return
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 		_wd("OUT fi=%d outward_final=%s offset=%.3f" % [fi, _fmt_v3(n), wall_decor_offset])
