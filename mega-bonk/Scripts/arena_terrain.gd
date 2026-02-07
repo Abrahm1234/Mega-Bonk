@@ -2295,28 +2295,32 @@ func _sample_top_surface_y_wide(
 	hint_dir: Vector3 = Vector3.ZERO,
 	use_min: bool = false
 ) -> float:
-	# IMPORTANT:
-	# - probe distance (forward/back) is handled elsewhere
-	# - this is only the lateral jitter radius so we don’t sample back across the wall
-	var r: float = wall_decor_surface_probe_lateral_cells * _cell_size
-
-	var best: float = _sample_top_surface_y(x, z, hint_dir)
-
+	var r: float = _cell_size * wall_decor_surface_probe_lateral_cells
 	var dirs: Array[Vector3] = [
 		Vector3(1, 0, 0), Vector3(-1, 0, 0),
 		Vector3(0, 0, 1), Vector3(0, 0, -1),
-		Vector3(1, 0, 1), Vector3(-1, 0, 1),
-		Vector3(1, 0, -1), Vector3(-1, 0, -1),
+		Vector3(1, 0, 1).normalized(), Vector3(1, 0, -1).normalized(),
+		Vector3(-1, 0, 1).normalized(), Vector3(-1, 0, -1).normalized(),
 	]
 
-	for d: Vector3 in dirs:
-		var v := _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir)
-		if use_min:
-			best = minf(best, v)
-		else:
-			best = maxf(best, v)
+	var agg: float = INF if use_min else _NEG_INF
+	var any_valid: bool = false
 
-	return best
+	for d: Vector3 in dirs:
+		var y := _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir)
+		if y <= _NEG_INF * 0.5:
+			continue
+		any_valid = true
+		if use_min:
+			agg = minf(agg, y)
+		else:
+			agg = maxf(agg, y)
+
+	# Fallback if everything was invalid (edge/outside grid).
+	if not any_valid:
+		return _sample_surface_y_open(x, z)
+
+	return agg
 
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
 	dir_h.y = 0.0
