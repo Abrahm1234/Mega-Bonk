@@ -3449,7 +3449,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
 		cols[depth_axis] = -cols[depth_axis]
-		basis = Basis(cols[0], cols[1], cols[2])
+		local_basis = Basis(cols[0], cols[1], cols[2])
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
@@ -3586,7 +3586,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := basis
+	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
 	basis_scaled.z = basis_scaled.z * scale_vec.z
