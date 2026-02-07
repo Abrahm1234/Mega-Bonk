@@ -135,6 +135,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_dump_under_surface: bool = true
 @export var wall_decor_debug_focus_fi: int = -1
 @export var wall_decor_debug_cov_details: bool = false
+@export var wall_decor_debug_invalid_samples: bool = false
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
@@ -216,6 +217,23 @@ func _wd_fi(fi: int, msg: String) -> void:
 	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
 		return
 	_wd(msg)
+
+func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
+	if not wall_decor_debug_invalid_samples:
+		return
+	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
+		return
+
+	var n := max(2, cells_per_side)
+	var max_x := _ox + _cell_size * float(n - 1)
+	var max_z := _oz + _cell_size * float(n - 1)
+	var fx := (p.x - _ox) / _cell_size
+	var fz := (p.z - _oz) / _cell_size
+
+	_wd_fi(fi, "%s p=(%.3f, %.3f, %.3f) h=%s in=%s fx=%.6f fz=%.6f ox=%.3f oz=%.3f max_x=%.3f max_z=%.3f cs=%.6f n=%d" % [
+		label, p.x, p.y, p.z, str(h), str(_xz_in_bounds(p.x, p.z)),
+		fx, fz, _ox, _oz, max_x, max_z, _cell_size, n
+	])
 
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
@@ -2794,30 +2812,28 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	# ---- END NEW ----
 
 	if wall_decor_surface_only:
-		var eps := maxf(wall_decor_open_side_epsilon + 0.001, wall_decor_offset)
-		p_side = center + n * eps
+		p_side = center + n * (wall_decor_open_side_epsilon + 0.001)
 		h_side = _wd_surface_only_ceiling_y_at(p_side)
-		var h_face: float = _wd_surface_only_ceiling_y_at(center)
-		var valid_side: bool = h_side > _NEG_INF * 0.5
-		var valid_face: bool = h_face > _NEG_INF * 0.5
 
-		# Face can be buried even when the outward side is open; check both columns.
-		var h_max: float = _NEG_INF
-		if valid_side:
-			h_max = maxf(h_max, h_side)
-		if valid_face:
-			h_max = maxf(h_max, h_face)
-		below_surface = h_max > top_y + wall_decor_surface_margin
+		var p_center: Vector3 = center
+		var h_center: float = _wd_surface_only_ceiling_y_at(p_center)
+
+		# If either sample is invalid but the point is in bounds, dump why.
+		if h_side <= _NEG_INF * 0.5 and _xz_in_bounds(p_side.x, p_side.z):
+			_wd_dbg_sample(fi, "SURF_SIDE_INVALID", p_side, h_side)
+		if h_center <= _NEG_INF * 0.5 and _xz_in_bounds(p_center.x, p_center.z):
+			_wd_dbg_sample(fi, "SURF_CENTER_INVALID", p_center, h_center)
+
+		var h_ceiling: float = maxf(h_side, h_center)
+		below_surface = h_ceiling > top_y + wall_decor_surface_margin
 
 		if wall_decor_debug_cov_details:
-			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%.3f h_face=%.3f margin=%.3f below=%s valid_side=%s valid_face=%s p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_face, wall_decor_surface_margin, str(below_surface), str(valid_side), str(valid_face), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
-		if wall_decor_debug_dump_under_surface and (not valid_side or not valid_face):
-			_wd("SURF_ONLY_INVALID fi=%d top=%.3f h_side=%.3f h_face=%.3f valid_side=%s valid_face=%s p_side=%s center=%s" % [fi, top_y, h_side, h_face, str(valid_side), str(valid_face), _fmt_v3(p_side), _fmt_v3(center)])
+			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%s h_center=%s h_ceiling=%s margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, str(h_side), str(h_center), str(h_ceiling), wall_decor_surface_margin, str(below_surface), str(p_side), str(n)])
 
 	if below_surface:
 		if wall_decor_debug_dump_under_surface:
-			var h_face_dbg: float = _wd_surface_only_ceiling_y_at(center)
-			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_face=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_face_dbg, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
+			var h_center_dbg: float = _wd_surface_only_ceiling_y_at(center)
+			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_center=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_center_dbg, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
