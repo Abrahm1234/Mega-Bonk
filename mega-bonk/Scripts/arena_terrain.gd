@@ -2729,8 +2729,13 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				var b_from := center - dir * eps
 				var open_f := _is_open_air_ray(f_from, f_from + dir * probe)
 				var open_b := _is_open_air_ray(b_from, b_from - dir * probe)
-				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask])
+				if wall_decor_debug_open_side:
+					var extra := ""
+					if wall_decor_debug_verbose:
+						var to_f := f_from + dir * probe
+						var to_b := b_from - dir * probe
+						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask, extra])
 
 				if open_f and not open_b:
 					n = dir
