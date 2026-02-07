@@ -2263,12 +2263,26 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	return lerpf(y0, y1, tz)
 
 func _xz_in_bounds(x: float, z: float) -> bool:
-	return x >= _ox and x <= (_ox + world_size_m) and z >= _oz and z <= (_oz + world_size_m)
+	var n := max(2, cells_per_side)
+	var max_x := _ox + _cell_size * float(n - 1)
+	var max_z := _oz + _cell_size * float(n - 1)
+	var eps := 1e-3
+	return (x >= _ox - eps and x <= max_x + eps and z >= _oz - eps and z <= max_z + eps)
 
 func _sample_surface_y_open(x: float, z: float) -> float:
-	if not _xz_in_bounds(x, z):
-		return -INF
-	return _sample_surface_y(x, z)
+	var n := max(2, cells_per_side)
+	var max_x := _ox + _cell_size * float(n - 1)
+	var max_z := _oz + _cell_size * float(n - 1)
+	var eps := 1e-3
+
+	# Truly outside: return invalid
+	if x < _ox - eps or x > max_x + eps or z < _oz - eps or z > max_z + eps:
+		return _NEG_INF
+
+	# Inside (or tiny float overshoot): clamp to keep fx/fz <= n-1
+	var cx := clampf(x, _ox, max_x)
+	var cz := clampf(z, _oz, max_z)
+	return _sample_surface_y(cx, cz)
 
 func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
 	# We want the TOPMOST surface at (x,z). Wall centers often lie on cell boundaries,
@@ -2783,16 +2797,27 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		var eps := maxf(wall_decor_open_side_epsilon + 0.001, wall_decor_offset)
 		p_side = center + n * eps
 		h_side = _wd_surface_only_ceiling_y_at(p_side)
+		var h_face: float = _wd_surface_only_ceiling_y_at(center)
+		var valid_side: bool = h_side > _NEG_INF * 0.5
+		var valid_face: bool = h_face > _NEG_INF * 0.5
 
-		# Terrain above the placement-side column means the face is under a ceiling/overhang.
-		below_surface = h_side > top_y + wall_decor_surface_margin
+		# Face can be buried even when the outward side is open; check both columns.
+		var h_max: float = _NEG_INF
+		if valid_side:
+			h_max = maxf(h_max, h_side)
+		if valid_face:
+			h_max = maxf(h_max, h_face)
+		below_surface = h_max > top_y + wall_decor_surface_margin
 
 		if wall_decor_debug_cov_details:
-			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%.3f margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, h_side, wall_decor_surface_margin, str(below_surface), _fmt_v3(p_side), _fmt_v3(n)])
+			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%.3f h_face=%.3f margin=%.3f below=%s valid_side=%s valid_face=%s p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_face, wall_decor_surface_margin, str(below_surface), str(valid_side), str(valid_face), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
+		if wall_decor_debug_dump_under_surface and (not valid_side or not valid_face):
+			_wd("SURF_ONLY_INVALID fi=%d top=%.3f h_side=%.3f h_face=%.3f valid_side=%s valid_face=%s p_side=%s center=%s" % [fi, top_y, h_side, h_face, str(valid_side), str(valid_face), _fmt_v3(p_side), _fmt_v3(center)])
 
 	if below_surface:
 		if wall_decor_debug_dump_under_surface:
-			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
+			var h_face_dbg: float = _wd_surface_only_ceiling_y_at(center)
+			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_face=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_face_dbg, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
