@@ -136,6 +136,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
+@export_range(0.0, 1.0, 0.05) var wall_decor_surface_probe_lateral_cells: float = 0.25
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
