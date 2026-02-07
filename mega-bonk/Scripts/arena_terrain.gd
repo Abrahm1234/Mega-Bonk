@@ -3027,11 +3027,17 @@ func _rebuild_wall_decor() -> void:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
 			if wall_decor_surface_only:
-				var wtop_y: float = maxf(maxf(wf.a.y, wf.b.y), maxf(wf.c.y, wf.d.y))
-				var wdir_h := _wall_place_outward(wf)
-				wdir_h.y = 0.0
-				var wcov := _wall_face_covered_both_sides(wf.center, wtop_y, wdir_h)
-				if wcov["covered"]:
+				var top_y := _wall_face_max_world_y(wf)
+				var outward := _wall_place_outward(wf)
+
+				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var p_side := wf.center + outward * (eps + 0.001)
+
+				var h_side := _wd_surface_only_ceiling_y_at(p_side)
+				var h_center := _wd_surface_only_ceiling_y_at(wf.center)
+				var h_ceiling := maxf(h_side, h_center)
+
+				if h_ceiling > top_y + wall_decor_surface_margin:
 					continue
 			if not _allow_wedge_decor_face(wf):
 				continue
@@ -3171,13 +3177,17 @@ func _rebuild_wall_decor() -> void:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
 			if wall_decor_surface_only:
-				var wtop_y2: float = maxf(maxf(wf2.a.y, wf2.b.y), maxf(wf2.c.y, wf2.d.y))
-				var wdir_h2 := _wall_place_outward(wf2)
-				wdir_h2.y = 0.0
-				var wcov2 := _wall_face_covered_both_sides(wf2.center, wtop_y2, wdir_h2)
-				if wcov2["covered"]:
-					if wall_decor_debug_dump_under_surface:
-						_wd("SKIP WEDGE_COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f center=%s n=%s" % [wtop_y2, float(wcov2["h_f"]), float(wcov2["h_b"]), _fmt_v3(wf2.center), _fmt_v3(wf2.normal)])
+				var top_y := _wall_face_max_world_y(wf2)
+				var outward := _wall_place_outward(wf2)
+
+				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var p_side := wf2.center + outward * (eps + 0.001)
+
+				var h_side := _wd_surface_only_ceiling_y_at(p_side)
+				var h_center := _wd_surface_only_ceiling_y_at(wf2.center)
+				var h_ceiling := maxf(h_side, h_center)
+
+				if h_ceiling > top_y + wall_decor_surface_margin:
 					continue
 			if not _allow_wedge_decor_face(wf2):
 				continue
