@@ -2323,27 +2323,37 @@ func _sample_top_surface_y_wide(
 	return agg
 
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
-	dir_h.y = 0.0
-	if dir_h.length() < 1e-6:
-		return {"covered": false, "h_f": _NEG_INF, "h_b": _NEG_INF, "cover_f": false, "cover_b": false}
+	var dir := dir_h
+	dir.y = 0.0
+	if dir.length() < 0.001:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
 
-	dir_h = dir_h.normalized()
+	var probe: float = maxf(
+		wall_decor_open_side_epsilon + 0.001,
+		_cell_size * wall_decor_surface_probe_radius_cells
+	)
 
-	var probe: float = _cell_size * wall_decor_surface_probe_radius_cells
-	var margin_world: float = wall_decor_surface_margin
+	var p_f := Vector3(center.x + dir.x * probe, center.y, center.z + dir.z * probe)
+	var p_b := Vector3(center.x - dir.x * probe, center.y, center.z - dir.z * probe)
 
-	var h_f: float = _sample_top_surface_y_wide(center.x + dir_h.x * probe, center.z + dir_h.z * probe, dir_h, true)
-	var h_b: float = _sample_top_surface_y_wide(center.x - dir_h.x * probe, center.z - dir_h.z * probe, -dir_h, true)
+	var h_f: float = _sample_top_surface_y_wide(p_f.x, p_f.z, dir, true)
+	var h_b: float = _sample_top_surface_y_wide(p_b.x, p_b.z, -dir, true)
 
-	var cover_f: bool = (h_f > _NEG_INF * 0.5) and (h_f > top_y + margin_world)
-	var cover_b: bool = (h_b > _NEG_INF * 0.5) and (h_b > top_y + margin_world)
+	var valid_f := (h_f > _NEG_INF * 0.5)
+	var valid_b := (h_b > _NEG_INF * 0.5)
+
+	var margin: float = wall_decor_surface_margin
+	var cover_f: bool = valid_f and (h_f > top_y + margin)
+	var cover_b: bool = valid_b and (h_b > top_y + margin)
 
 	return {
 		"covered": cover_f and cover_b,
-		"h_f": h_f, "h_b": h_b,
 		"cover_f": cover_f, "cover_b": cover_b,
-		"probe": probe,
-		"margin": margin_world
+		"h_f": h_f, "h_b": h_b,
+		"valid_f": valid_f, "valid_b": valid_b,
+		"probe": probe, "margin": margin
 	}
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
