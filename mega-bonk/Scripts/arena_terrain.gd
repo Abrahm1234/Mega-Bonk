@@ -2275,18 +2275,32 @@ func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO)
 	var s4: float = _sample_surface_y_open(x, z - e)
 	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
-func _sample_top_surface_y_wide(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
-	var r: float = wall_decor_surface_probe_radius_cells * _cell_size
+func _sample_top_surface_y_wide(
+	x: float,
+	z: float,
+	hint_dir: Vector3 = Vector3.ZERO,
+	use_min: bool = false
+) -> float:
+	# IMPORTANT:
+	# - probe distance (forward/back) is handled elsewhere
+	# - this is only the lateral jitter radius so we don’t sample back across the wall
+	var r: float = wall_decor_surface_probe_lateral_cells * _cell_size
+
 	var best: float = _sample_top_surface_y(x, z, hint_dir)
 
 	var dirs: Array[Vector3] = [
-		Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
-		Vector3(1, 0, 1).normalized(), Vector3(1, 0, -1).normalized(),
-		Vector3(-1, 0, 1).normalized(), Vector3(-1, 0, -1).normalized()
+		Vector3(1, 0, 0), Vector3(-1, 0, 0),
+		Vector3(0, 0, 1), Vector3(0, 0, -1),
+		Vector3(1, 0, 1), Vector3(-1, 0, 1),
+		Vector3(1, 0, -1), Vector3(-1, 0, -1),
 	]
 
 	for d: Vector3 in dirs:
-		best = maxf(best, _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir))
+		var v := _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir)
+		if use_min:
+			best = minf(best, v)
+		else:
+			best = maxf(best, v)
 
 	return best
 
