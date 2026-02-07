@@ -2394,12 +2394,24 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 		"probe": probe, "margin": margin
 	}
 
+func _wall_decor_open_side_effective_raycast_mask() -> int:
+	if wall_decor_open_side_raycast_mask != -1 and wall_decor_open_side_raycast_mask != 0xFFFF_FFFF:
+		return wall_decor_open_side_raycast_mask
+
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		if terrain_collision.collision_layer != 0:
+			return terrain_collision.collision_layer
+
+	return wall_decor_open_side_raycast_mask
+
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.collide_with_bodies = true
 	q.collide_with_areas = false
-	q.collision_mask = wall_decor_open_side_raycast_mask
+	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
 	q.hit_from_inside = true
 	q.hit_back_faces = true
 	var hit := space.intersect_ray(q)
@@ -2770,7 +2782,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 						var to_f := f_from + dir * probe
 						var to_b := b_from - dir * probe
 						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask, extra])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask(), extra])
 
 				if open_f and not open_b:
 					n = dir
@@ -2958,14 +2970,14 @@ func _rebuild_wall_decor() -> void:
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
 		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = wall_decor_open_side_raycast_mask
+		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
 		q.collide_with_bodies = true
 		q.collide_with_areas = false
 		q.hit_back_faces = true
 		q.hit_from_inside = true
 
 		var hit := ss.intersect_ray(q)
-		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [wall_decor_open_side_raycast_mask, str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
+		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
 		child.queue_free()
