@@ -2174,8 +2174,15 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-	_rebuild_wall_decor()
+	if wall_decor_open_side_use_raycast:
+		call_deferred("_rebuild_wall_decor_after_physics")
+	else:
+		_rebuild_wall_decor()
 	_rebuild_floor_decor()
+
+func _rebuild_wall_decor_after_physics() -> void:
+	await get_tree().physics_frame
+	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
