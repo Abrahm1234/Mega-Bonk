@@ -3048,6 +3048,33 @@ func _rebuild_wall_decor() -> void:
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
 			var under_now: bool = cov_p["covered"]
+
+			# --- extra under-map diagnostics ---
+			if wall_decor_debug_dump_under_surface and wall_decor_debug_cov_details:
+				# local surface directly above this wall face (independent of outward choice)
+				var h_here := _sample_top_surface_y_wide(f2.center.x, f2.center.z, Vector3.ZERO, true)
+				var under_local := (h_here > top_y + wall_decor_surface_margin)
+
+				if under_local and not under_now:
+					var n_dir := f2.normal
+					n_dir.y = 0.0
+					if n_dir.length() < 0.001:
+						n_dir = outward
+					else:
+						n_dir = n_dir.normalized()
+
+					var cov_n := _wall_face_covered_both_sides(f2.center, top_y, n_dir)
+
+					_wd_fi(placement_fi,
+						"UNDER_LOCAL_BUT_NOT_COVERED fi=%d top=%.3f h_here=%.3f depth=%.3f center=%s "
+						% [placement_fi, top_y, h_here, (h_here - top_y), _fmt_v3(f2.center)]
+						+ "outward=%s cov_out(covered=%s hf=%.3f hb=%.3f valid_f=%s valid_b=%s) "
+						% [_fmt_v3(outward), str(under_now), float(cov_p["h_f"]), float(cov_p["h_b"]), str(cov_p["valid_f"]), str(cov_p["valid_b"])]
+						+ "cov_norm(covered=%s hf=%.3f hb=%.3f valid_f=%s valid_b=%s) n=%s"
+						% [str(cov_n["covered"]), float(cov_n["h_f"]), float(cov_n["h_b"]), str(cov_n["valid_f"]), str(cov_n["valid_b"]), _fmt_v3(f2.normal)]
+					)
+			# --- end diagnostics ---
+
 			if under_now:
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
