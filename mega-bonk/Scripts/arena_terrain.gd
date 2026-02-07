@@ -133,9 +133,12 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_max_logs: int = 300
 @export var wall_decor_debug_print_every: int = 50
 @export var wall_decor_debug_dump_under_surface: bool = true
+@export var wall_decor_debug_focus_fi: int = -1
+@export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
+@export_range(0.0, 1.0, 0.05) var wall_decor_surface_probe_lateral_cells: float = 0.25
 @export var wall_decor_seed: int = 1337
 @export var wall_decor_min_height: float = 0.25
 @export var wall_decor_skip_trapezoids: bool = false
@@ -199,6 +202,7 @@ var _tunnel_base_ceil_y: float = 0.0
 
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
+var _wd_raycast_sanity_done: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -207,6 +211,11 @@ func _wd(msg: String) -> void:
 		return
 	_wd_logs += 1
 	print("[WALL_DECOR] ", msg)
+
+func _wd_fi(fi: int, msg: String) -> void:
+	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
+		return
+	_wd(msg)
 
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
@@ -2173,8 +2182,15 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-	_rebuild_wall_decor()
+	if wall_decor_open_side_use_raycast:
+		call_deferred("_rebuild_wall_decor_after_physics")
+	else:
+		_rebuild_wall_decor()
 	_rebuild_floor_decor()
+
+func _rebuild_wall_decor_after_physics() -> void:
+	await get_tree().physics_frame
+	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
@@ -2274,80 +2290,87 @@ func _sample_top_surface_y(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO)
 	var s4: float = _sample_surface_y_open(x, z - e)
 	return maxf(s0, maxf(maxf(s1, s2), maxf(s3, s4)))
 
-func _sample_top_surface_y_wide(x: float, z: float, hint_dir: Vector3 = Vector3.ZERO) -> float:
-	var r: float = wall_decor_surface_probe_radius_cells * _cell_size
-	var best: float = _sample_top_surface_y(x, z, hint_dir)
-
+func _sample_top_surface_y_wide(
+	x: float,
+	z: float,
+	hint_dir: Vector3 = Vector3.ZERO,
+	use_min: bool = false
+) -> float:
+	var r: float = _cell_size * wall_decor_surface_probe_lateral_cells
 	var dirs: Array[Vector3] = [
-		Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1),
+		Vector3(1, 0, 0), Vector3(-1, 0, 0),
+		Vector3(0, 0, 1), Vector3(0, 0, -1),
 		Vector3(1, 0, 1).normalized(), Vector3(1, 0, -1).normalized(),
-		Vector3(-1, 0, 1).normalized(), Vector3(-1, 0, -1).normalized()
+		Vector3(-1, 0, 1).normalized(), Vector3(-1, 0, -1).normalized(),
 	]
 
+	var agg: float = INF if use_min else _NEG_INF
+	var any_valid: bool = false
+
 	for d: Vector3 in dirs:
-		best = maxf(best, _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir))
+		var y := _sample_top_surface_y(x + d.x * r, z + d.z * r, hint_dir)
+		if y <= _NEG_INF * 0.5:
+			continue
+		any_valid = true
+		if use_min:
+			agg = minf(agg, y)
+		else:
+			agg = maxf(agg, y)
 
-	return best
-
-func _sample_surface_y_side(x: float, z: float, dir_h: Vector3) -> float:
-	# Directional neighborhood sample that stays on the requested side of a wall seam.
-	dir_h.y = 0.0
-	if dir_h.length() < 1e-6:
+	# Fallback if everything was invalid (edge/outside grid).
+	if not any_valid:
 		return _sample_surface_y_open(x, z)
-	dir_h = dir_h.normalized()
 
-	var perp := Vector3(-dir_h.z, 0.0, dir_h.x)
+	return agg
 
-	# Keep this small so we don't "see" across the seam into the opposite column.
-	var r: float = _cell_size * 0.18
-	var f: float = _cell_size * 0.08
-
-	var best: float = _sample_surface_y_open(x, z)
-	best = maxf(best, _sample_surface_y_open(x + perp.x * r, z + perp.z * r))
-	best = maxf(best, _sample_surface_y_open(x - perp.x * r, z - perp.z * r))
-	best = maxf(best, _sample_surface_y_open(x + dir_h.x * f, z + dir_h.z * f))
-	best = maxf(best, _sample_surface_y_open(x + dir_h.x * f + perp.x * r * 0.5, z + dir_h.z * f + perp.z * r * 0.5))
-	best = maxf(best, _sample_surface_y_open(x + dir_h.x * f - perp.x * r * 0.5, z + dir_h.z * f - perp.z * r * 0.5))
-	return best
+func _wd_surface_only_ceiling_y_at(p: Vector3) -> float:
+	# Use max aggregation so any nearby top surface counts as overhead terrain.
+	return _sample_top_surface_y_wide(p.x, p.z, Vector3.ZERO, false)
 
 
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
-	dir_h.y = 0.0
-	if dir_h.length() < 1e-6:
-		return {"covered": false, "h_f": _NEG_INF, "h_b": _NEG_INF, "cover_f": false, "cover_b": false}
+	var dir := dir_h
+	dir.y = 0.0
+	if dir.length() < 0.001:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
 
-	dir_h = dir_h.normalized()
+	var probe: float = maxf(
+		wall_decor_open_side_epsilon + 0.001,
+		_cell_size * wall_decor_surface_probe_radius_cells
+	)
 
-	# IMPORTANT: this probe must cross the wall seam into the adjacent column.
-	# If the probe is too small, both samples can land in the same column and falsely mark COVERED_BOTH.
-	var probe_mult: float = maxf(wall_decor_surface_probe_radius_cells, 0.55)
-	var probe: float = _cell_size * probe_mult
-	var margin_world: float = wall_decor_surface_margin
+	var p_f := Vector3(center.x + dir.x * probe, center.y, center.z + dir.z * probe)
+	var p_b := Vector3(center.x - dir.x * probe, center.y, center.z - dir.z * probe)
 
-	var x_f: float = center.x + dir_h.x * probe
-	var z_f: float = center.z + dir_h.z * probe
-	var x_b: float = center.x - dir_h.x * probe
-	var z_b: float = center.z - dir_h.z * probe
+	var h_f: float = _sample_top_surface_y_wide(p_f.x, p_f.z, dir, true)
+	var h_b: float = _sample_top_surface_y_wide(p_b.x, p_b.z, -dir, true)
 
-	# Directional sampling on each side (no wide-max across diagonals), avoids false COVERED_BOTH on stepped terrain.
-	var h_f: float = _sample_surface_y_side(x_f, z_f, dir_h)
-	var h_b: float = _sample_surface_y_side(x_b, z_b, -dir_h)
+	var valid_f := (h_f > _NEG_INF * 0.5)
+	var valid_b := (h_b > _NEG_INF * 0.5)
 
-	var cover_f: bool = (h_f > top_y + margin_world)
-	var cover_b: bool = (h_b > top_y + margin_world)
+	var margin: float = wall_decor_surface_margin
+	var cover_f: bool = valid_f and (h_f > top_y + margin)
+	var cover_b: bool = valid_b and (h_b > top_y + margin)
 
 	return {
-		"covered": (cover_f and cover_b),
+		"covered": cover_f and cover_b,
+		"cover_f": cover_f, "cover_b": cover_b,
 		"h_f": h_f, "h_b": h_b,
-		"cover_f": cover_f, "cover_b": cover_b
+		"valid_f": valid_f, "valid_b": valid_b,
+		"probe": probe, "margin": margin
 	}
-func _is_open_air_ray(from: Vector3, dir: Vector3, dist: float) -> bool:
-	var to := from + dir * dist
+
+func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
+	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collide_with_bodies = true
+	q.collide_with_areas = false
 	q.collision_mask = wall_decor_open_side_raycast_mask
 	q.hit_from_inside = true
 	q.hit_back_faces = true
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := space.intersect_ray(q)
 	return hit.is_empty()
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
@@ -2522,27 +2545,40 @@ func _safe_dim(x: float) -> float:
 	return maxf(0.0001, absf(x))
 
 func _pick_open_side_outward(face: WallFace) -> Vector3:
-	var n: Vector3 = face.normal
+	var n := face.normal
 	n.y = 0.0
 	if n.length_squared() < 1e-8:
 		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: float = max(0.25, _cell_size * 0.55)
-	var p_plus: Vector3 = face.center + n * probe
-	var p_minus: Vector3 = face.center - n * probe
-	var h_plus: float = _sample_surface_y(p_plus.x, p_plus.z)
-	var h_minus: float = _sample_surface_y(p_minus.x, p_minus.z)
+	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
+	var center := face.center
 
+	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
+	if wall_decor_open_side_use_raycast:
+		var eps := 0.05
+		var open_f := _is_open_air_ray(center + n * eps, center + n * probe)
+		var open_b := _is_open_air_ray(center - n * eps, center - n * probe)
+		if open_f != open_b:
+			return n if open_f else -n
+
+	# Height fallback (use MIN-sampled top surface on each side)
+	var p_plus := center + n * probe
+	var p_minus := center - n * probe
+	var h_plus := _sample_top_surface_y_wide(p_plus.x, p_plus.z, n, true)
+	var h_minus := _sample_top_surface_y_wide(p_minus.x, p_minus.z, -n, true)
+
+	# If one side has no surface at all, treat it as open
 	if h_plus == -INF and h_minus != -INF:
 		return n
 	if h_minus == -INF and h_plus != -INF:
 		return -n
 
-	if abs(h_plus - h_minus) < 0.001:
+	# If essentially equal, prefer pointing away from arena center (stable tie-break)
+	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
 		var side: float = float(max(2, cells_per_side) - 1) * _cell_size
-		var map_center := Vector3(_ox + side * 0.5, face.center.y, _oz + side * 0.5)
-		var to_center := map_center - face.center
+		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
+		var to_center := map_center - center
 		to_center.y = 0.0
 		if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
 			return -n
@@ -2655,21 +2691,18 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var top_y: float = maxf(maxf(a.y, b.y), maxf(c.y, d.y))
 	var bot_y: float = minf(minf(a.y, b.y), minf(c.y, d.y))
 	var cov := _wall_face_covered_both_sides(center, top_y, dir_h)
-	var below_surface: bool = cov["covered"]
+	var below_surface: bool = false
+	var h_side: float = _NEG_INF
+	var p_side: Vector3 = Vector3.ZERO
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(below_surface)])
+		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below_both=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(bool(cov["covered"]))])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
 	if abs(n.y) > wall_decor_max_abs_normal_y:
 		if wall_decor_debug_verbose:
 			_wd("SKIP fi=%d NEAR_HORIZONTAL n=%s" % [fi, _fmt_v3(n)])
-		return
-
-	if wall_decor_surface_only and below_surface:
-		if wall_decor_debug_dump_under_surface:
-			_wd("SKIP fi=%d COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [fi, top_y, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(center), _fmt_v3(n)])
 		return
 
 	var open_sy_f: float = INF
@@ -2681,7 +2714,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			dir = dir.normalized()
 
 			# IMPORTANT: probe must cross into the neighboring column.
-			var probe := maxf(wall_decor_open_side_epsilon, _cell_size * 0.55)
+			var probe := maxf(wall_decor_open_side_epsilon + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
 			var chosen := "TIE"
 			var cover_f: bool = bool(cov["cover_f"])
 			var cover_b: bool = bool(cov["cover_b"])
@@ -2697,10 +2730,15 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				var eps: float = wall_decor_open_side_epsilon
 				var f_from := center + dir * eps
 				var b_from := center - dir * eps
-				var open_f := _is_open_air_ray(f_from, dir, probe)
-				var open_b := _is_open_air_ray(b_from, -dir, probe)
-				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask])
+				var open_f := _is_open_air_ray(f_from, f_from + dir * probe)
+				var open_b := _is_open_air_ray(b_from, b_from - dir * probe)
+				if wall_decor_debug_open_side:
+					var extra := ""
+					if wall_decor_debug_verbose:
+						var to_f := f_from + dir * probe
+						var to_b := b_from - dir * probe
+						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask, extra])
 
 				if open_f and not open_b:
 					n = dir
@@ -2710,8 +2748,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					chosen = "BACK"
 				else:
 					# Raycast tie (both open or both blocked): fallback to height sampling.
-					var h_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir)
-					var h_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, dir)
+					var h_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
+					var h_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
 					open_sy_f = h_f
 					open_sy_b = h_b
 					n = dir if h_f < h_b else -dir
@@ -2719,8 +2757,8 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 						_wd("OPEN_RAY_FALLBACK fi=%d h_f=%.3f h_b=%.3f chosen=%s" % [fi, h_f, h_b, chosen])
 			else:
-				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir)
-				var sy_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, dir)
+				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
+				var sy_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
 				open_sy_f = sy_f
 				open_sy_b = sy_b
 
@@ -2740,6 +2778,22 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
 	# ---- END NEW ----
+
+	if wall_decor_surface_only:
+		var eps := maxf(wall_decor_open_side_epsilon + 0.001, wall_decor_offset)
+		p_side = center + n * eps
+		h_side = _wd_surface_only_ceiling_y_at(p_side)
+
+		# Terrain above the placement-side column means the face is under a ceiling/overhang.
+		below_surface = h_side > top_y + wall_decor_surface_margin
+
+		if wall_decor_debug_cov_details:
+			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%.3f margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, h_side, wall_decor_surface_margin, str(below_surface), _fmt_v3(p_side), _fmt_v3(n)])
+
+	if below_surface:
+		if wall_decor_debug_dump_under_surface:
+			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
+		return
 
 	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 		_wd("OUT fi=%d outward_final=%s offset=%.3f" % [fi, _fmt_v3(n), wall_decor_offset])
@@ -2855,6 +2909,23 @@ func _rebuild_wall_decor() -> void:
 
 	_ensure_wall_decor_root()
 
+
+	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
+		_wd_raycast_sanity_done = true
+
+		var ss := get_world_3d().direct_space_state
+		var a := Vector3(0.0, 10000.0, 0.0)
+		var b := Vector3(0.0, -10000.0, 0.0)
+		var q := PhysicsRayQueryParameters3D.create(a, b)
+		q.collision_mask = wall_decor_open_side_raycast_mask
+		q.collide_with_bodies = true
+		q.collide_with_areas = false
+		q.hit_back_faces = true
+		q.hit_from_inside = true
+
+		var hit := ss.intersect_ray(q)
+		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [wall_decor_open_side_raycast_mask, str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
+
 	for child: Node in _wall_decor_root.get_children():
 		child.queue_free()
 
@@ -2916,7 +2987,8 @@ func _rebuild_wall_decor() -> void:
 					continue
 			if wall_decor_surface_only:
 				var wtop_y: float = maxf(maxf(wf.a.y, wf.b.y), maxf(wf.c.y, wf.d.y))
-				var wdir_h := Vector3(wf.normal.x, 0.0, wf.normal.z)
+				var wdir_h := _wall_place_outward(wf)
+				wdir_h.y = 0.0
 				var wcov := _wall_face_covered_both_sides(wf.center, wtop_y, wdir_h)
 				if wcov["covered"]:
 					continue
@@ -3017,6 +3089,33 @@ func _rebuild_wall_decor() -> void:
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
 			var under_now: bool = cov_p["covered"]
+
+			# --- extra under-map diagnostics ---
+			if wall_decor_debug_dump_under_surface and wall_decor_debug_cov_details:
+				# local surface directly above this wall face (independent of outward choice)
+				var h_here := _sample_top_surface_y_wide(f2.center.x, f2.center.z, Vector3.ZERO, true)
+				var under_local := (h_here > top_y + wall_decor_surface_margin)
+
+				if under_local and not under_now:
+					var n_dir := f2.normal
+					n_dir.y = 0.0
+					if n_dir.length() < 0.001:
+						n_dir = outward
+					else:
+						n_dir = n_dir.normalized()
+
+					var cov_n := _wall_face_covered_both_sides(f2.center, top_y, n_dir)
+
+					_wd_fi(placement_fi,
+						"UNDER_LOCAL_BUT_NOT_COVERED fi=%d top=%.3f h_here=%.3f depth=%.3f center=%s "
+						% [placement_fi, top_y, h_here, (h_here - top_y), _fmt_v3(f2.center)]
+						+ "outward=%s cov_out(covered=%s hf=%.3f hb=%.3f valid_f=%s valid_b=%s) "
+						% [_fmt_v3(outward), str(under_now), float(cov_p["h_f"]), float(cov_p["h_b"]), str(cov_p["valid_f"]), str(cov_p["valid_b"])]
+						+ "cov_norm(covered=%s hf=%.3f hb=%.3f valid_f=%s valid_b=%s) n=%s"
+						% [str(cov_n["covered"]), float(cov_n["h_f"]), float(cov_n["h_b"]), str(cov_n["valid_f"]), str(cov_n["valid_b"]), _fmt_v3(f2.normal)]
+					)
+			# --- end diagnostics ---
+
 			if under_now:
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
@@ -3032,7 +3131,8 @@ func _rebuild_wall_decor() -> void:
 					continue
 			if wall_decor_surface_only:
 				var wtop_y2: float = maxf(maxf(wf2.a.y, wf2.b.y), maxf(wf2.c.y, wf2.d.y))
-				var wdir_h2 := Vector3(wf2.normal.x, 0.0, wf2.normal.z)
+				var wdir_h2 := _wall_place_outward(wf2)
+				wdir_h2.y = 0.0
 				var wcov2 := _wall_face_covered_both_sides(wf2.center, wtop_y2, wdir_h2)
 				if wcov2["covered"]:
 					if wall_decor_debug_dump_under_surface:
@@ -3122,26 +3222,24 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	var outward: Vector3 = face.normal
+	# Use the same open-side/uncovered-side logic as rectangular wall decor.
+	var outward := _wall_place_outward(face)
 	outward.y = 0.0
-	if outward.length_squared() < 0.0001:
-		outward = Vector3.FORWARD
+	if outward.length_squared() < 1e-8:
+		outward = Vector3(face.normal.x, 0.0, face.normal.z)
+		if outward.length_squared() < 1e-8:
+			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
 	var y_dir := Vector3.UP
-	var x_dir := y_dir.cross(outward).normalized()
-	if x_dir.length_squared() < 0.0001:
+
+	var left_avg: float = (face.a.y + face.d.y) * 0.5
+	var right_avg: float = (face.b.y + face.c.y) * 0.5
+	var slope_up_toward_right: bool = right_avg > left_avg
+	var x_dir := (outward.cross(y_dir) if slope_up_toward_right else y_dir.cross(outward)).normalized()
+	if x_dir.length_squared() < 1e-8:
 		x_dir = Vector3.RIGHT
-
-	var u_dir := (face.b - face.a)
-	u_dir.y = 0.0
-	if u_dir.length_squared() > 0.0001 and x_dir.dot(u_dir.normalized()) < 0.0:
-		x_dir = -x_dir
-
-	var z_dir := x_dir.cross(y_dir).normalized()
-	if z_dir.dot(outward) < 0.0:
-		z_dir = -z_dir
-		x_dir = -x_dir
+	var z_dir := outward
 
 	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
 
@@ -3149,12 +3247,6 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	if wall_wedge_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
-
-	var left_avg: float = (face.a.y + face.d.y) * 0.5
-	var right_avg: float = (face.b.y + face.c.y) * 0.5
-	var slope_up_toward_right: bool = right_avg > left_avg
-	if not slope_up_toward_right:
-		rot = Basis(-rot.x, rot.y, rot.z)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
