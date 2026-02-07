@@ -225,8 +225,8 @@ func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
 		return
 
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var fx := (p.x - _ox) / _cell_size
 	var fz := (p.z - _oz) / _cell_size
 
@@ -2268,12 +2268,12 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	var n: int = max(2, cells_per_side)
 	var fx: float = (world_x - _ox) / _cell_size
 	var fz: float = (world_z - _oz) / _cell_size
-	if fx < 0.0 or fx > float(n - 1) or fz < 0.0 or fz > float(n - 1):
-		return -INF
-	var ix: int = clampi(int(floor(fx)), 0, n - 2)
-	var iz: int = clampi(int(floor(fz)), 0, n - 2)
-	var tx: float = fx - float(ix)
-	var tz: float = fz - float(iz)
+	if fx < 0.0 or fx > float(n) or fz < 0.0 or fz > float(n):
+		return _NEG_INF
+	var ix: int = clampi(int(floor(fx)), 0, n - 1)
+	var iz: int = clampi(int(floor(fz)), 0, n - 1)
+	var tx: float = clampf(fx - float(ix), 0.0, 1.0)
+	var tz: float = clampf(fz - float(iz), 0.0, 1.0)
 
 	var corners: Vector4 = _cell_corners(ix, iz)
 	var y0: float = lerpf(corners.x, corners.y, tx)
@@ -2282,22 +2282,22 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 
 func _xz_in_bounds(x: float, z: float) -> bool:
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var eps := 1e-3
 	return (x >= _ox - eps and x <= max_x + eps and z >= _oz - eps and z <= max_z + eps)
 
 func _sample_surface_y_open(x: float, z: float) -> float:
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var eps := 1e-3
 
 	# Truly outside: return invalid
 	if x < _ox - eps or x > max_x + eps or z < _oz - eps or z > max_z + eps:
 		return _NEG_INF
 
-	# Inside (or tiny float overshoot): clamp to keep fx/fz <= n-1
+	# Inside (or tiny float overshoot): clamp to full mesh bounds
 	var cx := clampf(x, _ox, max_x)
 	var cz := clampf(z, _oz, max_z)
 	return _sample_surface_y(cx, cz)
@@ -2613,14 +2613,14 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var h_minus := _sample_top_surface_y_wide(p_minus.x, p_minus.z, -n, true)
 
 	# If one side has no surface at all, treat it as open
-	if h_plus == -INF and h_minus != -INF:
+	if h_plus <= _NEG_INF * 0.5 and h_minus > _NEG_INF * 0.5:
 		return n
-	if h_minus == -INF and h_plus != -INF:
+	if h_minus <= _NEG_INF * 0.5 and h_plus > _NEG_INF * 0.5:
 		return -n
 
 	# If essentially equal, prefer pointing away from arena center (stable tie-break)
 	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
-		var side: float = float(max(2, cells_per_side) - 1) * _cell_size
+		var side: float = float(max(2, cells_per_side)) * _cell_size
 		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
 		var to_center := map_center - center
 		to_center.y = 0.0
