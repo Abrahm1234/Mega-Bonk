@@ -133,8 +133,6 @@ class_name ArenaBlockyTerrain
 @export_range(0.0, 1.0, 0.01) var wall_decor_open_side_classifier_tie_epsilon: float = 0.08
 @export_range(0.01, 0.5, 0.01) var wall_decor_open_side_classifier_walk_y_offset_cells: float = 0.08
 @export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_mid_y_offset_cells: float = 0.35
-@export_range(0.05, 1.0, 0.05) var wall_decor_open_side_classifier_walk_offset_cells: float = 0.15
-@export_range(0.1, 1.5, 0.05) var wall_decor_open_side_classifier_mid_offset_cells: float = 0.5
 @export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ground_max_down_cells: float = 1.1
 @export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ceiling_min_up_cells: float = 0.7
 @export_range(0.1, 2.0, 0.05) var wall_decor_open_side_classifier_solid_lateral_hit_max_cells: float = 0.35
@@ -2564,7 +2562,7 @@ func _cell_classifier_rebuild() -> void:
 	_wall_open_cell_is_solid.resize(count)
 	_wall_open_cell_is_solid.fill(0)
 
-	var lateral_dist: float = maxf(_cell_size * 0.6, wall_decor_open_side_epsilon + 0.001)
+	var lateral_dist: float = maxf(_cell_size * 0.75, wall_decor_open_side_epsilon + 0.001)
 	var vertical_dist: float = maxf((box_height - outer_floor_height) * 2.0, _cell_size)
 	var open_ground_max: float = _cell_size * wall_decor_open_side_classifier_open_ground_max_down_cells
 	var open_ceiling_min: float = _cell_size * wall_decor_open_side_classifier_open_ceiling_min_up_cells
@@ -2576,8 +2574,6 @@ func _cell_classifier_rebuild() -> void:
 			var cz := _oz + (float(z) + 0.5) * _cell_size
 			var c := _cell_corners(x, z)
 			var top_y := maxf(maxf(c.x, c.y), maxf(c.z, c.w))
-			var walk_offset: float = maxf(wall_decor_open_side_classifier_walk_offset_cells * _cell_size, 0.001)
-			var mid_offset: float = maxf(wall_decor_open_side_classifier_mid_offset_cells * _cell_size, walk_offset)
 			var walk_y_offset: float = maxf(wall_decor_open_side_classifier_walk_y_offset_cells * _cell_size, 0.001)
 			var mid_y_offset: float = maxf(wall_decor_open_side_classifier_mid_y_offset_cells * _cell_size, walk_y_offset)
 			var cy_walk := top_y + walk_y_offset
