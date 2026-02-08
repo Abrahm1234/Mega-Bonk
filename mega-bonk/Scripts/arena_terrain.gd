@@ -2228,7 +2228,6 @@ func _build_mesh_and_collision(n: int) -> void:
 
 func _rebuild_wall_decor_after_physics() -> void:
 	await get_tree().physics_frame
-	_cell_classifier_rebuild()
 	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
@@ -3189,6 +3188,8 @@ func _rebuild_wall_decor() -> void:
 
 	_ensure_wall_decor_root()
 
+	if wall_decor_open_side_use_cell_classifier:
+		_cell_classifier_rebuild()
 
 	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
