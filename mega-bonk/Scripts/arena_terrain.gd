@@ -2274,8 +2274,27 @@ func _build_mesh_and_collision(n: int) -> void:
 		_rebuild_wall_decor()
 	_rebuild_floor_decor()
 
+func _terrain_collision_ready_for_wall_rays() -> bool:
+	if collision_shape == null:
+		return false
+	if collision_shape.disabled:
+		return false
+	if collision_shape.shape == null:
+		return false
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		if terrain_collision.collision_layer == 0:
+			return false
+	return true
+
 func _rebuild_wall_decor_after_physics() -> void:
+	# Give physics space time to register regenerated trimesh collision.
 	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if not _terrain_collision_ready_for_wall_rays():
+		_wd("WALL_DECOR_COLLISION_NOT_READY after 2 physics frames; proceeding with deterministic fallbacks")
+		_wd_log_raycast_context()
 	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
