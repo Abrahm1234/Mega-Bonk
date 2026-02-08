@@ -2528,6 +2528,24 @@ func _make_wall_open_ray_query(from: Vector3, to: Vector3) -> PhysicsRayQueryPar
 	q.collide_with_areas = false
 	return q
 
+func _wd_log_raycast_context() -> void:
+	if not wall_decor_debug_open_side:
+		return
+	var effective_mask := _wall_decor_open_side_effective_raycast_mask()
+	_wd("WALL_DECOR_MASK export=%d effective=%d" % [wall_decor_open_side_raycast_mask, effective_mask])
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		_wd("WALL_DECOR_TERRAIN_COLLIDER layer=%d mask=%d" % [terrain_collision.collision_layer, terrain_collision.collision_mask])
+	else:
+		_wd("WALL_DECOR_TERRAIN_COLLIDER missing_or_not_collision_object type=%s" % [str(terrain_body)])
+	if collision_shape == null:
+		_wd("WALL_DECOR_COLLISION_SHAPE missing")
+	elif collision_shape.shape == null:
+		_wd("WALL_DECOR_COLLISION_SHAPE present_but_shape_null")
+	else:
+		_wd("WALL_DECOR_COLLISION_SHAPE type=%s" % [collision_shape.shape.get_class()])
+
 func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
 	var space := get_world_3d().direct_space_state
 	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
@@ -3265,6 +3283,7 @@ func _rebuild_wall_decor() -> void:
 
 	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
+		_wd_log_raycast_context()
 
 		var ss := get_world_3d().direct_space_state
 		var a := Vector3(0.0, 10000.0, 0.0)
