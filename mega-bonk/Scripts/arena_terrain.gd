@@ -127,6 +127,10 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_open_side_epsilon: float = 0.05
 @export var wall_decor_open_side_use_raycast: bool = true
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
+@export var wall_decor_open_side_use_cell_classifier: bool = true
+@export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_probe_cells: float = 0.45
+@export var wall_decor_open_side_classifier_y_offset: float = 0.5
+@export_range(0.0, 1.0, 0.01) var wall_decor_open_side_classifier_tie_epsilon: float = 0.08
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_debug_log: bool = false
 @export var wall_decor_debug_verbose: bool = false
@@ -206,6 +210,7 @@ var _tunnel_base_ceil_y: float = 0.0
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
+var _wall_open_cell_score: PackedFloat32Array = PackedFloat32Array()
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -2202,7 +2207,7 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-	if wall_decor_open_side_use_raycast:
+	if wall_decor_open_side_use_raycast or wall_decor_open_side_use_cell_classifier:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
 		_rebuild_wall_decor()
@@ -2210,6 +2215,7 @@ func _build_mesh_and_collision(n: int) -> void:
 
 func _rebuild_wall_decor_after_physics() -> void:
 	await get_tree().physics_frame
+	_cell_classifier_rebuild()
 	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
@@ -2408,6 +2414,66 @@ func _wall_decor_open_side_effective_raycast_mask() -> int:
 
 	return wall_decor_open_side_raycast_mask
 
+func _open_classifier_idx(x: int, z: int) -> int:
+	return z * cells_per_side + x
+
+func _world_to_cell_clamped(x: float, z: float) -> Vector2i:
+	var n: int = max(1, cells_per_side)
+	var fx: float = (x - _ox) / _cell_size
+	var fz: float = (z - _oz) / _cell_size
+	var ix := clampi(int(floor(fx)), 0, n - 1)
+	var iz := clampi(int(floor(fz)), 0, n - 1)
+	return Vector2i(ix, iz)
+
+func _open_classifier_sample_cell_score(x: int, z: int) -> float:
+	if _wall_open_cell_score.is_empty():
+		return 0.0
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return -1.0
+	return _wall_open_cell_score[_open_classifier_idx(x, z)]
+
+func _cell_classifier_rebuild() -> void:
+	if not wall_decor_open_side_use_cell_classifier:
+		_wall_open_cell_score = PackedFloat32Array()
+		return
+
+	var n: int = max(1, cells_per_side)
+	_wall_open_cell_score.resize(n * n)
+	_wall_open_cell_score.fill(0.0)
+
+	var probe_dist: float = maxf(_cell_size * wall_decor_open_side_classifier_probe_cells, wall_decor_open_side_epsilon + 0.001)
+	for z in range(n):
+		for x in range(n):
+			var center := _cell_center(x, z)
+			var probe_origin := Vector3(center.x, center.y + wall_decor_open_side_classifier_y_offset, center.z)
+			var hits_open := 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.RIGHT * probe_dist) else 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.RIGHT * probe_dist) else 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.FORWARD * probe_dist) else 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.FORWARD * probe_dist) else 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.UP * probe_dist) else 0
+			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.UP * probe_dist) else 0
+			_wall_open_cell_score[_open_classifier_idx(x, z)] = float(hits_open) / 6.0
+
+func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
+	if not wall_decor_open_side_use_cell_classifier or _wall_open_cell_score.is_empty():
+		return {"valid": false, "open_f": 0.0, "open_b": 0.0}
+
+	var probe: float = maxf(_cell_size * wall_decor_surface_probe_radius_cells, wall_decor_open_side_epsilon + 0.001)
+	var p_f := face.center + dir * probe
+	var p_b := face.center - dir * probe
+	var c_f := _world_to_cell_clamped(p_f.x, p_f.z)
+	var c_b := _world_to_cell_clamped(p_b.x, p_b.z)
+	var open_f := _open_classifier_sample_cell_score(c_f.x, c_f.y)
+	var open_b := _open_classifier_sample_cell_score(c_b.x, c_b.y)
+	return {
+		"valid": true,
+		"open_f": open_f,
+		"open_b": open_b,
+		"c_f": c_f,
+		"c_b": c_b,
+	}
+
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(from, to)
@@ -2599,6 +2665,14 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
 	var center := face.center
+	var cls := _classify_face_open_score(face, n)
+	if bool(cls.get("valid", false)):
+		var open_f: float = float(cls.get("open_f", 0.0))
+		var open_b: float = float(cls.get("open_b", 0.0))
+		if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
+			return n
+		if open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
+			return -n
 
 	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
 	if wall_decor_open_side_use_raycast:
@@ -2772,7 +2846,23 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			elif cover_b and not cover_f:
 				n = dir
 				chosen = "FWD"
-			elif wall_decor_open_side_use_raycast:
+			else:
+				var cls := _classify_face_open_score(WallFace.new(aa, bb, cc, dd, center, n, 0.0, 0.0, false, 0), dir)
+				if bool(cls.get("valid", false)):
+					var c_open_f: float = float(cls.get("open_f", 0.0))
+					var c_open_b: float = float(cls.get("open_b", 0.0))
+					if c_open_f > c_open_b + wall_decor_open_side_classifier_tie_epsilon:
+						n = dir
+						chosen = "FWD_CLASS"
+					elif c_open_b > c_open_f + wall_decor_open_side_classifier_tie_epsilon:
+						n = -dir
+						chosen = "BACK_CLASS"
+					else:
+						chosen = "TIE"
+				else:
+					chosen = "TIE"
+
+			if chosen == "TIE" and wall_decor_open_side_use_raycast:
 				var eps: float = wall_decor_open_side_epsilon
 				var f_from := center + dir * eps
 				var b_from := center - dir * eps
@@ -2802,7 +2892,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					chosen = "FWD" if h_f < h_b else "BACK"
 					if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
 						_wd("OPEN_RAY_FALLBACK fi=%d h_f=%.3f h_b=%.3f chosen=%s" % [fi, h_f, h_b, chosen])
-			else:
+			elif chosen == "TIE":
 				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
 				var sy_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
 				open_sy_f = sy_f
@@ -3272,7 +3362,18 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 		elif cover_b and not cover_f:
 			outward = outward
 		else:
-			outward = _pick_open_side_outward(face)
+			var cls := _classify_face_open_score(face, outward)
+			if bool(cls.get("valid", false)):
+				var open_f: float = float(cls.get("open_f", 0.0))
+				var open_b: float = float(cls.get("open_b", 0.0))
+				if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
+					outward = outward
+				elif open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
+					outward = -outward
+				else:
+					outward = _pick_open_side_outward(face)
+			else:
+				outward = _pick_open_side_outward(face)
 	return outward
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
