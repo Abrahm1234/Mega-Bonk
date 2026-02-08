@@ -2437,6 +2437,15 @@ func _world_to_cell_clamped(x: float, z: float) -> Vector2i:
 	var iz := clampi(int(floor(fz)), 0, n - 1)
 	return Vector2i(ix, iz)
 
+func _world_to_cell_if_inside(x: float, z: float) -> Dictionary:
+	var n: int = max(1, cells_per_side)
+	var fx: float = (x - _ox) / _cell_size
+	var fz: float = (z - _oz) / _cell_size
+	var ix: int = int(floor(fx))
+	var iz: int = int(floor(fz))
+	var inside: bool = ix >= 0 and iz >= 0 and ix < n and iz < n
+	return {"inside": inside, "cell": Vector2i(ix, iz)}
+
 func _open_classifier_sample_cell_score(x: int, z: int) -> float:
 	if _wall_open_cell_score.is_empty():
 		return 0.0
@@ -2556,17 +2565,33 @@ func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
 	if not wall_decor_open_side_use_cell_classifier or _wall_open_cell_score.is_empty():
 		return {"valid": false, "open_f": 0.0, "open_b": 0.0, "is_open_f": false, "is_open_b": false, "is_solid_f": false, "is_solid_b": false}
 
-	var probe: float = maxf(_cell_size * wall_decor_surface_probe_radius_cells, wall_decor_open_side_epsilon + 0.001)
-	var p_f := face.center + dir * probe
-	var p_b := face.center - dir * probe
-	var c_f := _world_to_cell_clamped(p_f.x, p_f.z)
-	var c_b := _world_to_cell_clamped(p_b.x, p_b.z)
-	var open_f := _open_classifier_sample_cell_score(c_f.x, c_f.y)
-	var open_b := _open_classifier_sample_cell_score(c_b.x, c_b.y)
-	var is_open_f := _open_classifier_sample_cell_is_open(c_f.x, c_f.y)
-	var is_open_b := _open_classifier_sample_cell_is_open(c_b.x, c_b.y)
-	var is_solid_f := _open_classifier_sample_cell_is_solid(c_f.x, c_f.y)
-	var is_solid_b := _open_classifier_sample_cell_is_solid(c_b.x, c_b.y)
+	var sample_offset: float = maxf(_cell_size * 0.15, wall_decor_open_side_epsilon + 0.001)
+	var p_f := face.center + dir * sample_offset
+	var p_b := face.center - dir * sample_offset
+
+	var m_f := _world_to_cell_if_inside(p_f.x, p_f.z)
+	var m_b := _world_to_cell_if_inside(p_b.x, p_b.z)
+	var inside_f: bool = bool(m_f.get("inside", false))
+	var inside_b: bool = bool(m_b.get("inside", false))
+	var c_f: Vector2i = m_f.get("cell", Vector2i.ZERO)
+	var c_b: Vector2i = m_b.get("cell", Vector2i.ZERO)
+
+	var is_open_f: bool = true
+	var is_open_b: bool = true
+	var is_solid_f: bool = false
+	var is_solid_b: bool = false
+	var open_f: float = 1.0
+	var open_b: float = 1.0
+
+	if inside_f:
+		is_open_f = _open_classifier_sample_cell_is_open(c_f.x, c_f.y)
+		is_solid_f = _open_classifier_sample_cell_is_solid(c_f.x, c_f.y)
+		open_f = _open_classifier_sample_cell_score(c_f.x, c_f.y)
+	if inside_b:
+		is_open_b = _open_classifier_sample_cell_is_open(c_b.x, c_b.y)
+		is_solid_b = _open_classifier_sample_cell_is_solid(c_b.x, c_b.y)
+		open_b = _open_classifier_sample_cell_score(c_b.x, c_b.y)
+
 	return {
 		"valid": true,
 		"open_f": open_f,
@@ -2575,6 +2600,8 @@ func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
 		"is_open_b": is_open_b,
 		"is_solid_f": is_solid_f,
 		"is_solid_b": is_solid_b,
+		"inside_f": inside_f,
+		"inside_b": inside_b,
 		"c_f": c_f,
 		"c_b": c_b,
 	}
@@ -2768,16 +2795,8 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	if bool(cls.get("valid", false)):
 		var is_open_f: bool = bool(cls.get("is_open_f", false))
 		var is_open_b: bool = bool(cls.get("is_open_b", false))
-		var is_solid_f: bool = bool(cls.get("is_solid_f", false))
-		var is_solid_b: bool = bool(cls.get("is_solid_b", false))
-		if is_open_f and not is_open_b:
-			return n
-		if is_open_b and not is_open_f:
-			return -n
-		if is_solid_f and not is_solid_b:
-			return -n
-		if is_solid_b and not is_solid_f:
-			return n
+		if is_open_f != is_open_b:
+			return n if is_open_f else -n
 		var open_f: float = float(cls.get("open_f", 0.0))
 		var open_b: float = float(cls.get("open_b", 0.0))
 		if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
@@ -2962,20 +2981,9 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 				if bool(cls.get("valid", false)):
 					var is_open_f: bool = bool(cls.get("is_open_f", false))
 					var is_open_b: bool = bool(cls.get("is_open_b", false))
-					var is_solid_f: bool = bool(cls.get("is_solid_f", false))
-					var is_solid_b: bool = bool(cls.get("is_solid_b", false))
-					if is_open_f and not is_open_b:
-						n = dir
-						chosen = "FWD_CLASS_OPEN"
-					elif is_open_b and not is_open_f:
-						n = -dir
-						chosen = "BACK_CLASS_OPEN"
-					elif is_solid_f and not is_solid_b:
-						n = -dir
-						chosen = "BACK_CLASS_SOLID"
-					elif is_solid_b and not is_solid_f:
-						n = dir
-						chosen = "FWD_CLASS_SOLID"
+					if is_open_f != is_open_b:
+						n = dir if is_open_f else -dir
+						chosen = "FWD_CLASS_OPEN" if is_open_f else "BACK_CLASS_OPEN"
 					else:
 						var c_open_f: float = float(cls.get("open_f", 0.0))
 						var c_open_b: float = float(cls.get("open_b", 0.0))
@@ -3489,16 +3497,8 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 			if bool(cls.get("valid", false)):
 				var is_open_f: bool = bool(cls.get("is_open_f", false))
 				var is_open_b: bool = bool(cls.get("is_open_b", false))
-				var is_solid_f: bool = bool(cls.get("is_solid_f", false))
-				var is_solid_b: bool = bool(cls.get("is_solid_b", false))
-				if is_open_f and not is_open_b:
-					outward = outward
-				elif is_open_b and not is_open_f:
-					outward = -outward
-				elif is_solid_f and not is_solid_b:
-					outward = -outward
-				elif is_solid_b and not is_solid_f:
-					outward = outward
+				if is_open_f != is_open_b:
+					outward = outward if is_open_f else -outward
 				else:
 					var open_f: float = float(cls.get("open_f", 0.0))
 					var open_b: float = float(cls.get("open_b", 0.0))
