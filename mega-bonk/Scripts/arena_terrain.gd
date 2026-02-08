@@ -2839,6 +2839,15 @@ func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
 func _safe_dim(x: float) -> float:
 	return maxf(0.0001, absf(x))
 
+func _deterministic_geometric_outward(center: Vector3, n: Vector3) -> Vector3:
+	var side: float = float(max(2, cells_per_side)) * _cell_size
+	var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
+	var to_center := map_center - center
+	to_center.y = 0.0
+	if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
+		return -n
+	return n
+
 func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var n := face.normal
 	n.y = 0.0
@@ -2850,16 +2859,28 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var center := face.center
 	var cls := _classify_face_open_score(face, n)
 	if bool(cls.get("valid", false)):
+		var inside_f: bool = bool(cls.get("inside_f", false))
+		var inside_b: bool = bool(cls.get("inside_b", false))
 		var is_open_f: bool = bool(cls.get("is_open_f", false))
 		var is_open_b: bool = bool(cls.get("is_open_b", false))
+		var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+		var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+		# Primary rule: out-of-grid side is open and wins.
 		if is_open_f != is_open_b:
 			return n if is_open_f else -n
-		var open_f: float = float(cls.get("open_f", 0.0))
-		var open_b: float = float(cls.get("open_b", 0.0))
-		if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
-			return n
-		if open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
-			return -n
+		# When both sides are inside grid, prefer open-side over solid-side.
+		if inside_f and inside_b:
+			if is_solid_f != is_solid_b:
+				return -n if is_solid_f else n
+			var open_f: float = float(cls.get("open_f", 0.0))
+			var open_b: float = float(cls.get("open_b", 0.0))
+			if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
+				return n
+			if open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
+				return -n
+			return _deterministic_geometric_outward(center, n)
+		# If classifier is valid but ambiguous (e.g. both outside/open), use deterministic geometric fallback.
+		return _deterministic_geometric_outward(center, n)
 
 	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
 	if wall_decor_open_side_use_raycast:
@@ -2883,13 +2904,7 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	# If essentially equal, prefer pointing away from arena center (stable tie-break)
 	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
-		var side: float = float(max(2, cells_per_side)) * _cell_size
-		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
-		var to_center := map_center - center
-		to_center.y = 0.0
-		if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
-			return -n
-		return n
+		return _deterministic_geometric_outward(center, n)
 
 	return n if h_plus < h_minus else -n
 
@@ -3036,12 +3051,19 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			else:
 				var cls := _classify_face_open_score(WallFace.new(aa, bb, cc, dd, center, n, 0.0, 0.0, false, 0), dir)
 				if bool(cls.get("valid", false)):
+					var inside_f: bool = bool(cls.get("inside_f", false))
+					var inside_b: bool = bool(cls.get("inside_b", false))
 					var is_open_f: bool = bool(cls.get("is_open_f", false))
 					var is_open_b: bool = bool(cls.get("is_open_b", false))
+					var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+					var is_solid_b: bool = bool(cls.get("is_solid_b", false))
 					if is_open_f != is_open_b:
 						n = dir if is_open_f else -dir
 						chosen = "FWD_CLASS_OPEN" if is_open_f else "BACK_CLASS_OPEN"
-					else:
+					elif inside_f and inside_b and is_solid_f != is_solid_b:
+						n = -dir if is_solid_f else dir
+						chosen = "BACK_CLASS_SOLID" if is_solid_f else "FWD_CLASS_SOLID"
+					elif inside_f and inside_b:
 						var c_open_f: float = float(cls.get("open_f", 0.0))
 						var c_open_b: float = float(cls.get("open_b", 0.0))
 						if c_open_f > c_open_b + wall_decor_open_side_classifier_tie_epsilon:
@@ -3051,7 +3073,11 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 							n = -dir
 							chosen = "BACK_CLASS"
 						else:
-							chosen = "TIE"
+							n = _deterministic_geometric_outward(center, dir)
+							chosen = "GEOM_FALLBACK"
+					else:
+						n = _deterministic_geometric_outward(center, dir)
+						chosen = "GEOM_FALLBACK"
 				else:
 					chosen = "TIE"
 
@@ -3563,11 +3589,17 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 		else:
 			var cls := _classify_face_open_score(face, outward)
 			if bool(cls.get("valid", false)):
+				var inside_f: bool = bool(cls.get("inside_f", false))
+				var inside_b: bool = bool(cls.get("inside_b", false))
 				var is_open_f: bool = bool(cls.get("is_open_f", false))
 				var is_open_b: bool = bool(cls.get("is_open_b", false))
+				var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+				var is_solid_b: bool = bool(cls.get("is_solid_b", false))
 				if is_open_f != is_open_b:
 					outward = outward if is_open_f else -outward
-				else:
+				elif inside_f and inside_b and is_solid_f != is_solid_b:
+					outward = -outward if is_solid_f else outward
+				elif inside_f and inside_b:
 					var open_f: float = float(cls.get("open_f", 0.0))
 					var open_b: float = float(cls.get("open_b", 0.0))
 					if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
@@ -3575,7 +3607,9 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 					elif open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
 						outward = -outward
 					else:
-						outward = _pick_open_side_outward(face)
+						outward = _deterministic_geometric_outward(face.center, outward)
+				else:
+					outward = _deterministic_geometric_outward(face.center, outward)
 			else:
 				outward = _pick_open_side_outward(face)
 	return outward
