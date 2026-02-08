@@ -129,8 +129,10 @@ class_name ArenaBlockyTerrain
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
 @export var wall_decor_open_side_use_cell_classifier: bool = true
 @export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_probe_cells: float = 0.45
-@export var wall_decor_open_side_classifier_y_offset: float = 0.5
+@export var wall_decor_open_side_classifier_y_offset: float = 0.5 # legacy; prefer explicit walk/mid offsets below
 @export_range(0.0, 1.0, 0.01) var wall_decor_open_side_classifier_tie_epsilon: float = 0.08
+@export_range(0.01, 0.5, 0.01) var wall_decor_open_side_classifier_walk_y_offset_cells: float = 0.08
+@export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_mid_y_offset_cells: float = 0.35
 @export_range(0.05, 1.0, 0.05) var wall_decor_open_side_classifier_walk_offset_cells: float = 0.15
 @export_range(0.1, 1.5, 0.05) var wall_decor_open_side_classifier_mid_offset_cells: float = 0.5
 @export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ground_max_down_cells: float = 1.1
@@ -2576,9 +2578,10 @@ func _cell_classifier_rebuild() -> void:
 			var top_y := maxf(maxf(c.x, c.y), maxf(c.z, c.w))
 			var walk_offset: float = maxf(wall_decor_open_side_classifier_walk_offset_cells * _cell_size, 0.001)
 			var mid_offset: float = maxf(wall_decor_open_side_classifier_mid_offset_cells * _cell_size, walk_offset)
-			var base_offset := maxf(0.0, wall_decor_open_side_classifier_y_offset)
-			var cy_walk := top_y + base_offset + walk_offset
-			var cy_mid := top_y + base_offset + mid_offset
+			var walk_y_offset: float = maxf(wall_decor_open_side_classifier_walk_y_offset_cells * _cell_size, 0.001)
+			var mid_y_offset: float = maxf(wall_decor_open_side_classifier_mid_y_offset_cells * _cell_size, walk_y_offset)
+			var cy_walk := top_y + walk_y_offset
+			var cy_mid := top_y + mid_y_offset
 			var probe_walk := Vector3(cx, cy_walk, cz)
 			var probe_mid := Vector3(cx, cy_mid, cz)
 			var idx := _open_classifier_idx(x, z)
