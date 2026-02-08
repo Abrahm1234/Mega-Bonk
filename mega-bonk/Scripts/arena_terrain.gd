@@ -2463,16 +2463,20 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 	}
 
 func _wall_decor_open_side_effective_raycast_mask() -> int:
-	if wall_decor_open_side_raycast_mask != -1 and wall_decor_open_side_raycast_mask != 0xFFFF_FFFF:
+	# Exported @export_flags_3d_physics values are already bitmasks.
+	# Use the configured mask directly when non-zero (including -1 / all bits).
+	if wall_decor_open_side_raycast_mask != 0:
 		return wall_decor_open_side_raycast_mask
 
+	# Optional auto fallback only when configured mask is 0.
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body is CollisionObject3D:
 		var terrain_collision := terrain_body as CollisionObject3D
 		if terrain_collision.collision_layer != 0:
 			return terrain_collision.collision_layer
 
-	return wall_decor_open_side_raycast_mask
+	# Final safety fallback.
+	return 1
 
 func _open_classifier_idx(x: int, z: int) -> int:
 	return z * cells_per_side + x
