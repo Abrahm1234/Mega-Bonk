@@ -2951,6 +2951,17 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 
 	return [rect_face, wedge_face]
 
+func _decor_global_aabb(pad: float = 2.0) -> AABB:
+	var n := _grid_size
+	var side := float(n) * _cell_size
+	var half := side * 0.5
+	var y0 := outer_floor_height
+	var y1 := box_height
+	return AABB(
+		Vector3(-half - pad, y0 - pad, -half - pad),
+		Vector3(side + pad * 2.0, (y1 - y0) + pad * 2.0, side + pad * 2.0)
+	)
+
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
 	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
@@ -2984,6 +2995,7 @@ func _rebuild_wall_decor() -> void:
 
 	var rect_variant_count: int = wall_decor_meshes.size()
 	var wedge_variant_count: int = wall_wedge_decor_meshes.size()
+	var decor_aabb := _decor_global_aabb(4.0)
 
 	var rect_counts: Array[int] = []
 	rect_counts.resize(rect_variant_count)
@@ -3074,6 +3086,7 @@ func _rebuild_wall_decor() -> void:
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		mmi.multimesh = mm
+		mmi.custom_aabb = decor_aabb
 
 		_wall_decor_root.add_child(mmi)
 		rect_mmi_by_variant[v] = mmi
@@ -3097,6 +3110,7 @@ func _rebuild_wall_decor() -> void:
 
 		var wmmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		wmmi.multimesh = wmm
+		wmmi.custom_aabb = decor_aabb
 
 		_wall_decor_root.add_child(wmmi)
 		wedge_mmi_by_variant[wv] = wmmi
@@ -3214,6 +3228,21 @@ func _rebuild_wall_decor() -> void:
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
 			wedge_write_i[wsel] = wwi + 1
+
+
+	if has_rect_decor:
+		for v3: int in range(rect_variant_count):
+			var rect_mmi: MultiMeshInstance3D = rect_mmi_by_variant[v3]
+			if rect_mmi == null:
+				continue
+			rect_mmi.multimesh.visible_instance_count = rect_write_i[v3]
+
+	if has_wedge_decor:
+		for wv3: int in range(wedge_variant_count):
+			var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_variant[wv3]
+			if wedge_mmi == null:
+				continue
+			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
