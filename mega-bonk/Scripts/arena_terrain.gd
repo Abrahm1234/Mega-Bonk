@@ -315,6 +315,11 @@ func _wall_face_min_world_y(f: WallFace) -> float:
 func _wall_face_max_world_y(f: WallFace) -> float:
 	return max(max(f.a.y, f.b.y), max(f.c.y, f.d.y))
 
+func _wall_spawn_y_out_of_bounds(face: WallFace, spawn_y: float, margin: float) -> bool:
+	var min_y := _wall_face_min_world_y(face)
+	var max_y := _wall_face_max_world_y(face)
+	return spawn_y < (min_y - margin) or spawn_y > (max_y + margin)
+
 class FloorFace extends RefCounted:
 	var a: Vector3
 	var b: Vector3
@@ -3381,6 +3386,10 @@ func _rebuild_wall_decor() -> void:
 
 			var aabb: AABB = rect_aabb_by_variant[vsel]
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+			var spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
+			if _wall_spawn_y_out_of_bounds(f2, xf.origin.y, spawn_margin):
+				_wd_fi(placement_fi, "SKIP SPAWN_Y_OOB fi=%d spawn_y=%.3f min=%.3f max=%.3f margin=%.3f" % [placement_fi, xf.origin.y, _wall_face_min_world_y(f2), _wall_face_max_world_y(f2), spawn_margin])
+				continue
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
@@ -3447,6 +3456,9 @@ func _rebuild_wall_decor() -> void:
 
 			var waabb: AABB = wedge_aabb_by_variant[wsel]
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
+			var wedge_spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
+			if _wall_spawn_y_out_of_bounds(wf2, wxf.origin.y, wedge_spawn_margin):
+				continue
 
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
