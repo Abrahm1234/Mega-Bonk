@@ -357,6 +357,10 @@ func _wall_face_max_world_y(f: WallFace) -> float:
 func _wall_spawn_y_out_of_bounds(face: WallFace, spawn_y: float, margin: float) -> bool:
 	var min_y := _wall_face_min_world_y(face)
 	var max_y := _wall_face_max_world_y(face)
+	var global_min_y := outer_floor_height + margin
+	var global_max_y := box_height - margin
+	if spawn_y < global_min_y or spawn_y > global_max_y:
+		return true
 	return spawn_y < (min_y - margin) or spawn_y > (max_y + margin)
 
 class FloorFace extends RefCounted:
@@ -3455,7 +3459,7 @@ func _rebuild_wall_decor() -> void:
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
 			var spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
 			if _wall_spawn_y_out_of_bounds(f2, xf.origin.y, spawn_margin):
-				_wd_fi(placement_fi, "SKIP SPAWN_Y_OOB fi=%d spawn_y=%.3f min=%.3f max=%.3f margin=%.3f" % [placement_fi, xf.origin.y, _wall_face_min_world_y(f2), _wall_face_max_world_y(f2), spawn_margin])
+				_wd_fi(placement_fi, "SKIP SPAWN_Y_OOB fi=%d spawn_y=%.3f face_min=%.3f face_max=%.3f global_min=%.3f global_max=%.3f margin=%.3f" % [placement_fi, xf.origin.y, _wall_face_min_world_y(f2), _wall_face_max_world_y(f2), outer_floor_height + spawn_margin, box_height - spawn_margin, spawn_margin])
 				continue
 			var outward := _wall_place_outward(f2)
 			_wd_open_side_face_decision(placement_fi, f2, outward)
