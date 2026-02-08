@@ -2459,15 +2459,18 @@ func _open_classifier_sample_cell_is_solid(x: int, z: int) -> bool:
 		return false
 	return _wall_open_cell_is_solid[_open_classifier_idx(x, z)] != 0
 
-func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
-	var space := get_world_3d().direct_space_state
+func _make_wall_open_ray_query(from: Vector3, to: Vector3) -> PhysicsRayQueryParameters3D:
 	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
+	q.hit_back_faces = true
+	q.hit_from_inside = true
 	q.collide_with_bodies = true
 	q.collide_with_areas = false
-	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-	q.hit_from_inside = true
-	q.hit_back_faces = true
-	var hit := space.intersect_ray(q)
+	return q
+
+func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
+	var space := get_world_3d().direct_space_state
+	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
 	if hit.is_empty():
 		return INF
 	var hp = hit.get("position", from)
@@ -2574,13 +2577,7 @@ func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collide_with_bodies = true
-	q.collide_with_areas = false
-	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-	q.hit_from_inside = true
-	q.hit_back_faces = true
-	var hit := space.intersect_ray(q)
+	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
 	return hit.is_empty()
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
@@ -3199,14 +3196,7 @@ func _rebuild_wall_decor() -> void:
 		var ss := get_world_3d().direct_space_state
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-		q.collide_with_bodies = true
-		q.collide_with_areas = false
-		q.hit_back_faces = true
-		q.hit_from_inside = true
-
-		var hit := ss.intersect_ray(q)
+		var hit := ss.intersect_ray(_make_wall_open_ray_query(a, b))
 		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
