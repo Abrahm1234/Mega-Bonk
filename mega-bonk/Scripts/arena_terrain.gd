@@ -157,13 +157,15 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_seed: int = 1337
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
-@export var wall_wedge_decor_max_scale: float = 2.5
+@export var wall_wedge_decor_max_scale: float = 0.0 # 0 = unlimited (recommended if meshes are authored at unit size)
 @export var wall_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 @export var wall_wedge_decor_min_world_y: float = -INF
 @export var wall_wedge_decor_flip_outward: bool = true
 @export var wall_wedge_decor_flip_facing: bool = false
+@export var wall_wedge_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
+@export var wall_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
 @export var wall_decor_min_world_y: float = -INF
 @export var enable_floor_decor: bool = true
 @export var floor_decor_meshes: Array[Mesh] = []
@@ -173,7 +175,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
-@export var floor_decor_mesh_normal_axis: int = -1
+@export var floor_decor_mesh_normal_axis: int = -1 # 0=X, 1=Y, 2=Z (set -1 for auto)
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
@@ -225,8 +227,8 @@ func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
 		return
 
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var fx := (p.x - _ox) / _cell_size
 	var fz := (p.z - _oz) / _cell_size
 
@@ -2268,12 +2270,12 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	var n: int = max(2, cells_per_side)
 	var fx: float = (world_x - _ox) / _cell_size
 	var fz: float = (world_z - _oz) / _cell_size
-	if fx < 0.0 or fx > float(n - 1) or fz < 0.0 or fz > float(n - 1):
-		return -INF
-	var ix: int = clampi(int(floor(fx)), 0, n - 2)
-	var iz: int = clampi(int(floor(fz)), 0, n - 2)
-	var tx: float = fx - float(ix)
-	var tz: float = fz - float(iz)
+	if fx < 0.0 or fx > float(n) or fz < 0.0 or fz > float(n):
+		return _NEG_INF
+	var ix: int = clampi(int(floor(fx)), 0, n - 1)
+	var iz: int = clampi(int(floor(fz)), 0, n - 1)
+	var tx: float = clampf(fx - float(ix), 0.0, 1.0)
+	var tz: float = clampf(fz - float(iz), 0.0, 1.0)
 
 	var corners: Vector4 = _cell_corners(ix, iz)
 	var y0: float = lerpf(corners.x, corners.y, tx)
@@ -2282,22 +2284,22 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 
 func _xz_in_bounds(x: float, z: float) -> bool:
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var eps := 1e-3
 	return (x >= _ox - eps and x <= max_x + eps and z >= _oz - eps and z <= max_z + eps)
 
 func _sample_surface_y_open(x: float, z: float) -> float:
 	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n - 1)
-	var max_z := _oz + _cell_size * float(n - 1)
+	var max_x := _ox + _cell_size * float(n)
+	var max_z := _oz + _cell_size * float(n)
 	var eps := 1e-3
 
 	# Truly outside: return invalid
 	if x < _ox - eps or x > max_x + eps or z < _oz - eps or z > max_z + eps:
 		return _NEG_INF
 
-	# Inside (or tiny float overshoot): clamp to keep fx/fz <= n-1
+	# Inside (or tiny float overshoot): clamp to full mesh bounds
 	var cx := clampf(x, _ox, max_x)
 	var cz := clampf(z, _oz, max_z)
 	return _sample_surface_y(cx, cz)
@@ -2394,12 +2396,24 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 		"probe": probe, "margin": margin
 	}
 
+func _wall_decor_open_side_effective_raycast_mask() -> int:
+	if wall_decor_open_side_raycast_mask != -1 and wall_decor_open_side_raycast_mask != 0xFFFF_FFFF:
+		return wall_decor_open_side_raycast_mask
+
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		if terrain_collision.collision_layer != 0:
+			return terrain_collision.collision_layer
+
+	return wall_decor_open_side_raycast_mask
+
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.collide_with_bodies = true
 	q.collide_with_areas = false
-	q.collision_mask = wall_decor_open_side_raycast_mask
+	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
 	q.hit_from_inside = true
 	q.hit_back_faces = true
 	var hit := space.intersect_ray(q)
@@ -2601,14 +2615,14 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var h_minus := _sample_top_surface_y_wide(p_minus.x, p_minus.z, -n, true)
 
 	# If one side has no surface at all, treat it as open
-	if h_plus == -INF and h_minus != -INF:
+	if h_plus <= _NEG_INF * 0.5 and h_minus > _NEG_INF * 0.5:
 		return n
-	if h_minus == -INF and h_plus != -INF:
+	if h_minus <= _NEG_INF * 0.5 and h_plus > _NEG_INF * 0.5:
 		return -n
 
 	# If essentially equal, prefer pointing away from arena center (stable tie-break)
 	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
-		var side: float = float(max(2, cells_per_side) - 1) * _cell_size
+		var side: float = float(max(2, cells_per_side)) * _cell_size
 		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
 		var to_center := map_center - center
 		to_center.y = 0.0
@@ -2770,7 +2784,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 						var to_f := f_from + dir * probe
 						var to_b := b_from - dir * probe
 						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), wall_decor_open_side_raycast_mask, extra])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask(), extra])
 
 				if open_f and not open_b:
 					n = dir
@@ -2939,6 +2953,17 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 
 	return [rect_face, wedge_face]
 
+func _decor_global_aabb(pad: float = 2.0) -> AABB:
+	var n: int = max(2, cells_per_side)
+	var side := float(n) * _cell_size
+	var half := side * 0.5
+	var y0 := outer_floor_height
+	var y1 := box_height
+	return AABB(
+		Vector3(-half - pad, y0 - pad, -half - pad),
+		Vector3(side + pad * 2.0, (y1 - y0) + pad * 2.0, side + pad * 2.0)
+	)
+
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
 	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
@@ -2958,20 +2983,21 @@ func _rebuild_wall_decor() -> void:
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
 		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = wall_decor_open_side_raycast_mask
+		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
 		q.collide_with_bodies = true
 		q.collide_with_areas = false
 		q.hit_back_faces = true
 		q.hit_from_inside = true
 
 		var hit := ss.intersect_ray(q)
-		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [wall_decor_open_side_raycast_mask, str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
+		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
 		child.queue_free()
 
 	var rect_variant_count: int = wall_decor_meshes.size()
 	var wedge_variant_count: int = wall_wedge_decor_meshes.size()
+	var decor_aabb := _decor_global_aabb(4.0)
 
 	var rect_counts: Array[int] = []
 	rect_counts.resize(rect_variant_count)
@@ -3027,11 +3053,17 @@ func _rebuild_wall_decor() -> void:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
 			if wall_decor_surface_only:
-				var wtop_y: float = maxf(maxf(wf.a.y, wf.b.y), maxf(wf.c.y, wf.d.y))
-				var wdir_h := _wall_place_outward(wf)
-				wdir_h.y = 0.0
-				var wcov := _wall_face_covered_both_sides(wf.center, wtop_y, wdir_h)
-				if wcov["covered"]:
+				var top_y := _wall_face_max_world_y(wf)
+				var outward := _wall_place_outward(wf)
+
+				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var p_side := wf.center + outward * (eps + 0.001)
+
+				var h_side := _wd_surface_only_ceiling_y_at(p_side)
+				var h_center := _wd_surface_only_ceiling_y_at(wf.center)
+				var h_ceiling := maxf(h_side, h_center)
+
+				if h_ceiling > top_y + wall_decor_surface_margin:
 					continue
 			if not _allow_wedge_decor_face(wf):
 				continue
@@ -3056,6 +3088,7 @@ func _rebuild_wall_decor() -> void:
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		mmi.multimesh = mm
+		mmi.custom_aabb = decor_aabb
 
 		_wall_decor_root.add_child(mmi)
 		rect_mmi_by_variant[v] = mmi
@@ -3079,6 +3112,7 @@ func _rebuild_wall_decor() -> void:
 
 		var wmmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		wmmi.multimesh = wmm
+		wmmi.custom_aabb = decor_aabb
 
 		_wall_decor_root.add_child(wmmi)
 		wedge_mmi_by_variant[wv] = wmmi
@@ -3171,13 +3205,17 @@ func _rebuild_wall_decor() -> void:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
 			if wall_decor_surface_only:
-				var wtop_y2: float = maxf(maxf(wf2.a.y, wf2.b.y), maxf(wf2.c.y, wf2.d.y))
-				var wdir_h2 := _wall_place_outward(wf2)
-				wdir_h2.y = 0.0
-				var wcov2 := _wall_face_covered_both_sides(wf2.center, wtop_y2, wdir_h2)
-				if wcov2["covered"]:
-					if wall_decor_debug_dump_under_surface:
-						_wd("SKIP WEDGE_COVERED_BOTH top=%.3f h_f=%.3f h_b=%.3f center=%s n=%s" % [wtop_y2, float(wcov2["h_f"]), float(wcov2["h_b"]), _fmt_v3(wf2.center), _fmt_v3(wf2.normal)])
+				var top_y := _wall_face_max_world_y(wf2)
+				var outward := _wall_place_outward(wf2)
+
+				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var p_side := wf2.center + outward * (eps + 0.001)
+
+				var h_side := _wd_surface_only_ceiling_y_at(p_side)
+				var h_center := _wd_surface_only_ceiling_y_at(wf2.center)
+				var h_ceiling := maxf(h_side, h_center)
+
+				if h_ceiling > top_y + wall_decor_surface_margin:
 					continue
 			if not _allow_wedge_decor_face(wf2):
 				continue
@@ -3192,6 +3230,21 @@ func _rebuild_wall_decor() -> void:
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
 			wedge_write_i[wsel] = wwi + 1
+
+
+	if has_rect_decor:
+		for v3: int in range(rect_variant_count):
+			var rect_mmi: MultiMeshInstance3D = rect_mmi_by_variant[v3]
+			if rect_mmi == null:
+				continue
+			rect_mmi.multimesh.visible_instance_count = rect_write_i[v3]
+
+	if has_wedge_decor:
+		for wv3: int in range(wedge_variant_count):
+			var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_variant[wv3]
+			if wedge_mmi == null:
+				continue
+			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
@@ -3232,7 +3285,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 	var rot: Basis = _basis_from_outward(fwd_dir)
 
-	var attach_far: bool = wall_decor_flip_outward
+	var attach_far: bool = wall_decor_attach_far_side
 	if wall_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
@@ -3284,7 +3337,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 
 	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
 
-	var attach_far: bool = wall_wedge_decor_flip_outward
+	var attach_far: bool = wall_wedge_decor_attach_far_side
 	if wall_wedge_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
@@ -3389,6 +3442,10 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 			else:
 				axis_thin = 1
 
+	# Optional override: which mesh axis represents the mesh normal.
+	# Useful for Blender-authored planes where normal is +Z.
+	if floor_decor_mesh_normal_axis >= 0 and floor_decor_mesh_normal_axis <= 2:
+		axis_thin = floor_decor_mesh_normal_axis
 	var normal_axis: int = axis_thin
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
 	var axis0: int = plane_axes[0]
@@ -3439,7 +3496,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	# Ensure right-handed basis
 	if local_basis.determinant() < 0.0:
 		cols[depth_axis] = -cols[depth_axis]
-		basis = Basis(cols[0], cols[1], cols[2])
+		local_basis = Basis(cols[0], cols[1], cols[2])
 
 	# Determine which side should sit on the surface.
 	# If mesh +normal points with face normal, use the mesh min cap; otherwise use the max cap.
@@ -3576,7 +3633,7 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
 	scale_vec[normal_axis] = 1.0
-	var basis_scaled := basis
+	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
 	basis_scaled.z = basis_scaled.z * scale_vec.z
