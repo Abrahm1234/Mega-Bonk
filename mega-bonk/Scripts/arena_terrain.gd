@@ -3094,36 +3094,16 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					n = -dir
 					chosen = "BACK"
 				else:
-					# Raycast tie (both open or both blocked): fallback to height sampling.
-					var h_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
-					var h_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
-					open_sy_f = h_f
-					open_sy_b = h_b
-					n = dir if h_f < h_b else -dir
-					chosen = "FWD" if h_f < h_b else "BACK"
+					# Raycast tie (both open or both blocked): deterministic XZ fallback only.
+					n = _deterministic_geometric_outward(center, dir)
+					chosen = "GEOM_FALLBACK"
 					if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-						_wd("OPEN_RAY_FALLBACK fi=%d h_f=%.3f h_b=%.3f chosen=%s" % [fi, h_f, h_b, chosen])
+						_wd("OPEN_RAY_GEOM fi=%d chosen=%s n=%s" % [fi, chosen, _fmt_v3(n)])
 			elif chosen == "TIE":
-				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
-				var sy_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
-				open_sy_f = sy_f
-				open_sy_b = sy_b
-
-				# Open side tends to have LOWER surface height (or -INF out of bounds).
-				if sy_f < sy_b - 0.001:
-					n = dir
-					chosen = "FWD"
-				elif sy_b < sy_f - 0.001:
-					n = -dir
-					chosen = "BACK"
-				else:
-					# Tie-break: choose the direction that points away from map center in XZ.
-					var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
-					n = dir if away else -dir
-					chosen = "FWD" if away else "BACK"
-
+				n = _deterministic_geometric_outward(center, dir)
+				chosen = "GEOM_FALLBACK"
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
+					_wd("OPEN_GEOM fi=%d dir=%s probe=%.3f chosen=%s n=%s" % [fi, _fmt_v3(dir), probe, chosen, _fmt_v3(n)])
 	# ---- END NEW ----
 
 	if wall_decor_surface_only:
