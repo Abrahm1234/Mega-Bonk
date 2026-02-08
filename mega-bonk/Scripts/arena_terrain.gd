@@ -258,6 +258,43 @@ func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
 
+func _fmt_v2i(v: Vector2i) -> String:
+	return "(%d, %d)" % [v.x, v.y]
+
+func _wd_open_side_face_decision(fi: int, face: WallFace, chosen_outward: Vector3) -> void:
+	if not wall_decor_debug_open_side:
+		return
+	var dir := Vector3(face.normal.x, 0.0, face.normal.z)
+	if dir.length_squared() < 1e-8:
+		dir = chosen_outward
+		dir.y = 0.0
+	if dir.length_squared() < 1e-8:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+	var sample_offset: float = maxf(_cell_size * 0.15, wall_decor_open_side_epsilon + 0.001)
+	var p_a := face.center + dir * sample_offset
+	var p_b := face.center - dir * sample_offset
+	var cls := _classify_face_open_score(face, dir)
+	var c_a: Vector2i = cls.get("c_f", Vector2i.ZERO)
+	var c_b: Vector2i = cls.get("c_b", Vector2i.ZERO)
+	var open_a: bool = bool(cls.get("is_open_f", false))
+	var open_b: bool = bool(cls.get("is_open_b", false))
+	_wd_fi(fi,
+		"OPEN_CLASS fi=%d center=%s normal=%s pA=%s cellA=%s openA=%s pB=%s cellB=%s openB=%s chosen=%s" % [
+			fi,
+			_fmt_v3(face.center),
+			_fmt_v3(face.normal),
+			_fmt_v3(p_a),
+			_fmt_v2i(c_a),
+			str(open_a),
+			_fmt_v3(p_b),
+			_fmt_v2i(c_b),
+			str(open_b),
+			_fmt_v3(chosen_outward)
+		]
+	)
+
 func _face_min_y(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> float:
 	return minf(minf(a.y, b.y), minf(c.y, d.y))
 
@@ -3391,6 +3428,7 @@ func _rebuild_wall_decor() -> void:
 				_wd_fi(placement_fi, "SKIP SPAWN_Y_OOB fi=%d spawn_y=%.3f min=%.3f max=%.3f margin=%.3f" % [placement_fi, xf.origin.y, _wall_face_min_world_y(f2), _wall_face_max_world_y(f2), spawn_margin])
 				continue
 			var outward := _wall_place_outward(f2)
+			_wd_open_side_face_decision(placement_fi, f2, outward)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
 			var under_now: bool = cov_p["covered"]
@@ -3430,7 +3468,9 @@ func _rebuild_wall_decor() -> void:
 			rect_write_i[vsel] = wi + 1
 
 	if has_wedge_decor:
+		var wedge_fi: int = 0
 		for wf2: WallFace in wedge_faces:
+			wedge_fi += 1
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
@@ -3456,6 +3496,7 @@ func _rebuild_wall_decor() -> void:
 
 			var waabb: AABB = wedge_aabb_by_variant[wsel]
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
+			_wd_open_side_face_decision(wedge_fi, wf2, _wall_place_outward(wf2))
 			var wedge_spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
 			if _wall_spawn_y_out_of_bounds(wf2, wxf.origin.y, wedge_spawn_margin):
 				continue
