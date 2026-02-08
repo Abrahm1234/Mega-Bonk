@@ -2505,22 +2505,27 @@ func _cell_classifier_rebuild() -> void:
 	_wall_open_cell_is_solid.resize(count)
 	_wall_open_cell_is_solid.fill(0)
 
-	var probe_dist: float = maxf(_cell_size * wall_decor_open_side_classifier_probe_cells, wall_decor_open_side_epsilon + 0.001)
+	var lateral_dist: float = maxf(_cell_size * 0.6, wall_decor_open_side_epsilon + 0.001)
+	var vertical_dist: float = maxf((box_height - outer_floor_height) * 2.0, _cell_size)
 	var open_ground_max: float = _cell_size * wall_decor_open_side_classifier_open_ground_max_down_cells
 	var open_ceiling_min: float = _cell_size * wall_decor_open_side_classifier_open_ceiling_min_up_cells
 	var solid_lat_max: float = _cell_size * wall_decor_open_side_classifier_solid_lateral_hit_max_cells
 	var solid_down_max: float = _cell_size * wall_decor_open_side_classifier_solid_down_hit_max_cells
 	for z in range(n):
 		for x in range(n):
-			var center := _cell_center(x, z)
-			var probe_origin := Vector3(center.x, center.y + wall_decor_open_side_classifier_y_offset, center.z)
+			var cx := _ox + (float(x) + 0.5) * _cell_size
+			var cz := _oz + (float(z) + 0.5) * _cell_size
+			var c := _cell_corners(x, z)
+			var top_y := maxf(maxf(c.x, c.y), maxf(c.z, c.w))
+			var cy := top_y + maxf(0.001, wall_decor_open_side_classifier_y_offset)
+			var probe_origin := Vector3(cx, cy, cz)
 			var idx := _open_classifier_idx(x, z)
-			var d_up := _ray_hit_distance(probe_origin, probe_origin + Vector3.UP * probe_dist)
-			var d_dn := _ray_hit_distance(probe_origin, probe_origin + Vector3.DOWN * probe_dist)
-			var d_px := _ray_hit_distance(probe_origin, probe_origin + Vector3.RIGHT * probe_dist)
-			var d_nx := _ray_hit_distance(probe_origin, probe_origin + Vector3.LEFT * probe_dist)
-			var d_pz := _ray_hit_distance(probe_origin, probe_origin + Vector3.FORWARD * probe_dist)
-			var d_nz := _ray_hit_distance(probe_origin, probe_origin + Vector3.BACK * probe_dist)
+			var d_up := _ray_hit_distance(probe_origin, probe_origin + Vector3.UP * vertical_dist)
+			var d_dn := _ray_hit_distance(probe_origin, probe_origin + Vector3.DOWN * vertical_dist)
+			var d_px := _ray_hit_distance(probe_origin, probe_origin + Vector3.RIGHT * lateral_dist)
+			var d_nx := _ray_hit_distance(probe_origin, probe_origin + Vector3.LEFT * lateral_dist)
+			var d_pz := _ray_hit_distance(probe_origin, probe_origin + Vector3.FORWARD * lateral_dist)
+			var d_nz := _ray_hit_distance(probe_origin, probe_origin + Vector3.BACK * lateral_dist)
 			_wall_open_cell_up_dist[idx] = d_up
 			_wall_open_cell_down_dist[idx] = d_dn
 			_wall_open_cell_lat_px_dist[idx] = d_px
@@ -2529,12 +2534,12 @@ func _cell_classifier_rebuild() -> void:
 			_wall_open_cell_lat_nz_dist[idx] = d_nz
 
 			var open_hits := 0
-			open_hits += 1 if d_px >= probe_dist else 0
-			open_hits += 1 if d_nx >= probe_dist else 0
-			open_hits += 1 if d_pz >= probe_dist else 0
-			open_hits += 1 if d_nz >= probe_dist else 0
-			open_hits += 1 if d_up >= probe_dist else 0
-			open_hits += 1 if d_dn >= probe_dist else 0
+			open_hits += 1 if d_px >= lateral_dist else 0
+			open_hits += 1 if d_nx >= lateral_dist else 0
+			open_hits += 1 if d_pz >= lateral_dist else 0
+			open_hits += 1 if d_nz >= lateral_dist else 0
+			open_hits += 1 if d_up >= vertical_dist else 0
+			open_hits += 1 if d_dn >= vertical_dist else 0
 			_wall_open_cell_score[idx] = float(open_hits) / 6.0
 
 			var lateral_hits := 0
