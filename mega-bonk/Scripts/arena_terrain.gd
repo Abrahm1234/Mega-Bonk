@@ -131,6 +131,11 @@ class_name ArenaBlockyTerrain
 @export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_probe_cells: float = 0.45
 @export var wall_decor_open_side_classifier_y_offset: float = 0.5
 @export_range(0.0, 1.0, 0.01) var wall_decor_open_side_classifier_tie_epsilon: float = 0.08
+@export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ground_max_down_cells: float = 1.1
+@export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ceiling_min_up_cells: float = 0.7
+@export_range(0.1, 2.0, 0.05) var wall_decor_open_side_classifier_solid_lateral_hit_max_cells: float = 0.35
+@export_range(0.1, 2.0, 0.05) var wall_decor_open_side_classifier_solid_down_hit_max_cells: float = 0.35
+@export_range(1, 4, 1) var wall_decor_open_side_classifier_solid_lateral_hits_min: int = 2
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_debug_log: bool = false
 @export var wall_decor_debug_verbose: bool = false
@@ -211,6 +216,14 @@ var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
 var _wall_open_cell_score: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_up_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_down_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_px_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_nx_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_pz_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_nz_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_is_open: PackedByteArray = PackedByteArray()
+var _wall_open_cell_is_solid: PackedByteArray = PackedByteArray()
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -2432,32 +2445,109 @@ func _open_classifier_sample_cell_score(x: int, z: int) -> float:
 		return -1.0
 	return _wall_open_cell_score[_open_classifier_idx(x, z)]
 
+func _open_classifier_sample_cell_is_open(x: int, z: int) -> bool:
+	if _wall_open_cell_is_open.is_empty():
+		return false
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return false
+	return _wall_open_cell_is_open[_open_classifier_idx(x, z)] != 0
+
+func _open_classifier_sample_cell_is_solid(x: int, z: int) -> bool:
+	if _wall_open_cell_is_solid.is_empty():
+		return false
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return false
+	return _wall_open_cell_is_solid[_open_classifier_idx(x, z)] != 0
+
+func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collide_with_bodies = true
+	q.collide_with_areas = false
+	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
+	q.hit_from_inside = true
+	q.hit_back_faces = true
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return INF
+	var hp = hit.get("position", from)
+	if hp is Vector3:
+		return from.distance_to(hp)
+	return INF
+
 func _cell_classifier_rebuild() -> void:
 	if not wall_decor_open_side_use_cell_classifier:
 		_wall_open_cell_score = PackedFloat32Array()
+		_wall_open_cell_up_dist = PackedFloat32Array()
+		_wall_open_cell_down_dist = PackedFloat32Array()
+		_wall_open_cell_lat_px_dist = PackedFloat32Array()
+		_wall_open_cell_lat_nx_dist = PackedFloat32Array()
+		_wall_open_cell_lat_pz_dist = PackedFloat32Array()
+		_wall_open_cell_lat_nz_dist = PackedFloat32Array()
+		_wall_open_cell_is_open = PackedByteArray()
+		_wall_open_cell_is_solid = PackedByteArray()
 		return
 
 	var n: int = max(1, cells_per_side)
-	_wall_open_cell_score.resize(n * n)
+	var count: int = n * n
+	_wall_open_cell_score.resize(count)
 	_wall_open_cell_score.fill(0.0)
+	_wall_open_cell_up_dist.resize(count)
+	_wall_open_cell_down_dist.resize(count)
+	_wall_open_cell_lat_px_dist.resize(count)
+	_wall_open_cell_lat_nx_dist.resize(count)
+	_wall_open_cell_lat_pz_dist.resize(count)
+	_wall_open_cell_lat_nz_dist.resize(count)
+	_wall_open_cell_is_open.resize(count)
+	_wall_open_cell_is_open.fill(0)
+	_wall_open_cell_is_solid.resize(count)
+	_wall_open_cell_is_solid.fill(0)
 
 	var probe_dist: float = maxf(_cell_size * wall_decor_open_side_classifier_probe_cells, wall_decor_open_side_epsilon + 0.001)
+	var open_ground_max: float = _cell_size * wall_decor_open_side_classifier_open_ground_max_down_cells
+	var open_ceiling_min: float = _cell_size * wall_decor_open_side_classifier_open_ceiling_min_up_cells
+	var solid_lat_max: float = _cell_size * wall_decor_open_side_classifier_solid_lateral_hit_max_cells
+	var solid_down_max: float = _cell_size * wall_decor_open_side_classifier_solid_down_hit_max_cells
 	for z in range(n):
 		for x in range(n):
 			var center := _cell_center(x, z)
 			var probe_origin := Vector3(center.x, center.y + wall_decor_open_side_classifier_y_offset, center.z)
-			var hits_open := 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.RIGHT * probe_dist) else 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.RIGHT * probe_dist) else 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.FORWARD * probe_dist) else 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.FORWARD * probe_dist) else 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin + Vector3.UP * probe_dist) else 0
-			hits_open += 1 if _is_open_air_ray(probe_origin, probe_origin - Vector3.UP * probe_dist) else 0
-			_wall_open_cell_score[_open_classifier_idx(x, z)] = float(hits_open) / 6.0
+			var idx := _open_classifier_idx(x, z)
+			var d_up := _ray_hit_distance(probe_origin, probe_origin + Vector3.UP * probe_dist)
+			var d_dn := _ray_hit_distance(probe_origin, probe_origin + Vector3.DOWN * probe_dist)
+			var d_px := _ray_hit_distance(probe_origin, probe_origin + Vector3.RIGHT * probe_dist)
+			var d_nx := _ray_hit_distance(probe_origin, probe_origin + Vector3.LEFT * probe_dist)
+			var d_pz := _ray_hit_distance(probe_origin, probe_origin + Vector3.FORWARD * probe_dist)
+			var d_nz := _ray_hit_distance(probe_origin, probe_origin + Vector3.BACK * probe_dist)
+			_wall_open_cell_up_dist[idx] = d_up
+			_wall_open_cell_down_dist[idx] = d_dn
+			_wall_open_cell_lat_px_dist[idx] = d_px
+			_wall_open_cell_lat_nx_dist[idx] = d_nx
+			_wall_open_cell_lat_pz_dist[idx] = d_pz
+			_wall_open_cell_lat_nz_dist[idx] = d_nz
+
+			var open_hits := 0
+			open_hits += 1 if d_px >= probe_dist else 0
+			open_hits += 1 if d_nx >= probe_dist else 0
+			open_hits += 1 if d_pz >= probe_dist else 0
+			open_hits += 1 if d_nz >= probe_dist else 0
+			open_hits += 1 if d_up >= probe_dist else 0
+			open_hits += 1 if d_dn >= probe_dist else 0
+			_wall_open_cell_score[idx] = float(open_hits) / 6.0
+
+			var lateral_hits := 0
+			lateral_hits += 1 if d_px <= solid_lat_max else 0
+			lateral_hits += 1 if d_nx <= solid_lat_max else 0
+			lateral_hits += 1 if d_pz <= solid_lat_max else 0
+			lateral_hits += 1 if d_nz <= solid_lat_max else 0
+			var cell_is_open := (d_dn <= open_ground_max) and (d_up >= open_ceiling_min) and (lateral_hits == 0)
+			var cell_is_solid := (d_dn <= solid_down_max) and (lateral_hits >= wall_decor_open_side_classifier_solid_lateral_hits_min)
+			_wall_open_cell_is_open[idx] = 1 if cell_is_open else 0
+			_wall_open_cell_is_solid[idx] = 1 if cell_is_solid else 0
 
 func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
 	if not wall_decor_open_side_use_cell_classifier or _wall_open_cell_score.is_empty():
-		return {"valid": false, "open_f": 0.0, "open_b": 0.0}
+		return {"valid": false, "open_f": 0.0, "open_b": 0.0, "is_open_f": false, "is_open_b": false, "is_solid_f": false, "is_solid_b": false}
 
 	var probe: float = maxf(_cell_size * wall_decor_surface_probe_radius_cells, wall_decor_open_side_epsilon + 0.001)
 	var p_f := face.center + dir * probe
@@ -2466,10 +2556,18 @@ func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
 	var c_b := _world_to_cell_clamped(p_b.x, p_b.z)
 	var open_f := _open_classifier_sample_cell_score(c_f.x, c_f.y)
 	var open_b := _open_classifier_sample_cell_score(c_b.x, c_b.y)
+	var is_open_f := _open_classifier_sample_cell_is_open(c_f.x, c_f.y)
+	var is_open_b := _open_classifier_sample_cell_is_open(c_b.x, c_b.y)
+	var is_solid_f := _open_classifier_sample_cell_is_solid(c_f.x, c_f.y)
+	var is_solid_b := _open_classifier_sample_cell_is_solid(c_b.x, c_b.y)
 	return {
 		"valid": true,
 		"open_f": open_f,
 		"open_b": open_b,
+		"is_open_f": is_open_f,
+		"is_open_b": is_open_b,
+		"is_solid_f": is_solid_f,
+		"is_solid_b": is_solid_b,
 		"c_f": c_f,
 		"c_b": c_b,
 	}
@@ -2667,6 +2765,18 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var center := face.center
 	var cls := _classify_face_open_score(face, n)
 	if bool(cls.get("valid", false)):
+		var is_open_f: bool = bool(cls.get("is_open_f", false))
+		var is_open_b: bool = bool(cls.get("is_open_b", false))
+		var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+		var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+		if is_open_f and not is_open_b:
+			return n
+		if is_open_b and not is_open_f:
+			return -n
+		if is_solid_f and not is_solid_b:
+			return -n
+		if is_solid_b and not is_solid_f:
+			return n
 		var open_f: float = float(cls.get("open_f", 0.0))
 		var open_b: float = float(cls.get("open_b", 0.0))
 		if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
@@ -2849,16 +2959,33 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			else:
 				var cls := _classify_face_open_score(WallFace.new(aa, bb, cc, dd, center, n, 0.0, 0.0, false, 0), dir)
 				if bool(cls.get("valid", false)):
-					var c_open_f: float = float(cls.get("open_f", 0.0))
-					var c_open_b: float = float(cls.get("open_b", 0.0))
-					if c_open_f > c_open_b + wall_decor_open_side_classifier_tie_epsilon:
+					var is_open_f: bool = bool(cls.get("is_open_f", false))
+					var is_open_b: bool = bool(cls.get("is_open_b", false))
+					var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+					var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+					if is_open_f and not is_open_b:
 						n = dir
-						chosen = "FWD_CLASS"
-					elif c_open_b > c_open_f + wall_decor_open_side_classifier_tie_epsilon:
+						chosen = "FWD_CLASS_OPEN"
+					elif is_open_b and not is_open_f:
 						n = -dir
-						chosen = "BACK_CLASS"
+						chosen = "BACK_CLASS_OPEN"
+					elif is_solid_f and not is_solid_b:
+						n = -dir
+						chosen = "BACK_CLASS_SOLID"
+					elif is_solid_b and not is_solid_f:
+						n = dir
+						chosen = "FWD_CLASS_SOLID"
 					else:
-						chosen = "TIE"
+						var c_open_f: float = float(cls.get("open_f", 0.0))
+						var c_open_b: float = float(cls.get("open_b", 0.0))
+						if c_open_f > c_open_b + wall_decor_open_side_classifier_tie_epsilon:
+							n = dir
+							chosen = "FWD_CLASS"
+						elif c_open_b > c_open_f + wall_decor_open_side_classifier_tie_epsilon:
+							n = -dir
+							chosen = "BACK_CLASS"
+						else:
+							chosen = "TIE"
 				else:
 					chosen = "TIE"
 
@@ -3364,14 +3491,27 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 		else:
 			var cls := _classify_face_open_score(face, outward)
 			if bool(cls.get("valid", false)):
-				var open_f: float = float(cls.get("open_f", 0.0))
-				var open_b: float = float(cls.get("open_b", 0.0))
-				if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
+				var is_open_f: bool = bool(cls.get("is_open_f", false))
+				var is_open_b: bool = bool(cls.get("is_open_b", false))
+				var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+				var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+				if is_open_f and not is_open_b:
 					outward = outward
-				elif open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
+				elif is_open_b and not is_open_f:
 					outward = -outward
+				elif is_solid_f and not is_solid_b:
+					outward = -outward
+				elif is_solid_b and not is_solid_f:
+					outward = outward
 				else:
-					outward = _pick_open_side_outward(face)
+					var open_f: float = float(cls.get("open_f", 0.0))
+					var open_b: float = float(cls.get("open_b", 0.0))
+					if open_f > open_b + wall_decor_open_side_classifier_tie_epsilon:
+						outward = outward
+					elif open_b > open_f + wall_decor_open_side_classifier_tie_epsilon:
+						outward = -outward
+					else:
+						outward = _pick_open_side_outward(face)
 			else:
 				outward = _pick_open_side_outward(face)
 	return outward
