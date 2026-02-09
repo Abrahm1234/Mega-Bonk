@@ -88,6 +88,7 @@ class_name ArenaBlockyTerrain
 # -----------------------------
 @export_range(1, 4, 1) var max_neighbor_steps: int = 1
 @export_range(0, 64, 1) var relax_passes: int = 24
+@export var debug_generation_metrics: bool = false
 
 # -----------------------------
 # Visuals
@@ -262,6 +263,12 @@ func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
 		label, p.x, p.y, p.z, str(h), str(_xz_in_bounds(p.x, p.z)),
 		fx, fz, _ox, _oz, max_x, max_z, _cell_size, n
 	])
+
+
+func _dbg_gen(msg: String) -> void:
+	if not debug_generation_metrics:
+		return
+	print("[GEN] ", msg)
 
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
@@ -695,10 +702,13 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 	for _pass in range(global_fix_passes):
 		var reach: PackedByteArray = _reach_from_root(n, root_idx, want, levels)
 		var any_unreach: bool = false
+		var unreachable_count: int = 0
 		for i in range(n * n):
 			if reach[i] == 0:
 				any_unreach = true
-				break
+				unreachable_count += 1
+
+		_dbg_gen("global_access pass=%d root_idx=%d unreachable=%d/%d" % [_pass, root_idx, unreachable_count, n * n])
 
 		if any_unreach:
 			var cands: Array = []
@@ -720,14 +730,17 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 						cands.append([i, d])
 
 			if not cands.is_empty():
+				_dbg_gen("global_access pass=%d trying bridge ramps candidates=%d" % [_pass, cands.size()])
 				if _try_place_any_from_candidates(cands, n, levels, want, rng):
 					flags |= FIX_PLACED
 					_prune_ramps_strict()
+					_dbg_gen("global_access pass=%d placed bridge ramp" % _pass)
 					continue
 
 			for i in range(n * n):
 				if reach[i] == 0:
 					levels[i] -= 1
+			_dbg_gen("global_access pass=%d lowered unreachable cells=%d" % [_pass, unreachable_count])
 			return flags | FIX_LEVELS
 
 		var good: PackedByteArray = _can_reach_root(n, root_idx, want, levels)
@@ -738,6 +751,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 				trap_cells.append(i)
 
 		if trap_cells.is_empty():
+			_dbg_gen("global_access pass=%d no trap cells" % _pass)
 			return flags
 
 		var exit_cands: Array = []
@@ -755,13 +769,16 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 					exit_cands.append([i, d2])
 
 		if not exit_cands.is_empty():
+			_dbg_gen("global_access pass=%d trying trap exits trap_cells=%d candidates=%d" % [_pass, trap_cells.size(), exit_cands.size()])
 			if _try_place_any_from_candidates(exit_cands, n, levels, want, rng):
 				flags |= FIX_PLACED
 				_prune_ramps_strict()
+				_dbg_gen("global_access pass=%d placed trap exit ramp" % _pass)
 				continue
 
 		for i in trap_cells:
 			levels[i] += 1
+		_dbg_gen("global_access pass=%d raised trap cells=%d" % [_pass, trap_cells.size()])
 		return flags | FIX_LEVELS
 
 	return flags
@@ -1028,9 +1045,9 @@ func generate() -> void:
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
 
+	print("Ramp slots:", _count_ramps())
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
-	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
 # -----------------------------
@@ -1575,6 +1592,8 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 		built += 1
 
+	_dbg_gen("tunnels attempts=%d built=%d requested=%d entrances=%d" % [tries, built, tunnel_count, entrances.size()])
+
 	if entrances.is_empty():
 		return
 
@@ -1593,6 +1612,18 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			_tunnel_ramp_dir[idx_path] = TUNNEL_DIR_NONE
 			_tunnel_set_flat_cell(idx_path, _tunnel_base_floor_y)
 			tunnel_cells.append(idx_path)
+
+	var tunnel_count_cells: int = 0
+	var hole_count_cells: int = 0
+	var hole_without_tunnel: int = 0
+	for i in range(n * n):
+		if _tunnel_mask[i] != 0:
+			tunnel_count_cells += 1
+		if _tunnel_hole_mask[i] != 0:
+			hole_count_cells += 1
+			if _tunnel_mask[i] == 0:
+				hole_without_tunnel += 1
+	_dbg_gen("tunnels cells=%d holes=%d holes_without_tunnel=%d" % [tunnel_count_cells, hole_count_cells, hole_without_tunnel])
 
 func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
 	var dx: int = b.x - a.x
