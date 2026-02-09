@@ -90,6 +90,7 @@ class_name ArenaBlockyTerrain
 # -----------------------------
 @export_range(1, 4, 1) var max_neighbor_steps: int = 1
 @export_range(0, 64, 1) var relax_passes: int = 24
+@export var debug_generation_metrics: bool = false
 
 # -----------------------------
 # Visuals
@@ -127,8 +128,22 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_fix_open_side: bool = true
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
+@export_range(0.01, 1.0, 0.01) var wall_decor_open_side_raycast_skin: float = 0.25
+@export_range(0.5, 3.0, 0.05) var wall_decor_open_side_ray_len_cells: float = 1.25
 @export var wall_decor_open_side_use_raycast: bool = true
+@export var wall_decor_open_side_raycast_collide_with_areas: bool = false
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
+@export var wall_decor_open_side_use_cell_classifier: bool = true
+@export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_probe_cells: float = 0.45
+@export var wall_decor_open_side_classifier_y_offset: float = 0.5 # legacy; prefer explicit walk/mid offsets below
+@export_range(0.0, 1.0, 0.01) var wall_decor_open_side_classifier_tie_epsilon: float = 0.08
+@export_range(0.01, 0.5, 0.01) var wall_decor_open_side_classifier_walk_y_offset_cells: float = 0.08
+@export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_mid_y_offset_cells: float = 0.35
+@export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ground_max_down_cells: float = 1.1
+@export_range(0.1, 3.0, 0.05) var wall_decor_open_side_classifier_open_ceiling_min_up_cells: float = 0.7
+@export_range(0.1, 2.0, 0.05) var wall_decor_open_side_classifier_solid_lateral_hit_max_cells: float = 0.35
+@export_range(0.1, 2.0, 0.05) var wall_decor_open_side_classifier_solid_down_hit_max_cells: float = 0.35
+@export_range(1, 4, 1) var wall_decor_open_side_classifier_solid_lateral_hits_min: int = 2
 @export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
 @export var wall_decor_debug_log: bool = false
 @export var wall_decor_debug_verbose: bool = false
@@ -136,9 +151,11 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_print_every: int = 50
 @export var wall_decor_debug_dump_under_surface: bool = true
 @export var wall_decor_debug_focus_fi: int = -1
+@export_range(1, 500, 1) var wall_decor_debug_max_face_samples: int = 40
 @export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_debug_invalid_samples: bool = false
 @export var wall_decor_surface_only: bool = false
+@export var wall_decor_debug_disable_ray_dependent_filters: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
 @export_range(0.0, 1.0, 0.05) var wall_decor_surface_probe_lateral_cells: float = 0.25
@@ -180,6 +197,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_mesh_normal_axis: int = 3 # 0=X, 1=Y, 2=Z (set -1 for auto)
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
+@export var floor_decor_force_y_up_axis: bool = false
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
 
@@ -208,6 +226,15 @@ var _tunnel_base_ceil_y: float = 0.0
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
+var _wall_open_cell_score: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_up_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_down_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_px_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_nx_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_pz_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_lat_nz_dist: PackedFloat32Array = PackedFloat32Array()
+var _wall_open_cell_is_open: PackedByteArray = PackedByteArray()
+var _wall_open_cell_is_solid: PackedByteArray = PackedByteArray()
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -239,8 +266,59 @@ func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
 		fx, fz, _ox, _oz, max_x, max_z, _cell_size, n
 	])
 
+
+func _dbg_gen(msg: String) -> void:
+	if not debug_generation_metrics:
+		return
+	print("[GEN] ", msg)
+
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
+
+func _fmt_v2i(v: Vector2i) -> String:
+	return "(%d, %d)" % [v.x, v.y]
+
+func _wall_decor_effective_fix_open_side() -> bool:
+	return wall_decor_fix_open_side and not wall_decor_debug_disable_ray_dependent_filters
+
+func _wall_decor_effective_surface_only() -> bool:
+	return wall_decor_surface_only and not wall_decor_debug_disable_ray_dependent_filters
+
+func _wd_open_side_face_decision(fi: int, face: WallFace, chosen_outward: Vector3) -> void:
+	if not wall_decor_debug_open_side:
+		return
+	if wall_decor_debug_focus_fi < 0 and fi > wall_decor_debug_max_face_samples:
+		return
+	var dir := Vector3(face.normal.x, 0.0, face.normal.z)
+	if dir.length_squared() < 1e-8:
+		dir = chosen_outward
+		dir.y = 0.0
+	if dir.length_squared() < 1e-8:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+	var sample_offset: float = maxf(_cell_size * 0.15, wall_decor_open_side_epsilon + 0.001)
+	var p_a := face.center + dir * sample_offset
+	var p_b := face.center - dir * sample_offset
+	var cls := _classify_face_open_score(face, dir)
+	var c_a: Vector2i = cls.get("c_f", Vector2i.ZERO)
+	var c_b: Vector2i = cls.get("c_b", Vector2i.ZERO)
+	var open_a: bool = bool(cls.get("is_open_f", false))
+	var open_b: bool = bool(cls.get("is_open_b", false))
+	_wd_fi(fi,
+		"OPEN_CLASS fi=%d center=%s normal=%s pA=%s cellA=%s openA=%s pB=%s cellB=%s openB=%s chosen=%s" % [
+			fi,
+			_fmt_v3(face.center),
+			_fmt_v3(face.normal),
+			_fmt_v3(p_a),
+			_fmt_v2i(c_a),
+			str(open_a),
+			_fmt_v3(p_b),
+			_fmt_v2i(c_b),
+			str(open_b),
+			_fmt_v3(chosen_outward)
+		]
+	)
 
 func _face_min_y(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> float:
 	return minf(minf(a.y, b.y), minf(c.y, d.y))
@@ -298,6 +376,15 @@ func _wall_face_min_world_y(f: WallFace) -> float:
 
 func _wall_face_max_world_y(f: WallFace) -> float:
 	return max(max(f.a.y, f.b.y), max(f.c.y, f.d.y))
+
+func _wall_spawn_y_out_of_bounds(face: WallFace, spawn_y: float, margin: float) -> bool:
+	var min_y := _wall_face_min_world_y(face)
+	var max_y := _wall_face_max_world_y(face)
+	var global_min_y := outer_floor_height + margin
+	var global_max_y := box_height - margin
+	if spawn_y < global_min_y or spawn_y > global_max_y:
+		return true
+	return spawn_y < (min_y - margin) or spawn_y > (max_y + margin)
 
 class FloorFace extends RefCounted:
 	var a: Vector3
@@ -617,10 +704,13 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 	for _pass in range(global_fix_passes):
 		var reach: PackedByteArray = _reach_from_root(n, root_idx, want, levels)
 		var any_unreach: bool = false
+		var unreachable_count: int = 0
 		for i in range(n * n):
 			if reach[i] == 0:
 				any_unreach = true
-				break
+				unreachable_count += 1
+
+		_dbg_gen("global_access pass=%d root_idx=%d unreachable=%d/%d" % [_pass, root_idx, unreachable_count, n * n])
 
 		if any_unreach:
 			var cands: Array = []
@@ -642,14 +732,17 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 						cands.append([i, d])
 
 			if not cands.is_empty():
+				_dbg_gen("global_access pass=%d trying bridge ramps candidates=%d" % [_pass, cands.size()])
 				if _try_place_any_from_candidates(cands, n, levels, want, rng):
 					flags |= FIX_PLACED
 					_prune_ramps_strict()
+					_dbg_gen("global_access pass=%d placed bridge ramp" % _pass)
 					continue
 
 			for i in range(n * n):
 				if reach[i] == 0:
 					levels[i] -= 1
+			_dbg_gen("global_access pass=%d lowered unreachable cells=%d" % [_pass, unreachable_count])
 			return flags | FIX_LEVELS
 
 		var good: PackedByteArray = _can_reach_root(n, root_idx, want, levels)
@@ -660,6 +753,7 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 				trap_cells.append(i)
 
 		if trap_cells.is_empty():
+			_dbg_gen("global_access pass=%d no trap cells" % _pass)
 			return flags
 
 		var exit_cands: Array = []
@@ -677,13 +771,16 @@ func _ensure_global_accessibility(n: int, want: int, levels: PackedInt32Array, r
 					exit_cands.append([i, d2])
 
 		if not exit_cands.is_empty():
+			_dbg_gen("global_access pass=%d trying trap exits trap_cells=%d candidates=%d" % [_pass, trap_cells.size(), exit_cands.size()])
 			if _try_place_any_from_candidates(exit_cands, n, levels, want, rng):
 				flags |= FIX_PLACED
 				_prune_ramps_strict()
+				_dbg_gen("global_access pass=%d placed trap exit ramp" % _pass)
 				continue
 
 		for i in trap_cells:
 			levels[i] += 1
+		_dbg_gen("global_access pass=%d raised trap cells=%d" % [_pass, trap_cells.size()])
 		return flags | FIX_LEVELS
 
 	return flags
@@ -950,9 +1047,9 @@ func generate() -> void:
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
 
+	print("Ramp slots:", _count_ramps())
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
-	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
 # -----------------------------
@@ -1455,6 +1552,8 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 		built += 1
 
+	_dbg_gen("tunnels attempts=%d built=%d requested=%d entrances=%d" % [tries, built, tunnel_count, entrances.size()])
+
 	if entrances.is_empty():
 		return
 
@@ -1474,6 +1573,18 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			_tunnel_ramp_dir[idx_path] = TUNNEL_DIR_NONE
 			_tunnel_set_flat_cell(idx_path, _tunnel_base_floor_y)
 			tunnel_cells.append(idx_path)
+
+	var tunnel_count_cells: int = 0
+	var hole_count_cells: int = 0
+	var hole_without_tunnel: int = 0
+	for i in range(n * n):
+		if _tunnel_mask[i] != 0:
+			tunnel_count_cells += 1
+		if _tunnel_hole_mask[i] != 0:
+			hole_count_cells += 1
+			if _tunnel_mask[i] == 0:
+				hole_without_tunnel += 1
+	_dbg_gen("tunnels cells=%d holes=%d holes_without_tunnel=%d" % [tunnel_count_cells, hole_count_cells, hole_without_tunnel])
 
 func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
 	var dx: int = b.x - a.x
@@ -2016,6 +2127,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			var top_col: Color = ramp_color if is_ramp else terrain_color
 			top_col.a = SURF_RAMP if is_ramp else SURF_TOP
 
+			# IMPORTANT: do not continue here; tunnel holes only skip top caps, side walls are emitted later.
 			if not skip_top:
 				_add_cell_top_grid(
 					st,
@@ -2163,14 +2275,33 @@ func _build_mesh_and_collision(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	collision_shape.shape = mesh.create_trimesh_shape()
-	if wall_decor_open_side_use_raycast:
+	if wall_decor_open_side_use_raycast or wall_decor_open_side_use_cell_classifier:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
 		_rebuild_wall_decor()
 	_rebuild_floor_decor()
 
+func _terrain_collision_ready_for_wall_rays() -> bool:
+	if collision_shape == null:
+		return false
+	if collision_shape.disabled:
+		return false
+	if collision_shape.shape == null:
+		return false
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		if terrain_collision.collision_layer == 0:
+			return false
+	return true
+
 func _rebuild_wall_decor_after_physics() -> void:
+	# Give physics space time to register regenerated trimesh collision.
 	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if not _terrain_collision_ready_for_wall_rays():
+		_wd("WALL_DECOR_COLLISION_NOT_READY after 2 physics frames; proceeding with deterministic fallbacks")
+		_wd_log_raycast_context()
 	_rebuild_wall_decor()
 
 func _ensure_wall_decor_root() -> void:
@@ -2358,27 +2489,261 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 	}
 
 func _wall_decor_open_side_effective_raycast_mask() -> int:
-	if wall_decor_open_side_raycast_mask != -1 and wall_decor_open_side_raycast_mask != 0xFFFF_FFFF:
+	# Exported @export_flags_3d_physics values are already bitmasks.
+	# Use the configured mask directly when non-zero (including -1 / all bits).
+	if wall_decor_open_side_raycast_mask != 0:
 		return wall_decor_open_side_raycast_mask
 
+	# Optional auto fallback only when configured mask is 0.
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body is CollisionObject3D:
 		var terrain_collision := terrain_body as CollisionObject3D
 		if terrain_collision.collision_layer != 0:
 			return terrain_collision.collision_layer
 
-	return wall_decor_open_side_raycast_mask
+	# Final safety fallback.
+	return 1
+
+func _open_classifier_idx(x: int, z: int) -> int:
+	return z * cells_per_side + x
+
+func _world_to_cell_clamped(x: float, z: float) -> Vector2i:
+	var n: int = max(1, cells_per_side)
+	var fx: float = (x - _ox) / _cell_size
+	var fz: float = (z - _oz) / _cell_size
+	var ix := clampi(int(floor(fx)), 0, n - 1)
+	var iz := clampi(int(floor(fz)), 0, n - 1)
+	return Vector2i(ix, iz)
+
+func _world_to_cell_if_inside(x: float, z: float) -> Dictionary:
+	var n: int = max(1, cells_per_side)
+	var fx: float = (x - _ox) / _cell_size
+	var fz: float = (z - _oz) / _cell_size
+	var ix: int = int(floor(fx))
+	var iz: int = int(floor(fz))
+	var inside: bool = ix >= 0 and iz >= 0 and ix < n and iz < n
+	return {"inside": inside, "cell": Vector2i(ix, iz)}
+
+func _open_classifier_sample_cell_score(x: int, z: int) -> float:
+	if _wall_open_cell_score.is_empty():
+		return 0.0
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return -1.0
+	return _wall_open_cell_score[_open_classifier_idx(x, z)]
+
+func _open_classifier_sample_cell_is_open(x: int, z: int) -> bool:
+	if _wall_open_cell_is_open.is_empty():
+		return false
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return false
+	return _wall_open_cell_is_open[_open_classifier_idx(x, z)] != 0
+
+func _open_classifier_sample_cell_is_solid(x: int, z: int) -> bool:
+	if _wall_open_cell_is_solid.is_empty():
+		return false
+	if x < 0 or z < 0 or x >= cells_per_side or z >= cells_per_side:
+		return false
+	return _wall_open_cell_is_solid[_open_classifier_idx(x, z)] != 0
+
+func _make_wall_open_ray_query(from: Vector3, to: Vector3) -> PhysicsRayQueryParameters3D:
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
+	q.hit_back_faces = true
+	q.hit_from_inside = true
+	q.collide_with_bodies = true
+	q.collide_with_areas = wall_decor_open_side_raycast_collide_with_areas
+	# Ensure we never exclude terrain colliders needed for open-side tests.
+	q.exclude = []
+	return q
+
+func _wd_log_raycast_context() -> void:
+	if not wall_decor_debug_open_side:
+		return
+	var effective_mask := _wall_decor_open_side_effective_raycast_mask()
+	var dbg_q := _make_wall_open_ray_query(Vector3.ZERO, Vector3.UP)
+	_wd("WALL_DECOR_MASK export=%d effective=%d exclude_count=%d collide_with_areas=%s" % [wall_decor_open_side_raycast_mask, effective_mask, dbg_q.exclude.size(), str(wall_decor_open_side_raycast_collide_with_areas)])
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body is CollisionObject3D:
+		var terrain_collision := terrain_body as CollisionObject3D
+		_wd("WALL_DECOR_TERRAIN_COLLIDER inside_tree=%s type=%s layer=%d mask=%d shape_owners=%d" % [str(terrain_collision.is_inside_tree()), terrain_collision.get_class(), terrain_collision.collision_layer, terrain_collision.collision_mask, terrain_collision.get_shape_owners().size()])
+	else:
+		_wd("WALL_DECOR_TERRAIN_COLLIDER missing_or_not_collision_object type=%s" % [str(terrain_body)])
+	if collision_shape == null:
+		_wd("WALL_DECOR_COLLISION_SHAPE missing")
+	elif collision_shape.shape == null:
+		_wd("WALL_DECOR_COLLISION_SHAPE present_but_shape_null")
+	else:
+		_wd("WALL_DECOR_COLLISION_SHAPE disabled=%s type=%s" % [str(collision_shape.disabled), collision_shape.shape.get_class()])
+
+	# One brutal sanity ray: straight down through arena center.
+	var side: float = float(max(2, cells_per_side)) * _cell_size
+	var arena_center := Vector3(_ox + side * 0.5, 0.0, _oz + side * 0.5)
+	var from := arena_center + Vector3.UP * 500.0
+	var to := arena_center + Vector3.DOWN * 500.0
+	var hit := get_world_3d().direct_space_state.intersect_ray(_make_wall_open_ray_query(from, to))
+	_wd("WALL_DECOR_VERTICAL_RAY hit=%s pos=%s collider=%s" % [str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
+
+func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
+	var space := get_world_3d().direct_space_state
+	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
+	if hit.is_empty():
+		return INF
+	var hp = hit.get("position", from)
+	if hp is Vector3:
+		return from.distance_to(hp)
+	return INF
+
+func _cell_classifier_rebuild() -> void:
+	if not wall_decor_open_side_use_cell_classifier:
+		_wall_open_cell_score = PackedFloat32Array()
+		_wall_open_cell_up_dist = PackedFloat32Array()
+		_wall_open_cell_down_dist = PackedFloat32Array()
+		_wall_open_cell_lat_px_dist = PackedFloat32Array()
+		_wall_open_cell_lat_nx_dist = PackedFloat32Array()
+		_wall_open_cell_lat_pz_dist = PackedFloat32Array()
+		_wall_open_cell_lat_nz_dist = PackedFloat32Array()
+		_wall_open_cell_is_open = PackedByteArray()
+		_wall_open_cell_is_solid = PackedByteArray()
+		return
+
+	var n: int = max(1, cells_per_side)
+	var count: int = n * n
+	_wall_open_cell_score.resize(count)
+	_wall_open_cell_score.fill(0.0)
+	_wall_open_cell_up_dist.resize(count)
+	_wall_open_cell_down_dist.resize(count)
+	_wall_open_cell_lat_px_dist.resize(count)
+	_wall_open_cell_lat_nx_dist.resize(count)
+	_wall_open_cell_lat_pz_dist.resize(count)
+	_wall_open_cell_lat_nz_dist.resize(count)
+	_wall_open_cell_is_open.resize(count)
+	_wall_open_cell_is_open.fill(0)
+	_wall_open_cell_is_solid.resize(count)
+	_wall_open_cell_is_solid.fill(0)
+
+	var lateral_dist: float = maxf(_cell_size * 0.75, wall_decor_open_side_epsilon + 0.001)
+	var vertical_dist: float = maxf((box_height - outer_floor_height) * 2.0, _cell_size)
+	var open_ground_max: float = _cell_size * wall_decor_open_side_classifier_open_ground_max_down_cells
+	var open_ceiling_min: float = _cell_size * wall_decor_open_side_classifier_open_ceiling_min_up_cells
+	var solid_lat_max: float = _cell_size * wall_decor_open_side_classifier_solid_lateral_hit_max_cells
+	var solid_down_max: float = _cell_size * wall_decor_open_side_classifier_solid_down_hit_max_cells
+	for z in range(n):
+		for x in range(n):
+			var cx := _ox + (float(x) + 0.5) * _cell_size
+			var cz := _oz + (float(z) + 0.5) * _cell_size
+			var c := _cell_corners(x, z)
+			var top_y := maxf(maxf(c.x, c.y), maxf(c.z, c.w))
+			var walk_y_offset: float = maxf(wall_decor_open_side_classifier_walk_y_offset_cells * _cell_size, 0.001)
+			var mid_y_offset: float = maxf(wall_decor_open_side_classifier_mid_y_offset_cells * _cell_size, walk_y_offset)
+			var cy_walk := top_y + walk_y_offset
+			var cy_mid := top_y + mid_y_offset
+			var probe_walk := Vector3(cx, cy_walk, cz)
+			var probe_mid := Vector3(cx, cy_mid, cz)
+			var idx := _open_classifier_idx(x, z)
+			var d_up := _ray_hit_distance(probe_walk, probe_walk + Vector3.UP * vertical_dist)
+			var d_dn := _ray_hit_distance(probe_walk, probe_walk + Vector3.DOWN * vertical_dist)
+			var d_px_walk := _ray_hit_distance(probe_walk, probe_walk + Vector3.RIGHT * lateral_dist)
+			var d_nx_walk := _ray_hit_distance(probe_walk, probe_walk + Vector3.LEFT * lateral_dist)
+			var d_pz_walk := _ray_hit_distance(probe_walk, probe_walk + Vector3.FORWARD * lateral_dist)
+			var d_nz_walk := _ray_hit_distance(probe_walk, probe_walk + Vector3.BACK * lateral_dist)
+			var d_px_mid := _ray_hit_distance(probe_mid, probe_mid + Vector3.RIGHT * lateral_dist)
+			var d_nx_mid := _ray_hit_distance(probe_mid, probe_mid + Vector3.LEFT * lateral_dist)
+			var d_pz_mid := _ray_hit_distance(probe_mid, probe_mid + Vector3.FORWARD * lateral_dist)
+			var d_nz_mid := _ray_hit_distance(probe_mid, probe_mid + Vector3.BACK * lateral_dist)
+			var d_px := minf(d_px_walk, d_px_mid)
+			var d_nx := minf(d_nx_walk, d_nx_mid)
+			var d_pz := minf(d_pz_walk, d_pz_mid)
+			var d_nz := minf(d_nz_walk, d_nz_mid)
+			_wall_open_cell_up_dist[idx] = d_up
+			_wall_open_cell_down_dist[idx] = d_dn
+			_wall_open_cell_lat_px_dist[idx] = d_px
+			_wall_open_cell_lat_nx_dist[idx] = d_nx
+			_wall_open_cell_lat_pz_dist[idx] = d_pz
+			_wall_open_cell_lat_nz_dist[idx] = d_nz
+
+			var open_hits := 0
+			open_hits += 1 if d_px >= lateral_dist else 0
+			open_hits += 1 if d_nx >= lateral_dist else 0
+			open_hits += 1 if d_pz >= lateral_dist else 0
+			open_hits += 1 if d_nz >= lateral_dist else 0
+			open_hits += 1 if d_up >= vertical_dist else 0
+			open_hits += 1 if d_dn >= vertical_dist else 0
+			_wall_open_cell_score[idx] = float(open_hits) / 6.0
+
+			var lateral_hits := 0
+			lateral_hits += 1 if d_px <= solid_lat_max else 0
+			lateral_hits += 1 if d_nx <= solid_lat_max else 0
+			lateral_hits += 1 if d_pz <= solid_lat_max else 0
+			lateral_hits += 1 if d_nz <= solid_lat_max else 0
+			var cell_is_open := (d_dn <= open_ground_max) and (d_up >= open_ceiling_min) and (lateral_hits == 0)
+			var cell_is_solid := (d_dn <= solid_down_max) and (lateral_hits >= wall_decor_open_side_classifier_solid_lateral_hits_min)
+			_wall_open_cell_is_open[idx] = 1 if cell_is_open else 0
+			_wall_open_cell_is_solid[idx] = 1 if cell_is_solid else 0
+
+func _classify_face_open_score(face: WallFace, dir: Vector3) -> Dictionary:
+	if not wall_decor_open_side_use_cell_classifier or _wall_open_cell_score.is_empty():
+		return {"valid": false, "open_f": 0.0, "open_b": 0.0, "is_open_f": false, "is_open_b": false, "is_solid_f": false, "is_solid_b": false}
+
+	var sample_offset: float = maxf(_cell_size * 0.15, wall_decor_open_side_epsilon + 0.001)
+	var p_f := face.center + dir * sample_offset
+	var p_b := face.center - dir * sample_offset
+
+	var m_f := _world_to_cell_if_inside(p_f.x, p_f.z)
+	var m_b := _world_to_cell_if_inside(p_b.x, p_b.z)
+	var inside_f: bool = bool(m_f.get("inside", false))
+	var inside_b: bool = bool(m_b.get("inside", false))
+	var c_f: Vector2i = m_f.get("cell", Vector2i.ZERO)
+	var c_b: Vector2i = m_b.get("cell", Vector2i.ZERO)
+
+	var is_open_f: bool = true
+	var is_open_b: bool = true
+	var is_solid_f: bool = false
+	var is_solid_b: bool = false
+	var open_f: float = 1.0
+	var open_b: float = 1.0
+
+	if inside_f:
+		is_open_f = _open_classifier_sample_cell_is_open(c_f.x, c_f.y)
+		is_solid_f = _open_classifier_sample_cell_is_solid(c_f.x, c_f.y)
+		open_f = _open_classifier_sample_cell_score(c_f.x, c_f.y)
+	if inside_b:
+		is_open_b = _open_classifier_sample_cell_is_open(c_b.x, c_b.y)
+		is_solid_b = _open_classifier_sample_cell_is_solid(c_b.x, c_b.y)
+		open_b = _open_classifier_sample_cell_score(c_b.x, c_b.y)
+
+	return {
+		"valid": true,
+		"open_f": open_f,
+		"open_b": open_b,
+		"is_open_f": is_open_f,
+		"is_open_b": is_open_b,
+		"is_solid_f": is_solid_f,
+		"is_solid_b": is_solid_b,
+		"inside_f": inside_f,
+		"inside_b": inside_b,
+		"c_f": c_f,
+		"c_b": c_b,
+	}
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collide_with_bodies = true
-	q.collide_with_areas = false
-	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-	q.hit_from_inside = true
-	q.hit_back_faces = true
-	var hit := space.intersect_ray(q)
+	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
 	return hit.is_empty()
+
+func _is_open_air_side_probe(center: Vector3, dir_h: Vector3, probe: float) -> bool:
+	var dir := Vector3(dir_h.x, 0.0, dir_h.z)
+	if dir.length_squared() < 1e-8:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+	var eps_outer: float = maxf(wall_decor_open_side_raycast_skin, 0.001)
+	var eps_inner: float = maxf(eps_outer * 0.25, 0.001)
+	# Two starts reduce false "open" when one start sits just outside concave trimesh hull.
+	var from_outer := center + dir * eps_outer
+	var from_inner := center + dir * eps_inner
+	var to_outer := center + dir * probe
+	var to_inner := center + dir * probe
+	return _is_open_air_ray(from_outer, to_outer) and _is_open_air_ray(from_inner, to_inner)
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
@@ -2551,6 +2916,19 @@ func _plane_axes_from_normal_axis(n_axis: int) -> PackedInt32Array:
 func _safe_dim(x: float) -> float:
 	return maxf(0.0001, absf(x))
 
+func _deterministic_geometric_outward(center: Vector3, n: Vector3) -> Vector3:
+	var outward_xz := Vector3(n.x, 0.0, n.z)
+	if outward_xz.length_squared() < 1e-8:
+		outward_xz = Vector3.FORWARD
+	else:
+		outward_xz = outward_xz.normalized()
+	var side: float = float(max(2, cells_per_side)) * _cell_size
+	var arena_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
+	var to_center_xz := Vector3(center.x - arena_center.x, 0.0, center.z - arena_center.z)
+	if to_center_xz.length_squared() > 1e-8 and outward_xz.dot(to_center_xz) < 0.0:
+		return -outward_xz
+	return outward_xz
+
 func _pick_open_side_outward(face: WallFace) -> Vector3:
 	var n := face.normal
 	n.y = 0.0
@@ -2558,14 +2936,31 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
+	var probe: float = maxf(_cell_size * wall_decor_open_side_ray_len_cells, wall_decor_open_side_epsilon + 0.001)
 	var center := face.center
+	var cls := _classify_face_open_score(face, n)
+	if bool(cls.get("valid", false)):
+		var inside_f: bool = bool(cls.get("inside_f", false))
+		var inside_b: bool = bool(cls.get("inside_b", false))
+		var is_open_f: bool = bool(cls.get("is_open_f", false))
+		var is_open_b: bool = bool(cls.get("is_open_b", false))
+		var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+		var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+		# 1) Bounds fallback: out-of-grid side is outward.
+		if inside_f != inside_b:
+			return n if not inside_f else -n
+		# 2) Cell-open/solid fallback.
+		if is_open_f != is_open_b:
+			return n if is_open_f else -n
+		if is_solid_f != is_solid_b:
+			return -n if is_solid_f else n
+		# 3) Deterministic geometric fallback.
+		return _deterministic_geometric_outward(center, n)
 
 	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
 	if wall_decor_open_side_use_raycast:
-		var eps := 0.05
-		var open_f := _is_open_air_ray(center + n * eps, center + n * probe)
-		var open_b := _is_open_air_ray(center - n * eps, center - n * probe)
+		var open_f := _is_open_air_side_probe(center, n, probe)
+		var open_b := _is_open_air_side_probe(center, -n, probe)
 		if open_f != open_b:
 			return n if open_f else -n
 
@@ -2583,13 +2978,7 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	# If essentially equal, prefer pointing away from arena center (stable tie-break)
 	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
-		var side: float = float(max(2, cells_per_side)) * _cell_size
-		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
-		var to_center := map_center - center
-		to_center.y = 0.0
-		if to_center.length_squared() > 1e-8 and n.dot(to_center) > 0.0:
-			return -n
-		return n
+		return _deterministic_geometric_outward(center, n)
 
 	return n if h_plus < h_minus else -n
 
@@ -2714,14 +3103,14 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	var open_sy_f: float = INF
 	var open_sy_b: float = INF
-	if wall_decor_fix_open_side:
+	if _wall_decor_effective_fix_open_side():
 		# Open-side direction for decor placement (robust for large cell sizes).
 		var dir := Vector3(n.x, 0.0, n.z)
 		if dir.length_squared() > 1e-8:
 			dir = dir.normalized()
 
 			# IMPORTANT: probe must cross into the neighboring column.
-			var probe := maxf(wall_decor_open_side_epsilon + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+			var probe := maxf(_cell_size * wall_decor_open_side_ray_len_cells, wall_decor_open_side_epsilon + 0.001)
 			var chosen := "TIE"
 			var cover_f: bool = bool(cov["cover_f"])
 			var cover_b: bool = bool(cov["cover_b"])
@@ -2733,19 +3122,35 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			elif cover_b and not cover_f:
 				n = dir
 				chosen = "FWD"
-			elif wall_decor_open_side_use_raycast:
-				var eps: float = wall_decor_open_side_epsilon
-				var f_from := center + dir * eps
-				var b_from := center - dir * eps
-				var open_f := _is_open_air_ray(f_from, f_from + dir * probe)
-				var open_b := _is_open_air_ray(b_from, b_from - dir * probe)
+			else:
+				var cls := _classify_face_open_score(WallFace.new(aa, bb, cc, dd, center, n, 0.0, 0.0, false, 0), dir)
+				if bool(cls.get("valid", false)):
+					var inside_f: bool = bool(cls.get("inside_f", false))
+					var inside_b: bool = bool(cls.get("inside_b", false))
+					var is_open_f: bool = bool(cls.get("is_open_f", false))
+					var is_open_b: bool = bool(cls.get("is_open_b", false))
+					var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+					var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+					if inside_f != inside_b:
+						n = dir if not inside_f else -dir
+						chosen = "FWD_BOUNDS" if not inside_f else "BACK_BOUNDS"
+					elif is_open_f != is_open_b:
+						n = dir if is_open_f else -dir
+						chosen = "FWD_CLASS_OPEN" if is_open_f else "BACK_CLASS_OPEN"
+					elif is_solid_f != is_solid_b:
+						n = -dir if is_solid_f else dir
+						chosen = "BACK_CLASS_SOLID" if is_solid_f else "FWD_CLASS_SOLID"
+					else:
+						n = _deterministic_geometric_outward(center, dir)
+						chosen = "GEOM_FALLBACK"
+				else:
+					chosen = "TIE"
+
+			if chosen == "TIE" and wall_decor_open_side_use_raycast:
+				var open_f := _is_open_air_side_probe(center, dir, probe)
+				var open_b := _is_open_air_side_probe(center, -dir, probe)
 				if wall_decor_debug_open_side:
-					var extra := ""
-					if wall_decor_debug_verbose:
-						var to_f := f_from + dir * probe
-						var to_b := b_from - dir * probe
-						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask(), extra])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask()])
 
 				if open_f and not open_b:
 					n = dir
@@ -2754,39 +3159,19 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					n = -dir
 					chosen = "BACK"
 				else:
-					# Raycast tie (both open or both blocked): fallback to height sampling.
-					var h_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
-					var h_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
-					open_sy_f = h_f
-					open_sy_b = h_b
-					n = dir if h_f < h_b else -dir
-					chosen = "FWD" if h_f < h_b else "BACK"
+					# Raycast tie (both open or both blocked): deterministic XZ fallback only.
+					n = _deterministic_geometric_outward(center, dir)
+					chosen = "GEOM_FALLBACK"
 					if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-						_wd("OPEN_RAY_FALLBACK fi=%d h_f=%.3f h_b=%.3f chosen=%s" % [fi, h_f, h_b, chosen])
-			else:
-				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
-				var sy_b := _sample_top_surface_y_wide(center.x - dir.x * probe, center.z - dir.z * probe, -dir, true)
-				open_sy_f = sy_f
-				open_sy_b = sy_b
-
-				# Open side tends to have LOWER surface height (or -INF out of bounds).
-				if sy_f < sy_b - 0.001:
-					n = dir
-					chosen = "FWD"
-				elif sy_b < sy_f - 0.001:
-					n = -dir
-					chosen = "BACK"
-				else:
-					# Tie-break: choose the direction that points away from map center in XZ.
-					var away := Vector3(center.x, 0.0, center.z).dot(dir) >= 0.0
-					n = dir if away else -dir
-					chosen = "FWD" if away else "BACK"
-
+						_wd("OPEN_RAY_GEOM fi=%d chosen=%s n=%s" % [fi, chosen, _fmt_v3(n)])
+			elif chosen == "TIE":
+				n = _deterministic_geometric_outward(center, dir)
+				chosen = "GEOM_FALLBACK"
 				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
+					_wd("OPEN_GEOM fi=%d dir=%s probe=%.3f chosen=%s n=%s" % [fi, _fmt_v3(dir), probe, chosen, _fmt_v3(n)])
 	# ---- END NEW ----
 
-	if wall_decor_surface_only:
+	if _wall_decor_effective_surface_only():
 		p_side = center + n * (wall_decor_open_side_epsilon + 0.001)
 		h_side = _wd_surface_only_ceiling_y_at(p_side)
 
@@ -2936,21 +3321,20 @@ func _rebuild_wall_decor() -> void:
 
 	_ensure_wall_decor_root()
 
+	if wall_decor_debug_disable_ray_dependent_filters:
+		_wd("WALL_DECOR_SANITY ray-dependent filters disabled (fix_open_side/surface_only)")
+
+	if wall_decor_open_side_use_cell_classifier:
+		_cell_classifier_rebuild()
 
 	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
+		_wd_log_raycast_context()
 
 		var ss := get_world_3d().direct_space_state
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-		q.collide_with_bodies = true
-		q.collide_with_areas = false
-		q.hit_back_faces = true
-		q.hit_from_inside = true
-
-		var hit := ss.intersect_ray(q)
+		var hit := ss.intersect_ray(_make_wall_open_ray_query(a, b))
 		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
@@ -3013,7 +3397,7 @@ func _rebuild_wall_decor() -> void:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
-			if wall_decor_surface_only:
+			if _wall_decor_effective_surface_only():
 				var top_y := _wall_face_max_world_y(wf)
 				var outward := _wall_place_outward(wf)
 
@@ -3121,7 +3505,12 @@ func _rebuild_wall_decor() -> void:
 
 			var aabb: AABB = rect_aabb_by_variant[vsel]
 			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+			var spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
+			if _wall_spawn_y_out_of_bounds(f2, xf.origin.y, spawn_margin):
+				_wd_fi(placement_fi, "SKIP SPAWN_Y_OOB fi=%d spawn_y=%.3f face_min=%.3f face_max=%.3f global_min=%.3f global_max=%.3f margin=%.3f" % [placement_fi, xf.origin.y, _wall_face_min_world_y(f2), _wall_face_max_world_y(f2), outer_floor_height + spawn_margin, box_height - spawn_margin, spawn_margin])
+				continue
 			var outward := _wall_place_outward(f2)
+			_wd_open_side_face_decision(placement_fi, f2, outward)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
 			var under_now: bool = cov_p["covered"]
@@ -3161,11 +3550,13 @@ func _rebuild_wall_decor() -> void:
 			rect_write_i[vsel] = wi + 1
 
 	if has_wedge_decor:
+		var wedge_fi: int = 0
 		for wf2: WallFace in wedge_faces:
+			wedge_fi += 1
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
-			if wall_decor_surface_only:
+			if _wall_decor_effective_surface_only():
 				var top_y := _wall_face_max_world_y(wf2)
 				var outward := _wall_place_outward(wf2)
 
@@ -3187,6 +3578,10 @@ func _rebuild_wall_decor() -> void:
 
 			var waabb: AABB = wedge_aabb_by_variant[wsel]
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
+			_wd_open_side_face_decision(wedge_fi, wf2, _wall_place_outward(wf2))
+			var wedge_spawn_margin := maxf(wall_decor_open_side_epsilon, 0.01)
+			if _wall_spawn_y_out_of_bounds(wf2, wxf.origin.y, wedge_spawn_margin):
+				continue
 
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
@@ -3223,7 +3618,7 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 	if outward.length_squared() < 1e-8:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
-	if wall_decor_fix_open_side:
+	if _wall_decor_effective_fix_open_side():
 		var top_y: float = maxf(maxf(face.a.y, face.b.y), maxf(face.c.y, face.d.y))
 		var cov := _wall_face_covered_both_sides(face.center, top_y, outward)
 		var cover_f: bool = bool(cov["cover_f"])
@@ -3233,7 +3628,24 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 		elif cover_b and not cover_f:
 			outward = outward
 		else:
-			outward = _pick_open_side_outward(face)
+			var cls := _classify_face_open_score(face, outward)
+			if bool(cls.get("valid", false)):
+				var inside_f: bool = bool(cls.get("inside_f", false))
+				var inside_b: bool = bool(cls.get("inside_b", false))
+				var is_open_f: bool = bool(cls.get("is_open_f", false))
+				var is_open_b: bool = bool(cls.get("is_open_b", false))
+				var is_solid_f: bool = bool(cls.get("is_solid_f", false))
+				var is_solid_b: bool = bool(cls.get("is_solid_b", false))
+				if inside_f != inside_b:
+					outward = outward if not inside_f else -outward
+				elif is_open_f != is_open_b:
+					outward = outward if is_open_f else -outward
+				elif is_solid_f != is_solid_b:
+					outward = -outward if is_solid_f else outward
+				else:
+					outward = _deterministic_geometric_outward(face.center, outward)
+			else:
+				outward = _pick_open_side_outward(face)
 	return outward
 
 func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
@@ -3407,6 +3819,8 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	# Useful for Blender-authored planes where normal is +Z.
 	if floor_decor_mesh_normal_axis >= 0 and floor_decor_mesh_normal_axis <= 2:
 		axis_thin = floor_decor_mesh_normal_axis
+	elif floor_decor_force_y_up_axis:
+		axis_thin = 1
 	var normal_axis: int = axis_thin
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
 	var axis0: int = plane_axes[0]
