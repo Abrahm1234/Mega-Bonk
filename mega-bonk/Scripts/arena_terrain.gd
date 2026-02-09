@@ -126,6 +126,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
 @export_range(0.01, 1.0, 0.01) var wall_decor_open_side_raycast_skin: float = 0.25
+@export_range(0.5, 3.0, 0.05) var wall_decor_open_side_ray_len_cells: float = 1.25
 @export var wall_decor_open_side_use_raycast: bool = true
 @export var wall_decor_open_side_raycast_collide_with_areas: bool = false
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
@@ -2134,6 +2135,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			var top_col: Color = ramp_color if is_ramp else terrain_color
 			top_col.a = SURF_RAMP if is_ramp else SURF_TOP
 
+			# IMPORTANT: do not continue here; tunnel holes only skip top caps, side walls are emitted later.
 			if not skip_top:
 				_add_cell_top_grid(
 					st,
@@ -2942,7 +2944,7 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
+	var probe: float = maxf(_cell_size * wall_decor_open_side_ray_len_cells, wall_decor_open_side_epsilon + 0.001)
 	var center := face.center
 	var cls := _classify_face_open_score(face, n)
 	if bool(cls.get("valid", false)):
@@ -3116,7 +3118,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			dir = dir.normalized()
 
 			# IMPORTANT: probe must cross into the neighboring column.
-			var probe := maxf(wall_decor_open_side_epsilon + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+			var probe := maxf(_cell_size * wall_decor_open_side_ray_len_cells, wall_decor_open_side_epsilon + 0.001)
 			var chosen := "TIE"
 			var cover_f: bool = bool(cov["cover_f"])
 			var cover_b: bool = bool(cov["cover_b"])
