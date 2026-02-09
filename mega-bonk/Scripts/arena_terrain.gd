@@ -2545,13 +2545,16 @@ func _make_wall_open_ray_query(from: Vector3, to: Vector3) -> PhysicsRayQueryPar
 	q.hit_from_inside = true
 	q.collide_with_bodies = true
 	q.collide_with_areas = false
+	# Ensure we never exclude terrain colliders needed for open-side tests.
+	q.exclude = []
 	return q
 
 func _wd_log_raycast_context() -> void:
 	if not wall_decor_debug_open_side:
 		return
 	var effective_mask := _wall_decor_open_side_effective_raycast_mask()
-	_wd("WALL_DECOR_MASK export=%d effective=%d" % [wall_decor_open_side_raycast_mask, effective_mask])
+	var dbg_q := _make_wall_open_ray_query(Vector3.ZERO, Vector3.UP)
+	_wd("WALL_DECOR_MASK export=%d effective=%d exclude_count=%d" % [wall_decor_open_side_raycast_mask, effective_mask, dbg_q.exclude.size()])
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body is CollisionObject3D:
 		var terrain_collision := terrain_body as CollisionObject3D
