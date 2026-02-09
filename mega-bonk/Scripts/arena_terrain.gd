@@ -127,6 +127,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_open_side_epsilon: float = 0.05
 @export_range(0.01, 1.0, 0.01) var wall_decor_open_side_raycast_skin: float = 0.25
 @export var wall_decor_open_side_use_raycast: bool = true
+@export var wall_decor_open_side_raycast_collide_with_areas: bool = false
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
 @export var wall_decor_open_side_use_cell_classifier: bool = true
 @export_range(0.1, 1.0, 0.05) var wall_decor_open_side_classifier_probe_cells: float = 0.45
@@ -2556,7 +2557,7 @@ func _make_wall_open_ray_query(from: Vector3, to: Vector3) -> PhysicsRayQueryPar
 	q.hit_back_faces = true
 	q.hit_from_inside = true
 	q.collide_with_bodies = true
-	q.collide_with_areas = false
+	q.collide_with_areas = wall_decor_open_side_raycast_collide_with_areas
 	# Ensure we never exclude terrain colliders needed for open-side tests.
 	q.exclude = []
 	return q
@@ -2566,11 +2567,11 @@ func _wd_log_raycast_context() -> void:
 		return
 	var effective_mask := _wall_decor_open_side_effective_raycast_mask()
 	var dbg_q := _make_wall_open_ray_query(Vector3.ZERO, Vector3.UP)
-	_wd("WALL_DECOR_MASK export=%d effective=%d exclude_count=%d" % [wall_decor_open_side_raycast_mask, effective_mask, dbg_q.exclude.size()])
+	_wd("WALL_DECOR_MASK export=%d effective=%d exclude_count=%d collide_with_areas=%s" % [wall_decor_open_side_raycast_mask, effective_mask, dbg_q.exclude.size(), str(wall_decor_open_side_raycast_collide_with_areas)])
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body is CollisionObject3D:
 		var terrain_collision := terrain_body as CollisionObject3D
-		_wd("WALL_DECOR_TERRAIN_COLLIDER layer=%d mask=%d" % [terrain_collision.collision_layer, terrain_collision.collision_mask])
+		_wd("WALL_DECOR_TERRAIN_COLLIDER inside_tree=%s type=%s layer=%d mask=%d shape_owners=%d" % [str(terrain_collision.is_inside_tree()), terrain_collision.get_class(), terrain_collision.collision_layer, terrain_collision.collision_mask, terrain_collision.get_shape_owners().size()])
 	else:
 		_wd("WALL_DECOR_TERRAIN_COLLIDER missing_or_not_collision_object type=%s" % [str(terrain_body)])
 	if collision_shape == null:
@@ -2578,7 +2579,15 @@ func _wd_log_raycast_context() -> void:
 	elif collision_shape.shape == null:
 		_wd("WALL_DECOR_COLLISION_SHAPE present_but_shape_null")
 	else:
-		_wd("WALL_DECOR_COLLISION_SHAPE type=%s" % [collision_shape.shape.get_class()])
+		_wd("WALL_DECOR_COLLISION_SHAPE disabled=%s type=%s" % [str(collision_shape.disabled), collision_shape.shape.get_class()])
+
+	# One brutal sanity ray: straight down through arena center.
+	var side: float = float(max(2, cells_per_side)) * _cell_size
+	var arena_center := Vector3(_ox + side * 0.5, 0.0, _oz + side * 0.5)
+	var from := arena_center + Vector3.UP * 500.0
+	var to := arena_center + Vector3.DOWN * 500.0
+	var hit := get_world_3d().direct_space_state.intersect_ray(_make_wall_open_ray_query(from, to))
+	_wd("WALL_DECOR_VERTICAL_RAY hit=%s pos=%s collider=%s" % [str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 func _ray_hit_distance(from: Vector3, to: Vector3) -> float:
 	var space := get_world_3d().direct_space_state
