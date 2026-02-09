@@ -204,6 +204,7 @@ var _tunnel_floor_resolved: float = 0.0
 var _tunnel_ceil_resolved: float = 0.0
 var _tunnel_base_floor_y: float = 0.0
 var _tunnel_base_ceil_y: float = 0.0
+var _tunnel_entrance_cells: Array[Vector2i] = []
 
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
@@ -1459,12 +1460,14 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 		return
 
 	var endpoints: Array[Vector2i] = []
+	_tunnel_entrance_cells.clear()
 	for entrance in entrances:
 		var dir: int = RAMP_EAST
 		if tunnel_entrance_mode == 1:
 			dir = _pick_entrance_dir(n, entrance)
-		endpoints.append(_tunnel_stamp_entrance_ramp(n, entrance, dir))
-			_tunnel_entrance_cells.append(endpoints[endpoints.size()-1])
+		var top_cell: Vector2i = _tunnel_stamp_entrance_ramp(n, entrance, dir)
+		endpoints.append(top_cell)
+		_tunnel_entrance_cells.append(top_cell)
 
 	for i in range(1, endpoints.size()):
 		var path: Array[Vector2i] = _a_star(n, endpoints[i - 1], endpoints[i], _tunnel_base_ceil_y)
