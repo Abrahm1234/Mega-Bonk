@@ -3692,15 +3692,15 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 			c.queue_free()
 	# Spawn one MeshInstance3D per entrance cell (usually small counts).
 	for cell in _tunnel_entrance_cells:
-		if not _in_bounds(cell.x, cell.y):
+		if not _in_bounds(cell.x, cell.y, n):
 			continue
-		var i := _idx(cell.x, cell.y)
+		var i: int = _idx2(cell.x, cell.y, n)
 		# Surface Y at this cell (top of the block).
-		var y := float(_h[i])
-		# Cell center in world.
-		var x := (float(cell.x) + 0.5) * _cell_size_m - _world_size_m * 0.5
-		var z := (float(cell.y) + 0.5) * _cell_size_m - _world_size_m * 0.5
-		var mi := MeshInstance3D.new()
+		var y: float = float(_heights[i])
+		# Cell center in world space (match the rest of the terrain math).
+		var x: float = _ox + (float(cell.x) + 0.5) * _cell_size
+		var z: float = _oz + (float(cell.y) + 0.5) * _cell_size
+		var mi: MeshInstance3D = MeshInstance3D.new()
 		mi.mesh = tunnel_elevator_top_mesh
 		mi.transform = Transform3D(Basis.IDENTITY, Vector3(x, y + tunnel_elevator_top_y_offset, z))
 		parent.add_child(mi)
