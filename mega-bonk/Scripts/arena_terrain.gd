@@ -148,6 +148,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_debug_invalid_samples: bool = false
 @export var wall_decor_surface_only: bool = false
+@export var wall_decor_debug_disable_ray_dependent_filters: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
 @export_range(0.0, 1.0, 0.05) var wall_decor_surface_probe_lateral_cells: float = 0.25
@@ -262,6 +263,12 @@ func _fmt_v3(v: Vector3) -> String:
 
 func _fmt_v2i(v: Vector2i) -> String:
 	return "(%d, %d)" % [v.x, v.y]
+
+func _wall_decor_effective_fix_open_side() -> bool:
+	return wall_decor_fix_open_side and not wall_decor_debug_disable_ray_dependent_filters
+
+func _wall_decor_effective_surface_only() -> bool:
+	return wall_decor_surface_only and not wall_decor_debug_disable_ray_dependent_filters
 
 func _wd_open_side_face_decision(fi: int, face: WallFace, chosen_outward: Vector3) -> void:
 	if not wall_decor_debug_open_side:
@@ -3088,7 +3095,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	var open_sy_f: float = INF
 	var open_sy_b: float = INF
-	if wall_decor_fix_open_side:
+	if _wall_decor_effective_fix_open_side():
 		# Open-side direction for decor placement (robust for large cell sizes).
 		var dir := Vector3(n.x, 0.0, n.z)
 		if dir.length_squared() > 1e-8:
@@ -3156,7 +3163,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					_wd("OPEN_GEOM fi=%d dir=%s probe=%.3f chosen=%s n=%s" % [fi, _fmt_v3(dir), probe, chosen, _fmt_v3(n)])
 	# ---- END NEW ----
 
-	if wall_decor_surface_only:
+	if _wall_decor_effective_surface_only():
 		p_side = center + n * (wall_decor_open_side_epsilon + 0.001)
 		h_side = _wd_surface_only_ceiling_y_at(p_side)
 
@@ -3306,6 +3313,9 @@ func _rebuild_wall_decor() -> void:
 
 	_ensure_wall_decor_root()
 
+	if wall_decor_debug_disable_ray_dependent_filters:
+		_wd("WALL_DECOR_SANITY ray-dependent filters disabled (fix_open_side/surface_only)")
+
 	if wall_decor_open_side_use_cell_classifier:
 		_cell_classifier_rebuild()
 
@@ -3379,7 +3389,7 @@ func _rebuild_wall_decor() -> void:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
-			if wall_decor_surface_only:
+			if _wall_decor_effective_surface_only():
 				var top_y := _wall_face_max_world_y(wf)
 				var outward := _wall_place_outward(wf)
 
@@ -3538,7 +3548,7 @@ func _rebuild_wall_decor() -> void:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					continue
-			if wall_decor_surface_only:
+			if _wall_decor_effective_surface_only():
 				var top_y := _wall_face_max_world_y(wf2)
 				var outward := _wall_place_outward(wf2)
 
@@ -3600,7 +3610,7 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 	if outward.length_squared() < 1e-8:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
-	if wall_decor_fix_open_side:
+	if _wall_decor_effective_fix_open_side():
 		var top_y: float = maxf(maxf(face.a.y, face.b.y), maxf(face.c.y, face.d.y))
 		var cov := _wall_face_covered_both_sides(face.center, top_y, outward)
 		var cover_f: bool = bool(cov["cover_f"])
