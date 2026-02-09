@@ -125,6 +125,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_fix_open_side: bool = true
 @export var wall_decor_debug_open_side: bool = false
 @export var wall_decor_open_side_epsilon: float = 0.05
+@export_range(0.01, 1.0, 0.01) var wall_decor_open_side_raycast_skin: float = 0.25
 @export var wall_decor_open_side_use_raycast: bool = true
 @export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
 @export var wall_decor_open_side_use_cell_classifier: bool = true
@@ -145,6 +146,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_print_every: int = 50
 @export var wall_decor_debug_dump_under_surface: bool = true
 @export var wall_decor_debug_focus_fi: int = -1
+@export_range(1, 500, 1) var wall_decor_debug_max_face_samples: int = 40
 @export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_debug_invalid_samples: bool = false
 @export var wall_decor_surface_only: bool = false
@@ -190,6 +192,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_mesh_normal_axis: int = -1 # 0=X, 1=Y, 2=Z (set -1 for auto)
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
+@export var floor_decor_force_y_up_axis: bool = false
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
 
@@ -272,6 +275,8 @@ func _wall_decor_effective_surface_only() -> bool:
 
 func _wd_open_side_face_decision(fi: int, face: WallFace, chosen_outward: Vector3) -> void:
 	if not wall_decor_debug_open_side:
+		return
+	if wall_decor_debug_focus_fi < 0 and fi > wall_decor_debug_max_face_samples:
 		return
 	var dir := Vector3(face.normal.x, 0.0, face.normal.z)
 	if dir.length_squared() < 1e-8:
@@ -2728,7 +2733,7 @@ func _is_open_air_side_probe(center: Vector3, dir_h: Vector3, probe: float) -> b
 		dir = Vector3.FORWARD
 	else:
 		dir = dir.normalized()
-	var eps_outer: float = maxf(wall_decor_open_side_epsilon, 0.001)
+	var eps_outer: float = maxf(wall_decor_open_side_raycast_skin, 0.001)
 	var eps_inner: float = maxf(eps_outer * 0.25, 0.001)
 	# Two starts reduce false "open" when one start sits just outside concave trimesh hull.
 	var from_outer := center + dir * eps_outer
@@ -3811,6 +3816,8 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	# Useful for Blender-authored planes where normal is +Z.
 	if floor_decor_mesh_normal_axis >= 0 and floor_decor_mesh_normal_axis <= 2:
 		axis_thin = floor_decor_mesh_normal_axis
+	elif floor_decor_force_y_up_axis:
+		axis_thin = 1
 	var normal_axis: int = axis_thin
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(normal_axis)
 	var axis0: int = plane_axes[0]
