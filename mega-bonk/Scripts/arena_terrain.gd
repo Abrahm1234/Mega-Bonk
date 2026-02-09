@@ -62,6 +62,8 @@ class_name ArenaBlockyTerrain
 # Tunnels (separate mesh under the terrain shell)
 # -----------------------------
 @export var enable_tunnels: bool = true
+@export var tunnel_elevator_top_mesh: Mesh = null
+@export var tunnel_elevator_top_y_offset: float = 0.02
 @export_range(0, 6, 1) var tunnel_count: int = 2
 @export_range(1, 3, 1) var tunnel_radius_cells: int = 1
 @export_range(6, 128, 1) var tunnel_min_len_cells: int = 10
@@ -78,7 +80,7 @@ class_name ArenaBlockyTerrain
 @export var tunnel_edge_clearance: float = 0.5
 @export_range(0, 8, 1) var tunnel_extra_outpoints: int = 2
 @export var tunnel_color: Color = Color(0.16, 0.18, 0.20, 1.0)
-@export var tunnel_carve_surface_holes: bool = true
+@export var tunnel_carve_surface_holes: bool = false  # deprecated (surface cutouts removed)
 @export var tunnel_occluder_enabled: bool = true
 @export var tunnel_occluder_y: float = -14.0
 @export var tunnel_occluder_color: Color = Color(0.08, 0.08, 0.08, 1.0)
@@ -175,7 +177,7 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
-@export var floor_decor_mesh_normal_axis: int = -1 # 0=X, 1=Y, 2=Z (set -1 for auto)
+@export var floor_decor_mesh_normal_axis: int = 3 # 0=X, 1=Y, 2=Z (set -1 for auto)
 @export var floor_decor_scale_in_xz: bool = true
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
@@ -1301,54 +1303,12 @@ func _tunnel_set_flat_cell(idx: int, y: float) -> void:
 	_tunnel_ramp_dir[idx] = TUNNEL_DIR_NONE
 
 func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector2i:
-	var e_idx: int = _idx2(entrance.x, entrance.y, n)
-	if tunnel_entrance_mode == 0:
-		_tunnel_mask[e_idx] = 1
-		if tunnel_carve_surface_holes:
-			_tunnel_hole_mask[e_idx] = 1
-		_tunnel_set_flat_cell(e_idx, _tunnel_base_floor_y)
-		_tunnel_ramp_dir[e_idx] = TUNNEL_DIR_NONE
-		return entrance
-	var start_floor: float = _heights[e_idx] - 0.5
-
-	var cur := entrance
-	var hi: float = start_floor
-	var lo: float = hi - tunnel_ramp_drop
-
-	_tunnel_mask[e_idx] = 1
-	if tunnel_carve_surface_holes:
-		_tunnel_hole_mask[e_idx] = 1
-
-	_tunnel_ramp_dir[e_idx] = dir
-	_tunnel_floor_max_y[e_idx] = hi
-	_tunnel_floor_min_y[e_idx] = lo
-
-	for _step in range(tunnel_ramp_max_steps):
-		if lo <= _tunnel_base_floor_y + 0.001:
-			break
-
-		var nb: Vector2i = _neighbor_of(cur.x, cur.y, dir)
-		if not _in_bounds(nb.x, nb.y, n):
-			break
-
-		var mi: int = _idx2(nb.x, nb.y, n)
-		_tunnel_mask[mi] = 1
-		_tunnel_ramp_dir[mi] = dir
-
-		hi -= tunnel_ramp_drop
-		lo -= tunnel_ramp_drop
-		_tunnel_floor_max_y[mi] = hi
-		_tunnel_floor_min_y[mi] = lo
-
-		if tunnel_carve_surface_holes:
-			_tunnel_hole_mask[mi] = 1
-
-		cur = nb
-
-	var end_idx: int = _idx2(cur.x, cur.y, n)
-	_tunnel_set_flat_cell(end_idx, _tunnel_base_floor_y)
-	_tunnel_ramp_dir[end_idx] = TUNNEL_DIR_NONE
-	return cur
+	# Shaft-only: no surface cutouts, no downward ramps.
+	# Mark the entrance cell as the top-of-shaft so we can place the elevator tile/mesh there.
+	var idx := entrance.y * n + entrance.x
+	if _tunnel_hole_mask.size() == n * n:
+		_tunnel_hole_mask[idx] = 1
+	return entrance
 
 func _tunnel_corner_floors(idx: int, _n: int) -> PackedFloat32Array:
 	var f := PackedFloat32Array([
@@ -1504,6 +1464,7 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 		if tunnel_entrance_mode == 1:
 			dir = _pick_entrance_dir(n, entrance)
 		endpoints.append(_tunnel_stamp_entrance_ramp(n, entrance, dir))
+			_tunnel_entrance_cells.append(endpoints[endpoints.size()-1])
 
 	for i in range(1, endpoints.size()):
 		var path: Array[Vector2i] = _a_star(n, endpoints[i - 1], endpoints[i], _tunnel_base_ceil_y)
@@ -2043,7 +2004,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			var z1: float = z0 + _cell_size
 
 			var skip_top: bool = false
-			if enable_tunnels and tunnel_carve_surface_holes:
+			if false:
 				var hole_idx: int = z * n + x
 				if _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[hole_idx] != 0:
 					skip_top = true
@@ -2072,7 +2033,7 @@ func _build_mesh_and_collision(n: int) -> void:
 		for z in range(n):
 			for x in range(n):
 				var idx_occluder: int = z * n + x
-				if tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and (_tunnel_hole_mask[idx_occluder] != 0 or _tunnel_mask[idx_occluder] != 0):
+				if _tunnel_hole_mask.size() == n * n and (_tunnel_hole_mask[idx_occluder] != 0 or (_tunnel_mask.size() == n * n and _tunnel_mask[idx_occluder] != 0)):
 					continue
 				var x0o: float = _ox + float(x) * _cell_size
 				var x1o: float = x0o + _cell_size
@@ -2102,7 +2063,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			if x + 1 < n:
 				var idx_a: int = z * n + x
 				var idx_b: int = z * n + (x + 1)
-				if enable_tunnels and tunnel_carve_surface_holes:
+				if false:
 					var a_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_a] != 0
 					var b_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_b] != 0
 					if a_is_hole or b_is_hole:
@@ -2148,7 +2109,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
-				if enable_tunnels and tunnel_carve_surface_holes:
+				if false:
 					var c_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_c] != 0
 					var d_is_hole: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx_d] != 0
 					if c_is_hole or d_is_hole:
@@ -3708,6 +3669,39 @@ func _add_wall_z_colored(st: SurfaceTool, z_edge: float, x0: float, x1: float, y
 		color
 	)
 
+
+func _build_tunnel_elevator_tops(n: int) -> void:
+	# Places a mesh on the surface cell that has a tunnel shaft beneath it.
+	# No cutouts or ramps are created; this is intended to be animated as an elevator later.
+	#
+	# Uses _tunnel_entrance_cells (recorded during tunnel layout).
+	if tunnel_elevator_top_mesh == null:
+		return
+	# Clean previous instances.
+	var parent_name := "TunnelElevators"
+	var parent := get_node_or_null(parent_name)
+	if parent == null:
+		parent = Node3D.new()
+		parent.name = parent_name
+		add_child(parent)
+	else:
+		for c in parent.get_children():
+			c.queue_free()
+	# Spawn one MeshInstance3D per entrance cell (usually small counts).
+	for cell in _tunnel_entrance_cells:
+		if not _in_bounds(cell.x, cell.y):
+			continue
+		var i := _idx(cell.x, cell.y)
+		# Surface Y at this cell (top of the block).
+		var y := float(_h[i])
+		# Cell center in world.
+		var x := (float(cell.x) + 0.5) * _cell_size_m - _world_size_m * 0.5
+		var z := (float(cell.y) + 0.5) * _cell_size_m - _world_size_m * 0.5
+		var mi := MeshInstance3D.new()
+		mi.mesh = tunnel_elevator_top_mesh
+		mi.transform = Transform3D(Basis.IDENTITY, Vector3(x, y + tunnel_elevator_top_y_offset, z))
+		parent.add_child(mi)
+
 func _build_tunnel_mesh(n: int) -> void:
 	_ensure_tunnel_nodes()
 	if _tunnel_mesh_instance == null or _tunnel_collision_shape == null:
@@ -3740,7 +3734,7 @@ func _build_tunnel_mesh(n: int) -> void:
 			var z0: float = _oz + float(z) * _cell_size
 			var z1: float = z0 + _cell_size
 
-			var is_entrance: bool = tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
+			var is_entrance: bool = _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
 
 			var has_w: bool = false
 			var has_e: bool = false
