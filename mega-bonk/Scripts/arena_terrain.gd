@@ -2712,6 +2712,21 @@ func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
 	var hit := space.intersect_ray(_make_wall_open_ray_query(from, to))
 	return hit.is_empty()
 
+func _is_open_air_side_probe(center: Vector3, dir_h: Vector3, probe: float) -> bool:
+	var dir := Vector3(dir_h.x, 0.0, dir_h.z)
+	if dir.length_squared() < 1e-8:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+	var eps_outer: float = maxf(wall_decor_open_side_epsilon, 0.001)
+	var eps_inner: float = maxf(eps_outer * 0.25, 0.001)
+	# Two starts reduce false "open" when one start sits just outside concave trimesh hull.
+	var from_outer := center + dir * eps_outer
+	var from_inner := center + dir * eps_inner
+	var to_outer := center + dir * probe
+	var to_inner := center + dir * probe
+	return _is_open_air_ray(from_outer, to_outer) and _is_open_air_ray(from_inner, to_inner)
+
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
 	return a.y > b.y
 
@@ -2926,9 +2941,8 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 
 	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
 	if wall_decor_open_side_use_raycast:
-		var eps := 0.05
-		var open_f := _is_open_air_ray(center + n * eps, center + n * probe)
-		var open_b := _is_open_air_ray(center - n * eps, center - n * probe)
+		var open_f := _is_open_air_side_probe(center, n, probe)
+		var open_b := _is_open_air_side_probe(center, -n, probe)
 		if open_f != open_b:
 			return n if open_f else -n
 
@@ -3115,18 +3129,10 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					chosen = "TIE"
 
 			if chosen == "TIE" and wall_decor_open_side_use_raycast:
-				var eps: float = wall_decor_open_side_epsilon
-				var f_from := center + dir * eps
-				var b_from := center - dir * eps
-				var open_f := _is_open_air_ray(f_from, f_from + dir * probe)
-				var open_b := _is_open_air_ray(b_from, b_from - dir * probe)
+				var open_f := _is_open_air_side_probe(center, dir, probe)
+				var open_b := _is_open_air_side_probe(center, -dir, probe)
 				if wall_decor_debug_open_side:
-					var extra := ""
-					if wall_decor_debug_verbose:
-						var to_f := f_from + dir * probe
-						var to_b := b_from - dir * probe
-						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask(), extra])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask()])
 
 				if open_f and not open_b:
 					n = dir
