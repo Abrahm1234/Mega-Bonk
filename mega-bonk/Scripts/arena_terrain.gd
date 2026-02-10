@@ -66,8 +66,6 @@ class_name ArenaBlockyTerrain
 @export var tunnel_elevator_top_y_offset: float = 0.02
 @export var tunnel_elevator_min_separation_cells: int = 6
 @export var tunnel_elevator_fit_margin: float = 0.92
-@export var tunnel_elevator_require_clear_front: bool = true
-@export var tunnel_elevator_require_no_ramp_neighbors: bool = true
 @export_range(0, 6, 1) var tunnel_count: int = 2
 @export_range(1, 3, 1) var tunnel_radius_cells: int = 1
 @export_range(6, 128, 1) var tunnel_min_len_cells: int = 10
@@ -78,7 +76,6 @@ class_name ArenaBlockyTerrain
 @export var tunnel_ramp_drop: float = 8.0
 @export_range(4, 64, 1) var tunnel_ramp_max_steps: int = 16
 @export var tunnel_turn_penalty: float = 3.0
-@export_enum("Shaft", "Ramp") var tunnel_entrance_mode: int = 0
 @export var tunnel_floor_clearance_from_box: float = 2.0
 @export var tunnel_ceiling_clearance: float = 1.0
 @export var tunnel_edge_clearance: float = 0.5
@@ -1194,46 +1191,6 @@ func _edge_is_open_at_ceil(n: int, a: Vector2i, b: Vector2i, ceil_y: float) -> b
 	var wall_bottom: float = minf(ha, hb)
 	return ceil_y <= (wall_bottom - tunnel_roof_clearance)
 
-func _pick_entrance_dir(n: int, entrance: Vector2i) -> int:
-	var center := Vector2i(n >> 1, n >> 1)
-	var best_dir: int = RAMP_EAST
-	var best_score: float = -1.0e20
-
-	var e_idx: int = _idx2(entrance.x, entrance.y, n)
-	var h0: float = _heights[e_idx]
-
-	for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-		var p := entrance
-		var ok := true
-		for _i in range(tunnel_ramp_max_steps + 2):
-			p = _neighbor_of(p.x, p.y, dir)
-			if not _in_bounds(p.x, p.y, n):
-				ok = false
-				break
-		if not ok:
-			continue
-
-		var nb: Vector2i = _neighbor_of(entrance.x, entrance.y, dir)
-		var nb_idx: int = _idx2(nb.x, nb.y, n)
-		var h1: float = _heights[nb_idx]
-
-		var to_center := Vector2(center - entrance)
-		var dvec := Vector2(nb - entrance)
-		var dotc: float = to_center.dot(dvec)
-
-		var score: float = 0.0
-		if h1 <= h0:
-			score += 10.0
-		if absf(h1 - h0) < 0.001:
-			score += 10.0
-		score += dotc * 0.05
-
-		if score > best_score:
-			best_score = score
-			best_dir = dir
-
-	return best_dir
-
 func _choose_tunnel_base_depth(_n: int, _entrances: Array[Vector2i]) -> void:
 	var thickness: float = _tunnel_ceil_resolved - _tunnel_floor_resolved
 	_tunnel_base_floor_y = outer_floor_height + tunnel_floor_clearance_from_box
@@ -1318,7 +1275,7 @@ func _tunnel_set_flat_cell(idx: int, y: float) -> void:
 	_tunnel_floor_max_y[idx] = y
 	_tunnel_ramp_dir[idx] = TUNNEL_DIR_NONE
 
-func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector2i:
+func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i) -> Vector2i:
 	# Shaft-only: no surface cutouts, no downward ramps.
 	# Mark the entrance cell as the top-of-shaft so we can place the elevator tile/mesh there.
 	var idx := entrance.y * n + entrance.x
@@ -1426,6 +1383,15 @@ func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Ve
 
 	return []
 
+func _entrance_far_enough(e: Vector2i, existing: Array[Vector2i], min_sep_cells: int) -> bool:
+	var min_sep2 := min_sep_cells * min_sep_cells
+	for a in existing:
+		var dx := a.x - e.x
+		var dz := a.y - e.y
+		if dx * dx + dz * dz < min_sep2:
+			return false
+	return true
+
 func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	_tunnel_arrays_resize(n)
 
@@ -1463,9 +1429,12 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			continue
 
 
-		if built == 0:
+		var min_sep := tunnel_elevator_min_separation_cells
+
+		if built == 0 and _entrance_far_enough(a, entrances, min_sep):
 			entrances.append(a)
-		entrances.append(b)
+		if _entrance_far_enough(b, entrances, min_sep):
+			entrances.append(b)
 
 		built += 1
 
@@ -1475,10 +1444,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	var endpoints: Array[Vector2i] = []
 	_tunnel_entrance_cells.clear()
 	for entrance in entrances:
-		var dir: int = RAMP_EAST
-		if tunnel_entrance_mode == 1:
-			dir = _pick_entrance_dir(n, entrance)
-
 		var ei: int = _idx2(entrance.x, entrance.y, n)
 		var entrance_is_flat: bool = (_ramp_up_dir[ei] == RAMP_NONE)
 		_dbg_tunnel("candidate entrance=%s ei=%d passable=%s up=%d" % [str(entrance), ei, str(passable[ei] != 0), _ramp_up_dir[ei]])
@@ -1486,7 +1451,7 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			_dbg_tunnel("SKIP entrance on ramp: cell=%s ei=%d up=%d" % [str(entrance), ei, _ramp_up_dir[ei]])
 			continue
 
-		var top_cell: Vector2i = _tunnel_stamp_entrance_ramp(n, entrance, dir)
+		var top_cell: Vector2i = _tunnel_stamp_entrance_ramp(n, entrance)
 		endpoints.append(top_cell)
 		_tunnel_entrance_cells.append(top_cell)
 
@@ -1509,19 +1474,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			if v != 0:
 				tunnel_cell_count += 1
 		_dbg_tunnel("done: entrances=%d holes=%d tunnel_cells=%d" % [_tunnel_entrance_cells.size(), hole_count, tunnel_cell_count])
-
-func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
-	var dx: int = b.x - a.x
-	var dz: int = b.y - a.y
-	if dx == 1 and dz == 0:
-		return RAMP_EAST
-	if dx == -1 and dz == 0:
-		return RAMP_WEST
-	if dx == 0 and dz == 1:
-		return RAMP_SOUTH
-	if dx == 0 and dz == -1:
-		return RAMP_NORTH
-	return RAMP_EAST
 
 func _ensure_tunnel_nodes() -> void:
 	var terrain_body: Node = get_node_or_null("TerrainBody")
@@ -3948,14 +3900,6 @@ func _add_shaft_walls_segmented(
 func _build_tunnel_elevator_tops(n: int) -> void:
 	# Places a mesh on the surface cell that has a tunnel shaft beneath it.
 	# This mesh is intended to be animated as an elevator later.
-	#
-	# Placement constraints:
-	# - Keep a minimum separation between elevators.
-	# - Never place on/adjacent to ramps (avoid blocking traversal).
-	# - Require at least one walkable cell in front (entry clearance) and keep the
-	#   front from hanging over a cliff (same level).
-	# - Face the tunnel direction underneath when possible; otherwise prefer
-	#   facing away from the nearest wall.
 
 	if tunnel_elevator_top_mesh == null:
 		return
@@ -3972,158 +3916,12 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 		return
 
 	# Local helpers.
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var _inb := func(cx: int, cz: int) -> bool:
-		return _in_bounds(cx, cz, n)
-	
 	var _idx := func(cx: int, cz: int) -> int:
 		return _idx2(cx, cz, n)
-	
-	var _is_ramp := func(cx: int, cz: int) -> bool:
-		return _ramp_up_dir[_idx.call(cx, cz)] != RAMP_NONE
-	
-	var _is_hole := func(cx: int, cz: int) -> bool:
-		return _tunnel_hole_mask[_idx.call(cx, cz)] != 0
-	
-	var _is_platform := func(cx: int, cz: int) -> bool:
-		if !_inb.call(cx, cz):
-			return false
-		if _is_ramp.call(cx, cz):
-			return false
-		if _is_hole.call(cx, cz):
-			return false
-		return true
-	
-	var _cell_level := func(cx: int, cz: int) -> int:
-		return _h_to_level(_heights[_idx.call(cx, cz)])
-	
-	var _platform_neighbor_count := func(cell: Vector2i) -> int:
-		var c := 0
-		for d: Vector2i in dirs:
-			if _is_platform.call(cell.x + d.x, cell.y + d.y):
-				c += 1
-		return c
-	
-	var _tunnel_dirs_for := func(cell: Vector2i) -> Array[Vector2i]:
-		# Directions that connect into the tunnel network Under this entrance.
-		var out: Array[Vector2i] = []
-		for d: Vector2i in dirs:
-			var nx: int = cell.x + d.x
-			var nz: int = cell.y + d.y
-			if !_inb.call(nx, nz):
-				continue
-			var ni: int = int(_idx.call(nx, nz))
-			if _tunnel_mask[ni] == 0:
-				continue
-			out.append(d)
-		return out
-	
-	var _yaw_for_front_dir := func(front: Vector2i) -> float:
-		# Godot "forward" is -Z. Rotate so -Z points along front_dir.
-		var dv := Vector3(front.x, 0.0, front.y).normalized()
-		return atan2(dv.x, -dv.z)
-	
-	var _has_clear_front := func(cell: Vector2i, front: Vector2i) -> bool:
-		if !tunnel_elevator_require_clear_front:
-			return true
-		var fx := cell.x + front.x
-		var fz := cell.y + front.y
-		if !_is_platform.call(fx, fz):
-			return false
-		# Require same level so it doesn't hang over a cliff.
-		return _cell_level.call(fx, fz) == _cell_level.call(cell.x, cell.y)
-	
-	var _has_no_ramp_neighbors := func(cell: Vector2i) -> bool:
-		if !tunnel_elevator_require_no_ramp_neighbors:
-			return true
-		for d: Vector2i in dirs:
-			var nx: int = cell.x + d.x
-			var nz: int = cell.y + d.y
-			if !_inb.call(nx, nz):
-				continue
-			if _is_ramp.call(nx, nz):
-				return false
-			if _is_hole.call(nx, nz):
-				return false
-		return true
-	
-	var _best_front_dir := func(cell: Vector2i) -> Vector2i:
-		# 1) Prefer a tunnel-connected direction with clear front.
-		var tdirs: Array[Vector2i] = _tunnel_dirs_for.call(cell)
-		for d: Vector2i in tdirs:
-			# Ignore "back into a hole" where the neighbor is also an entrance.
-			var ni: int = int(_idx.call(cell.x + d.x, cell.y + d.y))
-			if _tunnel_hole_mask[ni] != 0:
-				continue
-			if _has_clear_front.call(cell, d):
-				return d
-		for d: Vector2i in tdirs:
-			if _has_clear_front.call(cell, d):
-				return d
-	
-		# 2) Otherwise, face away from the nearest wall if possible.
-		for wall_d in dirs:
-			var bx: int = cell.x + wall_d.x
-			var bz: int = cell.y + wall_d.y
-			if _inb.call(bx, bz) and _is_platform.call(bx, bz):
-				continue
-			var front: Vector2i = -wall_d
-			if _has_clear_front.call(cell, front):
-				return front
-	
-		# 3) Final fallback: any clear-front direction.
-		for d: Vector2i in dirs:
-			if _has_clear_front.call(cell, d):
-				return d
-		return Vector2i(0, 1)
-	
-	# Shuffle candidates deterministically.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(noise_seed) ^ 0xC0FFEE
 
-	var candidates: Array[Vector2i] = []
-	candidates.assign(_tunnel_entrance_cells)
-	# Fisher-Yates
-	for i in range(candidates.size() - 1, 0, -1):
-		var j := rng.randi_range(0, i)
-		var tmp := candidates[i]
-		candidates[i] = candidates[j]
-		candidates[j] = tmp
 
-	# Greedy select entrances under constraints.
-	var accepted: Array[Vector2i] = []
-	var min_sep2 := tunnel_elevator_min_separation_cells * tunnel_elevator_min_separation_cells
-
-	for cell in candidates:
-		if !_inb.call(cell.x, cell.y):
-			continue
-		# Never put an elevator on a ramp.
-		if _is_ramp.call(cell.x, cell.y):
-			continue
-		# Ensure it is on a platform (neighbors) and not a tiny isolated ledge.
-		if _platform_neighbor_count.call(cell) < 2:
-			continue
-		if !_has_no_ramp_neighbors.call(cell):
-			continue
-
-		var front_dir: Vector2i = _best_front_dir.call(cell)
-		if !_has_clear_front.call(cell, front_dir):
-			continue
-
-		# Separation constraint.
-		var ok_sep := true
-		for a in accepted:
-			var dx := a.x - cell.x
-			var dz := a.y - cell.y
-			if dx * dx + dz * dz < min_sep2:
-				ok_sep = false
-				break
-		if !ok_sep:
-			continue
-
-		accepted.append(cell)
-
-	if accepted.is_empty():
+	var candidates: Array[Vector2i] = _tunnel_entrance_cells.duplicate()
+	if candidates.is_empty():
 		return
 
 	# Place instances.
@@ -4135,15 +3933,12 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 	# Uniform scale to fit within a single cell footprint (prevents overhang / ramp blocking).
 	var target_xz: float = _cell_size * clamp(tunnel_elevator_fit_margin, 0.1, 1.0)
 	var s_uniform: float = min(target_xz / size.x, target_xz / size.z)
-	var scale := Vector3(s_uniform, s_uniform, s_uniform)
+	var basis := Basis.IDENTITY.scaled(Vector3(s_uniform, s_uniform, s_uniform))
 
-	for k in range(accepted.size()):
-		var cell := accepted[k]
-		var idx_e: int = _idx.call(cell.x, cell.y)
+	for k in range(candidates.size()):
+		var cell := candidates[k]
 
-		var front_dir: Vector2i = _best_front_dir.call(cell)
-		var yaw: float = _yaw_for_front_dir.call(front_dir)
-		var basis := Basis(Vector3.UP, yaw).scaled(scale)
+		var idx_e: int = int(_idx.call(cell.x, cell.y))
 
 		var cx := _ox + float(cell.x) * _cell_size + _cell_size * 0.5
 		var cz := _oz + float(cell.y) * _cell_size + _cell_size * 0.5
