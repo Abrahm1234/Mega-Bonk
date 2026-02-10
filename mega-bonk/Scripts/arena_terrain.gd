@@ -4012,7 +4012,7 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 			var nz: int = cell.y + d.y
 			if !_inb.call(nx, nz):
 				continue
-			var ni := _idx.call(nx, nz)
+			var ni: int = int(_idx.call(nx, nz))
 			if _tunnel_mask[ni] == 0:
 				continue
 			out.append(d)
@@ -4052,7 +4052,7 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 		var tdirs: Array[Vector2i] = _tunnel_dirs_for.call(cell)
 		for d: Vector2i in tdirs:
 			# Ignore "back into a hole" where the neighbor is also an entrance.
-			var ni := _idx.call(cell.x + d.x, cell.y + d.y)
+			var ni: int = int(_idx.call(cell.x + d.x, cell.y + d.y))
 			if _tunnel_hole_mask[ni] != 0:
 				continue
 			if _has_clear_front.call(cell, d):
