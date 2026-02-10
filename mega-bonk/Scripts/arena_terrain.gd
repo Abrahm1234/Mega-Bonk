@@ -167,6 +167,8 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_flip_outward: bool = true
 @export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_wedge_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
+@export var wall_wedge_decor_depth_scale: float = 1.0
+@export var wall_wedge_decor_max_depth_cells: float = 0.0 # 0 = no clamp
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
 @export var wall_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
@@ -2939,6 +2941,12 @@ func _rebuild_wall_decor() -> void:
 
 	var rect_faces: Array[WallFace] = []
 	var wedge_faces: Array[WallFace] = []
+	var dbg_wedge_total: int = 0
+	var dbg_wedge_kept: int = 0
+	var dbg_wedge_skip_inward: int = 0
+	var dbg_wedge_skip_surface_only: int = 0
+	var dbg_wedge_skip_trap: int = 0
+	var dbg_wedge_skip_other: int = 0
 	var trap_count: int = 0
 	for face in _wall_faces:
 		if face.is_trapezoid:
@@ -2948,8 +2956,11 @@ func _rebuild_wall_decor() -> void:
 			var wedge: WallFace = parts[1]
 			if rect != null and not wall_decor_skip_trapezoids:
 				rect_faces.append(rect)
-			if wedge != null and not wall_wedge_decor_skip_trapezoids and wedge.height > 0.0005:
-				wedge_faces.append(wedge)
+			if wedge != null and wedge.height > 0.0005:
+				if wall_wedge_decor_skip_trapezoids:
+					dbg_wedge_skip_trap += 1
+				else:
+					wedge_faces.append(wedge)
 		else:
 			rect_faces.append(face)
 	print(
@@ -2977,8 +2988,10 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
+			dbg_wedge_total += 1
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+					dbg_wedge_skip_other += 1
 					continue
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf)
@@ -2992,8 +3005,10 @@ func _rebuild_wall_decor() -> void:
 				var h_ceiling := maxf(h_side, h_center)
 
 				if h_ceiling > top_y + wall_decor_surface_margin:
+					dbg_wedge_skip_surface_only += 1
 					continue
 			if not _allow_wedge_decor_face(wf):
+				dbg_wedge_skip_other += 1
 				continue
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			wedge_counts[widx] += 1
@@ -3150,6 +3165,7 @@ func _rebuild_wall_decor() -> void:
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
 			if wmmi2 == null:
+				dbg_wedge_skip_other += 1
 				continue
 
 			var waabb: AABB = wedge_aabb_by_variant[wsel]
@@ -3158,6 +3174,7 @@ func _rebuild_wall_decor() -> void:
 			var wwi: int = wedge_write_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
 			wedge_write_i[wsel] = wwi + 1
+			dbg_wedge_kept += 1
 
 
 	if has_rect_decor:
@@ -3173,6 +3190,14 @@ func _rebuild_wall_decor() -> void:
 			if wedge_mmi == null:
 				continue
 			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
+		print("wedge_dbg total=%d kept=%d skip_inward=%d skip_surface=%d skip_trap=%d skip_other=%d" % [
+			dbg_wedge_total,
+			dbg_wedge_kept,
+			dbg_wedge_skip_inward,
+			dbg_wedge_skip_surface_only,
+			dbg_wedge_skip_trap,
+			dbg_wedge_skip_other
+		])
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
@@ -3363,17 +3388,47 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
-	var y_dir := Vector3.UP
+	# Build a stable frame:
+	# z_dir = outward (horizontal), x_dir = horizontal perpendicular to outward, y_dir orthonormal.
+	var z_dir: Vector3 = outward
+	z_dir.y = 0.0
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3.FORWARD
+	z_dir = z_dir.normalized()
 
-	var left_avg: float = (face.a.y + face.d.y) * 0.5
-	var right_avg: float = (face.b.y + face.c.y) * 0.5
-	var slope_up_toward_right: bool = right_avg > left_avg
-	var x_dir := (outward.cross(y_dir) if slope_up_toward_right else y_dir.cross(outward)).normalized()
+	var x_dir: Vector3 = Vector3.UP.cross(z_dir)
 	if x_dir.length_squared() < 1e-8:
 		x_dir = Vector3.RIGHT
-	var z_dir := outward
+	x_dir = x_dir.normalized()
 
-	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
+	var c: Vector3 = face.center
+	var pos_sum: float = 0.0
+	var neg_sum: float = 0.0
+	var pos_n: int = 0
+	var neg_n: int = 0
+
+	var pts := [face.a, face.b, face.c, face.d]
+	for p in pts:
+		var side: float = (p - c).dot(x_dir)
+		if side >= 0.0:
+			pos_sum += p.y
+			pos_n += 1
+		else:
+			neg_sum += p.y
+			neg_n += 1
+
+	if pos_n > 0 and neg_n > 0:
+		var pos_avg: float = pos_sum / float(pos_n)
+		var neg_avg: float = neg_sum / float(neg_n)
+		if pos_avg < neg_avg:
+			x_dir = -x_dir
+
+	var y_dir: Vector3 = z_dir.cross(x_dir).normalized()
+	x_dir = y_dir.cross(z_dir).normalized()
+
+	var rot: Basis = Basis(x_dir, y_dir, z_dir).orthonormalized()
 
 	var attach_far: bool = wall_wedge_decor_attach_far_side
 	if wall_wedge_decor_flip_facing:
@@ -3390,7 +3445,14 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 		if wall_wedge_decor_max_scale > 0.0:
 			sx = min(sx, wall_wedge_decor_max_scale)
 			sy = min(sy, wall_wedge_decor_max_scale)
-	var sz: float = 1.0
+	# Depth (thickness) along the outward axis (mesh local Z).
+	var sz: float = wall_wedge_decor_depth_scale
+	if wall_wedge_decor_max_depth_cells > 0.0:
+		var max_world: float = _cell_size * wall_wedge_decor_max_depth_cells
+		var ref_z: float = maxf(aabb.size.z, 0.001)
+		var max_scale: float = max_world / ref_z
+		sz = minf(sz, max_scale)
+	sz = maxf(sz, 0.001)
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
