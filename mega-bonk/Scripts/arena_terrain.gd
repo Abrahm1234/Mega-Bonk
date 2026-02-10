@@ -2943,10 +2943,15 @@ func _rebuild_wall_decor() -> void:
 	var wedge_faces: Array[WallFace] = []
 	var dbg_wedge_total: int = 0
 	var dbg_wedge_kept: int = 0
-	var dbg_wedge_skip_inward: int = 0
-	var dbg_wedge_skip_surface_only: int = 0
 	var dbg_wedge_skip_trap: int = 0
-	var dbg_wedge_skip_other: int = 0
+	var dbg_wedge_skip_null_or_short: int = 0
+	var dbg_wedge_skip_occluder_count: int = 0
+	var dbg_wedge_skip_surface_count: int = 0
+	var dbg_wedge_skip_allow_count: int = 0
+	var dbg_wedge_skip_occluder_place: int = 0
+	var dbg_wedge_skip_surface_place: int = 0
+	var dbg_wedge_skip_allow_place: int = 0
+	var dbg_wedge_skip_variant_place: int = 0
 	var trap_count: int = 0
 	for face in _wall_faces:
 		if face.is_trapezoid:
@@ -2956,11 +2961,12 @@ func _rebuild_wall_decor() -> void:
 			var wedge: WallFace = parts[1]
 			if rect != null and not wall_decor_skip_trapezoids:
 				rect_faces.append(rect)
-			if wedge != null and wedge.height > 0.0005:
-				if wall_wedge_decor_skip_trapezoids:
-					dbg_wedge_skip_trap += 1
-				else:
-					wedge_faces.append(wedge)
+			if wedge == null or wedge.height <= 0.0005:
+				dbg_wedge_skip_null_or_short += 1
+			elif wall_wedge_decor_skip_trapezoids:
+				dbg_wedge_skip_trap += 1
+			else:
+				wedge_faces.append(wedge)
 		else:
 			rect_faces.append(face)
 	print(
@@ -2991,8 +2997,8 @@ func _rebuild_wall_decor() -> void:
 			dbg_wedge_total += 1
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
-					dbg_wedge_skip_other += 1
-					continue
+					dbg_wedge_skip_occluder_count += 1
+					continue # COUNT_PASS: SKIP_OCCLUDER_CAP
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf)
 				var outward := _wall_place_outward(wf)
@@ -3005,11 +3011,11 @@ func _rebuild_wall_decor() -> void:
 				var h_ceiling := maxf(h_side, h_center)
 
 				if h_ceiling > top_y + wall_decor_surface_margin:
-					dbg_wedge_skip_surface_only += 1
-					continue
+					dbg_wedge_skip_surface_count += 1
+					continue # COUNT_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf):
-				dbg_wedge_skip_other += 1
-				continue
+				dbg_wedge_skip_allow_count += 1
+				continue # COUNT_PASS: SKIP_NOT_ALLOWED
 			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			wedge_counts[widx] += 1
 
@@ -3146,7 +3152,8 @@ func _rebuild_wall_decor() -> void:
 		for wf2: WallFace in wedge_faces:
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
-					continue
+					dbg_wedge_skip_occluder_place += 1
+					continue # PLACE_PASS: SKIP_OCCLUDER_CAP
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf2)
 				var outward := _wall_place_outward(wf2)
@@ -3159,14 +3166,16 @@ func _rebuild_wall_decor() -> void:
 				var h_ceiling := maxf(h_side, h_center)
 
 				if h_ceiling > top_y + wall_decor_surface_margin:
-					continue
+					dbg_wedge_skip_surface_place += 1
+					continue # PLACE_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf2):
-				continue
+				dbg_wedge_skip_allow_place += 1
+				continue # PLACE_PASS: SKIP_NOT_ALLOWED
 			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
 			if wmmi2 == null:
-				dbg_wedge_skip_other += 1
-				continue
+				dbg_wedge_skip_variant_place += 1
+				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
 
 			var waabb: AABB = wedge_aabb_by_variant[wsel]
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
@@ -3190,13 +3199,18 @@ func _rebuild_wall_decor() -> void:
 			if wedge_mmi == null:
 				continue
 			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
-		print("wedge_dbg total=%d kept=%d skip_inward=%d skip_surface=%d skip_trap=%d skip_other=%d" % [
+		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d) place(occluder=%d,surface=%d,allow=%d,variant=%d)" % [
 			dbg_wedge_total,
 			dbg_wedge_kept,
-			dbg_wedge_skip_inward,
-			dbg_wedge_skip_surface_only,
 			dbg_wedge_skip_trap,
-			dbg_wedge_skip_other
+			dbg_wedge_skip_null_or_short,
+			dbg_wedge_skip_occluder_count,
+			dbg_wedge_skip_surface_count,
+			dbg_wedge_skip_allow_count,
+			dbg_wedge_skip_occluder_place,
+			dbg_wedge_skip_surface_place,
+			dbg_wedge_skip_allow_place,
+			dbg_wedge_skip_variant_place
 		])
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
