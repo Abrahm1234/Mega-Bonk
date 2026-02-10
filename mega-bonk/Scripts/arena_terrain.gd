@@ -176,6 +176,8 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_seed: int = 24601
 @export var floor_decor_offset: float = 0.01
 @export var floor_decor_fit_to_cell: bool = true
+@export var floor_decor_depth_scale: float = 0.20 # meters of thickness along the face normal
+@export var floor_decor_max_depth_cells: float = 1.0 # clamp thickness to <= 1 cell if desired
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
@@ -3711,11 +3713,15 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		sx = s
 		sd = s
 
-	# Scale in local space (do not scale thickness)
+	# Scale in local space; include thickness along the surface normal axis.
 	var scale_vec := Vector3.ONE
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
-	scale_vec[normal_axis] = 1.0
+	var sz: float = maxf(0.001, floor_decor_depth_scale)
+	if floor_decor_fit_to_cell:
+		var max_sz: float = maxf(0.001, _cell_size) * maxf(0.001, floor_decor_max_depth_cells)
+		sz = minf(sz, max_sz)
+	scale_vec[normal_axis] = sz
 	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
