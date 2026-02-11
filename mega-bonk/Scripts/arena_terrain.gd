@@ -192,6 +192,11 @@ class_name ArenaBlockyTerrain
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
 
+func _validate_property(property: Dictionary) -> void:
+	if property.name == "wall_wedge_decor_meshes":
+		if wall_wedge_decor_meshes_left.size() > 0 or wall_wedge_decor_meshes_right.size() > 0:
+			property.usage = PROPERTY_USAGE_NO_EDITOR
+
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
 
@@ -2818,7 +2823,10 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
-func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
+func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
+	if not face.is_trapezoid:
+		return [face, null]
+
 	var e0_lo: Vector3 = face.a
 	var e0_hi: Vector3 = face.d
 	if e0_hi.y < e0_lo.y:
@@ -2838,7 +2846,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var min_h: float = minf(h0, h1)
 
 	if absf(h0 - h1) < 0.0001:
-		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
+		return [face, null]
 
 	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
 	var t1: float = clampf(min_h / maxf(h1, 0.0001), 0.0, 1.0)
@@ -3217,12 +3225,6 @@ func _rebuild_wall_decor() -> void:
 			if not _allow_wedge_decor_face(wf2):
 				dbg_wedge_skip_allow_place += 1
 				continue # PLACE_PASS: SKIP_NOT_ALLOWED
-			var h_surface: float = _sample_top_surface_y_wide(wf2.center.x, wf2.center.z, place_outward, false)
-			if h_surface > _NEG_INF * 0.5:
-				var under_margin: float = maxf(height_step * 0.5, 0.1)
-				if wf2.center.y < h_surface - under_margin:
-					dbg_wedge_skip_under_surface_place += 1
-					continue
 			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var side_is_right: bool = _wedge_is_right_side_outward(wf2, place_outward)
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_right_by_variant[wsel] if side_is_right else wedge_mmi_left_by_variant[wsel]
@@ -3231,7 +3233,7 @@ func _rebuild_wall_decor() -> void:
 				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
 
 			var waabb: AABB = wedge_aabb_right_by_variant[wsel] if side_is_right else wedge_aabb_left_by_variant[wsel]
-			var overhang_flip_180: bool = _wedge_overhang_flip_180(wf2, place_outward)
+			var overhang_flip_180: bool = wall_wedge_decor_enable_overhang_flip_180 and wf2.is_trapezoid
 			if wall_decor_debug_verbose and (wall_decor_debug_focus_fi < 0 or wall_decor_debug_focus_fi == wedge_place_fi):
 				var n_cells_dbg: int = max(2, cells_per_side)
 				var probe_step_dbg: float = _cell_size * 0.25
@@ -3241,6 +3243,11 @@ func _rebuild_wall_decor() -> void:
 				var ramp_out_dbg: bool = _cell_is_ramp(c_out_dbg.x, c_out_dbg.y, n_cells_dbg)
 				_wd("[WEDGE] fi=%d key=%d center=%s place_outward=%s side=%s flip_outward=%s attach_far=%s flip_facing=%s overhang_flip_180=%s ramp_in/out=%s/%s c_in=%s c_out=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, _fmt_v3(wf2.center), _fmt_v3(place_outward), ("R" if side_is_right else "L"), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_attach_far_side), str(wall_wedge_decor_flip_facing), str(overhang_flip_180), str(ramp_in_dbg), str(ramp_out_dbg), str(c_in_dbg), str(c_out_dbg), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, place_outward, wall_wedge_decor_offset, wall_wedge_decor_attach_far_side, overhang_flip_180)
+			var h_surface: float = _sample_top_surface_y_wide(wxf.origin.x, wxf.origin.z, place_outward, false)
+			if h_surface > _NEG_INF * 0.5:
+				if wxf.origin.y < h_surface - 0.10:
+					dbg_wedge_skip_under_surface_place += 1
+					continue
 
 			var wwi: int = wedge_write_right_i[wsel] if side_is_right else wedge_write_left_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
