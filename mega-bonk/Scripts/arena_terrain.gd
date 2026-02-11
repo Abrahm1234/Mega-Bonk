@@ -3029,7 +3029,8 @@ func _rebuild_wall_decor() -> void:
 				dbg_wedge_skip_allow_count += 1
 				continue # COUNT_PASS: SKIP_NOT_ALLOWED
 			var widx: int = absi(wf.key + wall_wedge_decor_seed) % wedge_variant_count
-			if _wedge_is_right_side(wf):
+			var outward_count: Vector3 = _wall_place_outward(wf)
+			if _wedge_is_right_side_outward(wf, outward_count):
 				wedge_counts_right[widx] += 1
 			else:
 				wedge_counts_left[widx] += 1
@@ -3186,14 +3187,17 @@ func _rebuild_wall_decor() -> void:
 			rect_write_i[vsel] = wi + 1
 
 	if has_wedge_decor:
+		var wedge_place_fi: int = 0
 		for wf2: WallFace in wedge_faces:
+			wedge_place_fi += 1
+			var outward2: Vector3 = _wall_place_outward(wf2)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_place += 1
 					continue # PLACE_PASS: SKIP_OCCLUDER_CAP
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf2)
-				var outward := _wall_place_outward(wf2)
+				var outward := outward2
 
 				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
 				var p_side := wf2.center + outward * (eps + 0.001)
@@ -3209,14 +3213,16 @@ func _rebuild_wall_decor() -> void:
 				dbg_wedge_skip_allow_place += 1
 				continue # PLACE_PASS: SKIP_NOT_ALLOWED
 			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
-			var side_is_right: bool = _wedge_is_right_side(wf2)
+			var side_is_right: bool = _wedge_is_right_side_outward(wf2, outward2)
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_right_by_variant[wsel] if side_is_right else wedge_mmi_left_by_variant[wsel]
 			if wmmi2 == null:
 				dbg_wedge_skip_variant_place += 1
 				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
 
 			var waabb: AABB = wedge_aabb_right_by_variant[wsel] if side_is_right else wedge_aabb_left_by_variant[wsel]
-			var overhang_flip_180: bool = _wedge_overhang_flip_180(wf2, _wall_place_outward(wf2))
+			var overhang_flip_180: bool = _wedge_overhang_flip_180(wf2, outward2)
+			if wall_decor_debug_verbose and (wall_decor_debug_focus_fi < 0 or wall_decor_debug_focus_fi == wedge_place_fi):
+				_wd("[WEDGE] fi=%d key=%d outward=%s is_right=%s overhang_flip_180=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, _fmt_v3(outward2), str(side_is_right), str(overhang_flip_180), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset, overhang_flip_180)
 
 			var wwi: int = wedge_write_right_i[wsel] if side_is_right else wedge_write_left_i[wsel]
@@ -3261,6 +3267,55 @@ func _wedge_is_right_side(wf: WallFace) -> bool:
 	var avg_left: float = 0.5 * (wf.a.y + wf.d.y)
 	var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
 	return avg_right > avg_left
+
+func _wedge_is_right_side_outward(wf: WallFace, outward: Vector3) -> bool:
+	var z: Vector3 = Vector3(outward.x, 0.0, outward.z)
+	if z.length_squared() < 1e-8:
+		z = Vector3(wf.normal.x, 0.0, wf.normal.z)
+	if z.length_squared() < 1e-8:
+		return _wedge_is_right_side(wf)
+	z = z.normalized()
+
+	var right: Vector3 = Vector3.UP.cross(z)
+	if right.length_squared() < 1e-8:
+		return _wedge_is_right_side(wf)
+	right = right.normalized()
+
+	var center: Vector3 = wf.center
+	var verts: Array[Vector3] = [wf.a, wf.b, wf.c, wf.d]
+
+	var tmin: float = INF
+	var tmax: float = -INF
+	for v in verts:
+		var t: float = (v - center).dot(right)
+		tmin = minf(tmin, t)
+		tmax = maxf(tmax, t)
+
+	var ext: float = tmax - tmin
+	if ext < 1e-4:
+		return _wedge_is_right_side(wf)
+
+	var band: float = ext * 0.25
+	var y_lo: float = 0.0
+	var y_hi: float = 0.0
+	var n_lo: int = 0
+	var n_hi: int = 0
+
+	for v2 in verts:
+		var t2: float = (v2 - center).dot(right)
+		if t2 <= tmin + band:
+			y_lo += v2.y
+			n_lo += 1
+		if t2 >= tmax - band:
+			y_hi += v2.y
+			n_hi += 1
+
+	if n_lo == 0 or n_hi == 0:
+		return _wedge_is_right_side(wf)
+
+	y_lo /= float(n_lo)
+	y_hi /= float(n_hi)
+	return y_hi > y_lo
 
 func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
 	var cx: int = int(floor((p.x - _ox) / _cell_size))
