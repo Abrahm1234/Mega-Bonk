@@ -2989,7 +2989,9 @@ func _rebuild_wall_decor() -> void:
 			var parts := _split_trapezoid_wall_face_for_decor(face)
 			var rect: WallFace = parts[0]
 			var wedge: WallFace = parts[1]
-			if rect != null and not wall_decor_skip_trapezoids:
+			# Route the rectangular (lower) part of trapezoids into normal wall decor.
+			# This keeps under-ramp wall panels while reserving the wedge region for wedge decor.
+			if rect != null and rect.height >= wall_decor_min_height:
 				rect_faces.append(rect)
 			if wedge == null or wedge.height <= 0.0005:
 				dbg_wedge_skip_null_or_short += 1
