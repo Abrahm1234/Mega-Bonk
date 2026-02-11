@@ -316,6 +316,9 @@ var _shaft_decor_instances: int = 0
 var _floor_mesh_normal_axis_cache: Dictionary = {}
 var _floor_mesh_cap_cache: Dictionary = {}
 
+var _dbg_ramp_cells_emitted: int = 0
+var _dbg_ramp_quads_added: int = 0
+
 
 func _wall_face_min_world_y(f: WallFace) -> float:
 	return min(min(f.a.y, f.b.y), min(f.c.y, f.d.y))
@@ -977,7 +980,7 @@ func generate() -> void:
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
 	_build_tunnel_elevator_tops(n)
-	print("Ramp slots:", _count_ramps())
+	print("Ramp slots:", _count_ramps(), " ramp_cells_emitted:", _dbg_ramp_cells_emitted, " ramp_quads_added:", _dbg_ramp_quads_added)
 	_sync_sun()
 
 # -----------------------------
@@ -1989,6 +1992,8 @@ func _build_mesh_and_collision(n: int) -> void:
 	var dbg_wall_added: int = 0
 	var dbg_top_skipped: int = 0
 	var dbg_hole_on_ramp_cleared: int = 0
+	_dbg_ramp_cells_emitted = 0
+	_dbg_ramp_quads_added = 0
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
@@ -2034,6 +2039,10 @@ func _build_mesh_and_collision(n: int) -> void:
 					uv_scale_top,
 					top_col
 				)
+				if is_ramp:
+					_dbg_ramp_cells_emitted += 1
+					var sdiv_dbg: int = maxi(1, top_subdiv)
+					_dbg_ramp_quads_added += sdiv_dbg * sdiv_dbg
 
 	if enable_tunnels and tunnel_occluder_enabled:
 		var occluder_col := tunnel_occluder_color
@@ -3242,12 +3251,11 @@ func _rebuild_wall_decor() -> void:
 				var ramp_in_dbg: bool = _cell_is_ramp(c_in_dbg.x, c_in_dbg.y, n_cells_dbg)
 				var ramp_out_dbg: bool = _cell_is_ramp(c_out_dbg.x, c_out_dbg.y, n_cells_dbg)
 				_wd("[WEDGE] fi=%d key=%d center=%s place_outward=%s side=%s flip_outward=%s attach_far=%s flip_facing=%s overhang_flip_180=%s ramp_in/out=%s/%s c_in=%s c_out=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, _fmt_v3(wf2.center), _fmt_v3(place_outward), ("R" if side_is_right else "L"), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_attach_far_side), str(wall_wedge_decor_flip_facing), str(overhang_flip_180), str(ramp_in_dbg), str(ramp_out_dbg), str(c_in_dbg), str(c_out_dbg), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
+			var under_floor_margin: float = maxf(0.25, height_step * 0.25)
+			if wf2.center.y < outer_floor_height - under_floor_margin:
+				dbg_wedge_skip_under_surface_place += 1
+				continue
 			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, place_outward, wall_wedge_decor_offset, wall_wedge_decor_attach_far_side, overhang_flip_180)
-			var h_surface: float = _sample_top_surface_y_wide(wxf.origin.x, wxf.origin.z, place_outward, false)
-			if h_surface > _NEG_INF * 0.5:
-				if wxf.origin.y < h_surface - 0.10:
-					dbg_wedge_skip_under_surface_place += 1
-					continue
 
 			var wwi: int = wedge_write_right_i[wsel] if side_is_right else wedge_write_left_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
@@ -3355,48 +3363,6 @@ func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
 	if _ramp_up_dir.size() != n * n:
 		return false
 	return _ramp_up_dir[_idx2(cx, cz, n)] != RAMP_NONE
-
-func _ray_hits(from: Vector3, to: Vector3, mask: int) -> bool:
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collision_mask = mask
-	q.hit_from_inside = true
-	q.collide_with_bodies = true
-	q.collide_with_areas = false
-	var hit := space.intersect_ray(q)
-	return !hit.is_empty()
-
-func _wedge_overhang_flip_180(wf: WallFace, placing_outward: Vector3) -> bool:
-	if not wall_wedge_decor_enable_overhang_flip_180:
-		return false
-
-	var z_dir: Vector3 = Vector3(placing_outward.x, 0.0, placing_outward.z)
-	if z_dir.length_squared() < 1e-8:
-		z_dir = Vector3(wf.normal.x, 0.0, wf.normal.z)
-	if z_dir.length_squared() < 1e-8:
-		return false
-	z_dir = z_dir.normalized()
-
-	var n: int = max(2, cells_per_side)
-	var eps: float = _cell_size * 0.25
-	var c_out: Vector2i = _world_to_cell_xz(wf.center + z_dir * eps, n)
-	var c_in: Vector2i = _world_to_cell_xz(wf.center - z_dir * eps, n)
-
-	var ramp_out: bool = _cell_is_ramp(c_out.x, c_out.y, n)
-	var ramp_in: bool = _cell_is_ramp(c_in.x, c_in.y, n)
-	var grid_flip: bool = ramp_in and not ramp_out
-
-	# Raycast validation: inward is under geometry while outward is open.
-	var lateral: float = _cell_size * 0.25
-	var up0: float = _cell_size * 0.05
-	var up1: float = _cell_size * 0.75
-	var p_in: Vector3 = wf.center - z_dir * lateral + Vector3.UP * up0
-	var p_out: Vector3 = wf.center + z_dir * lateral + Vector3.UP * up0
-	var ray_in: bool = _ray_hits(p_in, p_in + Vector3.UP * up1, wall_decor_open_side_raycast_mask)
-	var ray_out: bool = _ray_hits(p_out, p_out + Vector3.UP * up1, wall_decor_open_side_raycast_mask)
-	var ray_flip: bool = ray_in and !ray_out
-
-	return ray_flip or grid_flip
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
