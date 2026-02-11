@@ -158,6 +158,9 @@ class_name ArenaBlockyTerrain
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
 @export var enable_wall_wedge_decor: bool = true
 @export var wall_wedge_decor_meshes: Array[Mesh] = []
+@export var wall_wedge_decor_meshes_left: Array[Mesh] = []
+@export var wall_wedge_decor_meshes_right: Array[Mesh] = []
+@export var wall_wedge_decor_enable_overhang_flip_180: bool = true
 @export var wall_wedge_decor_seed: int = 1337
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
@@ -2896,7 +2899,14 @@ func _decor_global_aabb(pad: float = 2.0) -> AABB:
 
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
-	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
+	var wedge_meshes_left: Array[Mesh] = wall_wedge_decor_meshes_left
+	var wedge_meshes_right: Array[Mesh] = wall_wedge_decor_meshes_right
+	if wedge_meshes_left.is_empty() and not wall_wedge_decor_meshes.is_empty():
+		wedge_meshes_left = wall_wedge_decor_meshes
+	if wedge_meshes_right.is_empty() and not wall_wedge_decor_meshes.is_empty():
+		wedge_meshes_right = wall_wedge_decor_meshes
+	var wedge_variant_count: int = mini(wedge_meshes_left.size(), wedge_meshes_right.size())
+	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
 	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
@@ -2926,7 +2936,6 @@ func _rebuild_wall_decor() -> void:
 		child.queue_free()
 
 	var rect_variant_count: int = wall_decor_meshes.size()
-	var wedge_variant_count: int = wall_wedge_decor_meshes.size()
 	var decor_aabb := _decor_global_aabb(4.0)
 
 	var rect_counts: Array[int] = []
@@ -2934,10 +2943,13 @@ func _rebuild_wall_decor() -> void:
 	for i: int in range(rect_variant_count):
 		rect_counts[i] = 0
 
-	var wedge_counts: Array[int] = []
-	wedge_counts.resize(wedge_variant_count)
+	var wedge_counts_left: Array[int] = []
+	var wedge_counts_right: Array[int] = []
+	wedge_counts_left.resize(wedge_variant_count)
+	wedge_counts_right.resize(wedge_variant_count)
 	for i2: int in range(wedge_variant_count):
-		wedge_counts[i2] = 0
+		wedge_counts_left[i2] = 0
+		wedge_counts_right[i2] = 0
 
 	var rect_faces: Array[WallFace] = []
 	var wedge_faces: Array[WallFace] = []
@@ -3016,8 +3028,11 @@ func _rebuild_wall_decor() -> void:
 			if not _allow_wedge_decor_face(wf):
 				dbg_wedge_skip_allow_count += 1
 				continue # COUNT_PASS: SKIP_NOT_ALLOWED
-			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
-			wedge_counts[widx] += 1
+			var widx: int = absi(wf.key + wall_wedge_decor_seed) % wedge_variant_count
+			if _wedge_is_right_side(wf):
+				wedge_counts_right[widx] += 1
+			else:
+				wedge_counts_left[widx] += 1
 
 	var rect_mmi_by_variant: Array[MultiMeshInstance3D] = []
 	rect_mmi_by_variant.resize(rect_variant_count)
@@ -3043,39 +3058,61 @@ func _rebuild_wall_decor() -> void:
 		rect_mmi_by_variant[v] = mmi
 		rect_aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
 
-	var wedge_mmi_by_variant: Array[MultiMeshInstance3D] = []
-	wedge_mmi_by_variant.resize(wedge_variant_count)
+	var wedge_mmi_left_by_variant: Array[MultiMeshInstance3D] = []
+	var wedge_mmi_right_by_variant: Array[MultiMeshInstance3D] = []
+	wedge_mmi_left_by_variant.resize(wedge_variant_count)
+	wedge_mmi_right_by_variant.resize(wedge_variant_count)
 
-	var wedge_aabb_by_variant: Array[AABB] = []
-	wedge_aabb_by_variant.resize(wedge_variant_count)
+	var wedge_aabb_left_by_variant: Array[AABB] = []
+	var wedge_aabb_right_by_variant: Array[AABB] = []
+	wedge_aabb_left_by_variant.resize(wedge_variant_count)
+	wedge_aabb_right_by_variant.resize(wedge_variant_count)
 
 	for wv: int in range(wedge_variant_count):
-		if wedge_counts[wv] <= 0:
-			wedge_mmi_by_variant[wv] = null
-			continue
+		if wedge_counts_left[wv] > 0:
+			var wmm_left: MultiMesh = MultiMesh.new()
+			wmm_left.transform_format = MultiMesh.TRANSFORM_3D
+			wmm_left.mesh = wedge_meshes_left[wv]
+			wmm_left.instance_count = wedge_counts_left[wv]
 
-		var wmm: MultiMesh = MultiMesh.new()
-		wmm.transform_format = MultiMesh.TRANSFORM_3D
-		wmm.mesh = wall_wedge_decor_meshes[wv]
-		wmm.instance_count = wedge_counts[wv]
+			var wmmi_left: MultiMeshInstance3D = MultiMeshInstance3D.new()
+			wmmi_left.multimesh = wmm_left
+			wmmi_left.custom_aabb = decor_aabb
 
-		var wmmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-		wmmi.multimesh = wmm
-		wmmi.custom_aabb = decor_aabb
+			_wall_decor_root.add_child(wmmi_left)
+			wedge_mmi_left_by_variant[wv] = wmmi_left
+			wedge_aabb_left_by_variant[wv] = wedge_meshes_left[wv].get_aabb()
+		else:
+			wedge_mmi_left_by_variant[wv] = null
 
-		_wall_decor_root.add_child(wmmi)
-		wedge_mmi_by_variant[wv] = wmmi
-		wedge_aabb_by_variant[wv] = wall_wedge_decor_meshes[wv].get_aabb()
+		if wedge_counts_right[wv] > 0:
+			var wmm_right: MultiMesh = MultiMesh.new()
+			wmm_right.transform_format = MultiMesh.TRANSFORM_3D
+			wmm_right.mesh = wedge_meshes_right[wv]
+			wmm_right.instance_count = wedge_counts_right[wv]
+
+			var wmmi_right: MultiMeshInstance3D = MultiMeshInstance3D.new()
+			wmmi_right.multimesh = wmm_right
+			wmmi_right.custom_aabb = decor_aabb
+
+			_wall_decor_root.add_child(wmmi_right)
+			wedge_mmi_right_by_variant[wv] = wmmi_right
+			wedge_aabb_right_by_variant[wv] = wedge_meshes_right[wv].get_aabb()
+		else:
+			wedge_mmi_right_by_variant[wv] = null
 
 	var rect_write_i: Array[int] = []
 	rect_write_i.resize(rect_variant_count)
 	for v2: int in range(rect_variant_count):
 		rect_write_i[v2] = 0
 
-	var wedge_write_i: Array[int] = []
-	wedge_write_i.resize(wedge_variant_count)
+	var wedge_write_left_i: Array[int] = []
+	var wedge_write_right_i: Array[int] = []
+	wedge_write_left_i.resize(wedge_variant_count)
+	wedge_write_right_i.resize(wedge_variant_count)
 	for wv2: int in range(wedge_variant_count):
-		wedge_write_i[wv2] = 0
+		wedge_write_left_i[wv2] = 0
+		wedge_write_right_i[wv2] = 0
 
 	var total_rect_instances: int = 0
 	for count in rect_counts:
@@ -3084,8 +3121,8 @@ func _rebuild_wall_decor() -> void:
 		push_warning("Wall decor: 0 rectangular instances after filtering. Check max size.")
 
 	var total_wedge_instances: int = 0
-	for wcount in wedge_counts:
-		total_wedge_instances += wcount
+	for wvi: int in range(wedge_variant_count):
+		total_wedge_instances += wedge_counts_left[wvi] + wedge_counts_right[wvi]
 	if has_wedge_decor and total_wedge_instances <= 0:
 		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
 
@@ -3171,18 +3208,23 @@ func _rebuild_wall_decor() -> void:
 			if not _allow_wedge_decor_face(wf2):
 				dbg_wedge_skip_allow_place += 1
 				continue # PLACE_PASS: SKIP_NOT_ALLOWED
-			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
-			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
+			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
+			var side_is_right: bool = _wedge_is_right_side(wf2)
+			var wmmi2: MultiMeshInstance3D = wedge_mmi_right_by_variant[wsel] if side_is_right else wedge_mmi_left_by_variant[wsel]
 			if wmmi2 == null:
 				dbg_wedge_skip_variant_place += 1
 				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
 
-			var waabb: AABB = wedge_aabb_by_variant[wsel]
-			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
+			var waabb: AABB = wedge_aabb_right_by_variant[wsel] if side_is_right else wedge_aabb_left_by_variant[wsel]
+			var overhang_flip_180: bool = _wedge_overhang_flip_180(wf2, _wall_place_outward(wf2))
+			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset, overhang_flip_180)
 
-			var wwi: int = wedge_write_i[wsel]
+			var wwi: int = wedge_write_right_i[wsel] if side_is_right else wedge_write_left_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
-			wedge_write_i[wsel] = wwi + 1
+			if side_is_right:
+				wedge_write_right_i[wsel] = wwi + 1
+			else:
+				wedge_write_left_i[wsel] = wwi + 1
 			dbg_wedge_kept += 1
 
 
@@ -3195,10 +3237,12 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wv3: int in range(wedge_variant_count):
-			var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_variant[wv3]
-			if wedge_mmi == null:
-				continue
-			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
+			var wedge_mmi_left: MultiMeshInstance3D = wedge_mmi_left_by_variant[wv3]
+			if wedge_mmi_left != null:
+				wedge_mmi_left.multimesh.visible_instance_count = wedge_write_left_i[wv3]
+			var wedge_mmi_right: MultiMeshInstance3D = wedge_mmi_right_by_variant[wv3]
+			if wedge_mmi_right != null:
+				wedge_mmi_right.multimesh.visible_instance_count = wedge_write_right_i[wv3]
 		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d) place(occluder=%d,surface=%d,allow=%d,variant=%d)" % [
 			dbg_wedge_total,
 			dbg_wedge_kept,
@@ -3212,6 +3256,46 @@ func _rebuild_wall_decor() -> void:
 			dbg_wedge_skip_allow_place,
 			dbg_wedge_skip_variant_place
 		])
+
+func _wedge_is_right_side(wf: WallFace) -> bool:
+	var avg_left: float = 0.5 * (wf.a.y + wf.d.y)
+	var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
+	return avg_right > avg_left
+
+func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
+	var cx: int = int(floor((p.x - _ox) / _cell_size))
+	var cz: int = int(floor((p.z - _oz) / _cell_size))
+	cx = clamp(cx, 0, n - 1)
+	cz = clamp(cz, 0, n - 1)
+	return Vector2i(cx, cz)
+
+func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
+	if not _in_bounds(cx, cz, n):
+		return false
+	if _ramp_up_dir.size() != n * n:
+		return false
+	return _ramp_up_dir[_idx2(cx, cz, n)] != RAMP_NONE
+
+func _wedge_overhang_flip_180(wf: WallFace, placing_outward: Vector3) -> bool:
+	if not wall_wedge_decor_enable_overhang_flip_180:
+		return false
+
+	var z_dir: Vector3 = Vector3(placing_outward.x, 0.0, placing_outward.z)
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3(wf.normal.x, 0.0, wf.normal.z)
+	if z_dir.length_squared() < 1e-8:
+		return false
+	z_dir = z_dir.normalized()
+
+	var n: int = max(2, cells_per_side)
+	var eps: float = _cell_size * 0.25
+	var c_out: Vector2i = _world_to_cell_xz(wf.center + z_dir * eps, n)
+	var c_in: Vector2i = _world_to_cell_xz(wf.center - z_dir * eps, n)
+
+	var ramp_out: bool = _cell_is_ramp(c_out.x, c_out.y, n)
+	var ramp_in: bool = _cell_is_ramp(c_in.x, c_in.y, n)
+
+	return ramp_in and not ramp_out
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
@@ -3392,7 +3476,7 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
-func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
+func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float, overhang_flip_180: bool = false) -> Transform3D:
 	# Use the same open-side/uncovered-side logic as rectangular wall decor.
 	var outward := _wall_place_outward(face)
 	outward.y = 0.0
@@ -3416,28 +3500,6 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	if x_dir.length_squared() < 1e-8:
 		x_dir = Vector3.RIGHT
 	x_dir = x_dir.normalized()
-
-	var c: Vector3 = face.center
-	var pos_sum: float = 0.0
-	var neg_sum: float = 0.0
-	var pos_n: int = 0
-	var neg_n: int = 0
-
-	var pts := [face.a, face.b, face.c, face.d]
-	for p in pts:
-		var side: float = (p - c).dot(x_dir)
-		if side >= 0.0:
-			pos_sum += p.y
-			pos_n += 1
-		else:
-			neg_sum += p.y
-			neg_n += 1
-
-	if pos_n > 0 and neg_n > 0:
-		var pos_avg: float = pos_sum / float(pos_n)
-		var neg_avg: float = neg_sum / float(neg_n)
-		if pos_avg < neg_avg:
-			x_dir = -x_dir
 
 	var y_dir: Vector3 = z_dir.cross(x_dir).normalized()
 	x_dir = y_dir.cross(z_dir).normalized()
@@ -3469,6 +3531,8 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 	sz = maxf(sz, 0.001)
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	if overhang_flip_180:
+		decor_basis = decor_basis * Basis(Vector3.UP, PI)
 
 	var center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
