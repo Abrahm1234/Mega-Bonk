@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://cyo3li77q1lbt"]
+[gd_scene load_steps=11 format=3 uid="uid://cyo3li77q1lbt"]
 
 [ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://Scripts/arena_terrain.gd" id="1"]
 [ext_resource type="Script" uid="uid://c5fqv7m0847vy" path="res://Scripts/free_camera.gd" id="2_u45fm"]
@@ -7,6 +7,7 @@
 [ext_resource type="ArrayMesh" uid="uid://c14eaulkcktpe" path="res://Mesh/Meshes/Floor/Floor1/Floor1.res" id="4_ml6qp"]
 [ext_resource type="ArrayMesh" uid="uid://ce8aoj315w5t0" path="res://Mesh/Enemy-Meshs/Claw/Claw.res" id="5_jycnn"]
 [ext_resource type="ArrayMesh" uid="uid://88you33nfbyj" path="res://Mesh/Enemy-Meshs/Behemoth/Behemoth.res" id="7_8qske"]
+[ext_resource type="Script" path="res://Scripts/debug_rays_3d.gd" id="8_dbg_rays"]
 
 [sub_resource type="StandardMaterial3D" id="2"]
 albedo_color = Color(0.32, 0.68, 0.34, 1)
@@ -37,6 +38,10 @@ floor_decor_scale_in_xz = false
 material_override = SubResource("2")
 
 [node name="TerrainCollision" type="CollisionShape3D" parent="TerrainBody"]
+
+
+[node name="DebugRays" type="MeshInstance3D" parent="."]
+script = ExtResource("8_dbg_rays")
 
 [node name="DebugCamera" type="Camera3D" parent="TerrainBody"]
 transform = Transform3D(-0.9899985, 0.11661323, 0.07940071, 0.1335186, 0.9562306, 0.2603765, -0.04556204, 0.2683738, -0.9622368, 87.107376, 177.99545, 43.60868)

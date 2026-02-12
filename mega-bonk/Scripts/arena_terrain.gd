@@ -904,15 +904,19 @@ func _sync_debug_rays_settings() -> void:
 		_dbg_rays_node.call("_rebuild")
 
 func _dbg_add_ray(from: Vector3, to: Vector3, hit: Dictionary) -> void:
-	if not dbg_draw_rays:
+	if not dbg_draw_rays or _dbg_rays_node == null:
 		return
-	if _dbg_rays_node == null:
-		return
-	var c: Color = Color(0, 1, 0, 0.85) if hit.is_empty() else Color(1, 0, 0, 0.85)
+
+	var c: Color = Color(0, 1, 0, 0.85)
 	var hp: Variant = null
+	var end := to
 	if not hit.is_empty():
 		hp = hit.get("position", null)
-	_dbg_rays_node.call("add_ray", from, to, c, hp)
+		if hp != null:
+			end = hp
+		c = Color(1, 0, 0, 0.85)
+
+	_dbg_rays_node.call("add_ray", from, end, c, hp)
 
 func _raycast_dbg(from: Vector3, to: Vector3, mask: int, exclude: Array = [], collide_areas: bool = false) -> Dictionary:
 	var q := PhysicsRayQueryParameters3D.create(from, to)
@@ -975,7 +979,14 @@ func _ready() -> void:
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e.is_action_pressed("toggle_debug_rays") or (e is InputEventKey and e.pressed and e.keycode == KEY_F9):
+	var toggle := false
+
+	if e is InputEventKey and e.pressed and e.keycode == KEY_F9:
+		toggle = true
+	elif InputMap.has_action(&"toggle_debug_rays") and e.is_action_pressed(&"toggle_debug_rays"):
+		toggle = true
+
+	if toggle:
 		dbg_draw_rays = not dbg_draw_rays
 		_sync_debug_rays_settings()
 		if dbg_draw_rays and dbg_draw_rays_clear_on_generate and _dbg_rays_node != null:
