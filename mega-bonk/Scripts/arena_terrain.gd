@@ -2982,6 +2982,8 @@ func _rebuild_wall_decor() -> void:
 	var dbg_wedge_skip_allow_place: int = 0
 	var dbg_wedge_skip_under_surface_place: int = 0
 	var dbg_wedge_skip_variant_place: int = 0
+	var dbg_rect_skip_surface_count: int = 0
+	var dbg_rect_skip_surface_place: int = 0
 	var trap_count: int = 0
 	for face in _wall_faces:
 		if face.is_trapezoid:
@@ -2989,10 +2991,17 @@ func _rebuild_wall_decor() -> void:
 			var parts := _split_trapezoid_wall_face_for_decor(face)
 			var rect: WallFace = parts[0]
 			var wedge: WallFace = parts[1]
-			# Route the rectangular (lower) part of trapezoids into normal wall decor.
-			# This keeps under-ramp wall panels while reserving the wedge region for wedge decor.
-			if rect != null and rect.height >= wall_decor_min_height:
-				rect_faces.append(rect)
+
+			# Wall decor routing:
+			if wall_decor_skip_trapezoids:
+				# Keep only the rectangular under-ramp portion.
+				if rect != null and rect.height >= wall_decor_min_height:
+					rect_faces.append(rect)
+			else:
+				# Legacy/debug path: allow full trapezoid in wall decor.
+				rect_faces.append(face)
+
+			# Wedge decor routing:
 			if wedge == null or wedge.height <= 0.0005:
 				dbg_wedge_skip_null_or_short += 1
 			elif wall_wedge_decor_skip_trapezoids:
@@ -3009,6 +3018,8 @@ func _rebuild_wall_decor() -> void:
 		" wall_skip_trap:", wall_decor_skip_trapezoids,
 		" wedge_skip_trap:", wall_wedge_decor_skip_trapezoids
 	)
+	if wall_decor_surface_only:
+		_wd("[WD] surface_only active (rect skip counters populated in count/place passes)")
 
 	if has_rect_decor:
 		for f: WallFace in rect_faces:
@@ -3021,6 +3032,13 @@ func _rebuild_wall_decor() -> void:
 				continue
 			if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
 				continue
+			if wall_decor_surface_only:
+				var max_y_count: float = _wall_face_max_world_y(f)
+				if max_y_count > outer_floor_height + wall_decor_surface_margin:
+					var cov_count := _wall_face_covered_both_sides(f.center, max_y_count, f.normal)
+					if bool(cov_count["covered"]):
+						dbg_rect_skip_surface_count += 1
+						continue
 			var idx: int = (f.key + wall_decor_seed) % rect_variant_count
 			rect_counts[idx] += 1
 
@@ -3172,7 +3190,7 @@ func _rebuild_wall_decor() -> void:
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
-			var under_now: bool = cov_p["covered"]
+			var under_now: bool = bool(cov_p["covered"])
 
 			# --- extra under-map diagnostics ---
 			if wall_decor_debug_dump_under_surface and wall_decor_debug_cov_details:
@@ -3200,7 +3218,8 @@ func _rebuild_wall_decor() -> void:
 					)
 			# --- end diagnostics ---
 
-			if under_now:
+			if wall_decor_surface_only and top_y > outer_floor_height + wall_decor_surface_margin and under_now:
+				dbg_rect_skip_surface_place += 1
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
 
