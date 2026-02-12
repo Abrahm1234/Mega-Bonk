@@ -140,6 +140,11 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_focus_fi: int = -1
 @export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_debug_invalid_samples: bool = false
+@export var dbg_draw_rays: bool = false
+@export var dbg_draw_rays_clear_on_generate: bool = true
+@export var dbg_draw_rays_max: int = 3000
+@export var dbg_draw_rays_depth_test: bool = true
+@export var dbg_draw_rays_hit_markers: bool = true
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
@@ -199,6 +204,7 @@ func _validate_property(property: Dictionary) -> void:
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
+@onready var _dbg_rays_node: Node = get_node_or_null("DebugRays")
 
 var _cell_size: float
 var _ox: float
@@ -887,6 +893,39 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 
 	return raised_any
 
+func _sync_debug_rays_settings() -> void:
+	if _dbg_rays_node == null:
+		return
+	_dbg_rays_node.set("enabled", dbg_draw_rays)
+	_dbg_rays_node.set("max_rays", dbg_draw_rays_max)
+	_dbg_rays_node.set("depth_test", dbg_draw_rays_depth_test)
+	_dbg_rays_node.set("show_hit_markers", dbg_draw_rays_hit_markers)
+	if _dbg_rays_node.has_method("_rebuild"):
+		_dbg_rays_node.call("_rebuild")
+
+func _dbg_add_ray(from: Vector3, to: Vector3, hit: Dictionary) -> void:
+	if not dbg_draw_rays:
+		return
+	if _dbg_rays_node == null:
+		return
+	var c: Color = Color(0, 1, 0, 0.85) if hit.is_empty() else Color(1, 0, 0, 0.85)
+	var hp: Variant = null
+	if not hit.is_empty():
+		hp = hit.get("position", null)
+	_dbg_rays_node.call("add_ray", from, to, c, hp)
+
+func _raycast_dbg(from: Vector3, to: Vector3, mask: int, exclude: Array = [], collide_areas: bool = false) -> Dictionary:
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = mask
+	q.exclude = exclude
+	q.collide_with_bodies = true
+	q.collide_with_areas = collide_areas
+	q.hit_from_inside = true
+	q.hit_back_faces = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	_dbg_add_ray(from, to, hit)
+	return hit
+
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
 		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
@@ -932,9 +971,16 @@ func _ready() -> void:
 	if print_seed:
 		print("Noise seed:", noise_seed)
 
+	_sync_debug_rays_settings()
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
+	if e.is_action_pressed("toggle_debug_rays") or (e is InputEventKey and e.pressed and e.keycode == KEY_F9):
+		dbg_draw_rays = not dbg_draw_rays
+		_sync_debug_rays_settings()
+		if dbg_draw_rays and dbg_draw_rays_clear_on_generate and _dbg_rays_node != null:
+			_dbg_rays_node.call("clear")
+		return
 	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
 		if randomize_seed_on_regen_key:
 			var rng := RandomNumberGenerator.new()
@@ -945,6 +991,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		generate()
 
 func generate() -> void:
+	if dbg_draw_rays_clear_on_generate and _dbg_rays_node != null:
+		_dbg_rays_node.call("clear")
 	var n: int = max(2, cells_per_side)
 	_cell_size = world_size_m / float(n)
 	if use_rock_shader and mesh_instance != null:
@@ -2356,14 +2404,7 @@ func _wall_decor_open_side_effective_raycast_mask() -> int:
 	return wall_decor_open_side_raycast_mask
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collide_with_bodies = true
-	q.collide_with_areas = false
-	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-	q.hit_from_inside = true
-	q.hit_back_faces = true
-	var hit := space.intersect_ray(q)
+	var hit := _raycast_dbg(from, to, _wall_decor_open_side_effective_raycast_mask(), [], false)
 	return hit.is_empty()
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
@@ -2936,17 +2977,9 @@ func _rebuild_wall_decor() -> void:
 	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
 
-		var ss := get_world_3d().direct_space_state
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-		q.collide_with_bodies = true
-		q.collide_with_areas = false
-		q.hit_back_faces = true
-		q.hit_from_inside = true
-
-		var hit := ss.intersect_ray(q)
+		var hit := _raycast_dbg(a, b, _wall_decor_open_side_effective_raycast_mask(), [], false)
 		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
