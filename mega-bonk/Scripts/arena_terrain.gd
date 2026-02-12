@@ -204,7 +204,7 @@ func _validate_property(property: Dictionary) -> void:
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
-@onready var _dbg_rays_node: Node = get_node_or_null("DebugRays")
+@onready var _dbg_rays_node: Node3D = get_node_or_null("DebugRays") as Node3D
 
 var _cell_size: float
 var _ox: float
@@ -896,12 +896,29 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 func _sync_debug_rays_settings() -> void:
 	if _dbg_rays_node == null:
 		return
-	_dbg_rays_node.set("enabled", dbg_draw_rays)
+	if _dbg_rays_node.has_method("set_enabled"):
+		_dbg_rays_node.call("set_enabled", dbg_draw_rays)
+	else:
+		_dbg_rays_node.set("enabled", dbg_draw_rays)
 	_dbg_rays_node.set("max_rays", dbg_draw_rays_max)
 	_dbg_rays_node.set("depth_test", dbg_draw_rays_depth_test)
 	_dbg_rays_node.set("show_hit_markers", dbg_draw_rays_hit_markers)
 	if _dbg_rays_node.has_method("_rebuild"):
 		_dbg_rays_node.call("_rebuild")
+
+func _ensure_debug_rays_node() -> void:
+	if _dbg_rays_node != null:
+		return
+
+	var node := Node3D.new()
+	node.name = "DebugRays"
+	var script := load("res://Scripts/debug_rays_3d.gd") as Script
+	if script == null:
+		push_warning("ArenaBlockyTerrain: Debug rays script not found at res://Scripts/debug_rays_3d.gd")
+		return
+	node.set_script(script)
+	add_child(node)
+	_dbg_rays_node = node
 
 func _dbg_add_ray(from: Vector3, to: Vector3, hit: Dictionary) -> void:
 	if not dbg_draw_rays or _dbg_rays_node == null:
@@ -975,6 +992,7 @@ func _ready() -> void:
 	if print_seed:
 		print("Noise seed:", noise_seed)
 
+	_ensure_debug_rays_node()
 	_sync_debug_rays_settings()
 	generate()
 
