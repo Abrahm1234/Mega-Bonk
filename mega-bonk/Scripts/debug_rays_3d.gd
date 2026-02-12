@@ -48,7 +48,8 @@ func set_enabled(v: bool) -> void:
 
 func clear() -> void:
 	_rays.clear()
-	_rebuild()
+	_mesh.clear_surfaces()
+	_hit_mm.instance_count = 0
 
 func add_ray(a: Vector3, b: Vector3, c: Color, hit_pos: Variant) -> void:
 	if not enabled:
@@ -63,7 +64,12 @@ func add_ray(a: Vector3, b: Vector3, c: Color, hit_pos: Variant) -> void:
 func _rebuild() -> void:
 	_apply_material_settings()
 	_apply_visibility()
+
 	_mesh.clear_surfaces()
+
+	if _rays.is_empty():
+		_hit_mm.instance_count = 0
+		return
 
 	_mesh.surface_begin(Mesh.PRIMITIVE_LINES, _mat)
 	for r in _rays:

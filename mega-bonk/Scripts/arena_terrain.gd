@@ -910,6 +910,21 @@ func _ensure_debug_rays_node() -> void:
 	if _dbg_rays_node != null:
 		return
 
+	var existing: Node = get_node_or_null(^"DebugRays")
+	if existing == null and get_parent() != null:
+		existing = get_parent().get_node_or_null(^"DebugRays")
+
+	if existing != null:
+		_dbg_rays_node = existing as Node3D
+		if _dbg_rays_node == null:
+			push_warning("ArenaBlockyTerrain: Existing DebugRays node is not a Node3D.")
+			return
+		if _dbg_rays_node.get_script() == null:
+			var existing_script := load("res://Scripts/debug_rays_3d.gd") as Script
+			if existing_script != null:
+				_dbg_rays_node.set_script(existing_script)
+		return
+
 	var node := Node3D.new()
 	node.name = "DebugRays"
 	var script := load("res://Scripts/debug_rays_3d.gd") as Script
