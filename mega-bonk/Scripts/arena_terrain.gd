@@ -204,7 +204,7 @@ func _validate_property(property: Dictionary) -> void:
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
-@onready var _dbg_rays_node: Node = get_node_or_null("DebugRays")
+@onready var _dbg_rays_node: Node3D = get_node_or_null("DebugRays") as Node3D
 
 var _cell_size: float
 var _ox: float
@@ -896,12 +896,44 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 func _sync_debug_rays_settings() -> void:
 	if _dbg_rays_node == null:
 		return
-	_dbg_rays_node.set("enabled", dbg_draw_rays)
+	if _dbg_rays_node.has_method("set_enabled"):
+		_dbg_rays_node.call("set_enabled", dbg_draw_rays)
+	else:
+		_dbg_rays_node.set("enabled", dbg_draw_rays)
 	_dbg_rays_node.set("max_rays", dbg_draw_rays_max)
 	_dbg_rays_node.set("depth_test", dbg_draw_rays_depth_test)
 	_dbg_rays_node.set("show_hit_markers", dbg_draw_rays_hit_markers)
 	if _dbg_rays_node.has_method("_rebuild"):
 		_dbg_rays_node.call("_rebuild")
+
+func _ensure_debug_rays_node() -> void:
+	if _dbg_rays_node != null:
+		return
+
+	var existing: Node = get_node_or_null(^"DebugRays")
+	if existing == null and get_parent() != null:
+		existing = get_parent().get_node_or_null(^"DebugRays")
+
+	if existing != null:
+		_dbg_rays_node = existing as Node3D
+		if _dbg_rays_node == null:
+			push_warning("ArenaBlockyTerrain: Existing DebugRays node is not a Node3D.")
+			return
+		if _dbg_rays_node.get_script() == null:
+			var existing_script := load("res://Scripts/debug_rays_3d.gd") as Script
+			if existing_script != null:
+				_dbg_rays_node.set_script(existing_script)
+		return
+
+	var node := Node3D.new()
+	node.name = "DebugRays"
+	var script := load("res://Scripts/debug_rays_3d.gd") as Script
+	if script == null:
+		push_warning("ArenaBlockyTerrain: Debug rays script not found at res://Scripts/debug_rays_3d.gd")
+		return
+	node.set_script(script)
+	add_child(node)
+	_dbg_rays_node = node
 
 func _dbg_add_ray(from: Vector3, to: Vector3, hit: Dictionary) -> void:
 	if not dbg_draw_rays or _dbg_rays_node == null:
@@ -975,6 +1007,7 @@ func _ready() -> void:
 	if print_seed:
 		print("Noise seed:", noise_seed)
 
+	_ensure_debug_rays_node()
 	_sync_debug_rays_settings()
 	generate()
 
@@ -3374,7 +3407,7 @@ func _wedge_is_right_side_outward(wf: WallFace, outward: Vector3) -> bool:
 		return _wedge_is_right_side(wf)
 	z = z.normalized()
 
-	var right: Vector3 = Vector3.UP.cross(z)
+	var right: Vector3 = Vector3.UP.cross(z) # up × forward = right (matches inspector Left/Right)
 	if right.length_squared() < 1e-8:
 		return _wedge_is_right_side(wf)
 	right = right.normalized()
@@ -3639,8 +3672,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 
 	var attach_far: bool = attach_far_in
 	var yaw_flip: bool = wall_wedge_decor_flip_facing
-	if overhang_flip_180:
-		yaw_flip = !yaw_flip
+	var overhang_roll: bool = overhang_flip_180
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -3665,6 +3697,9 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	if yaw_flip:
 		decor_basis = Basis(Vector3.UP, PI) * decor_basis
 		attach_far = !attach_far
+	if overhang_roll:
+		# Rotate 180 around the mesh's facing axis (local Z/outward) so front/back doesn't invert.
+		decor_basis = decor_basis * Basis(Vector3.FORWARD, PI)
 
 	var center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
