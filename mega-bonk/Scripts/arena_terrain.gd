@@ -3069,14 +3069,11 @@ func _rebuild_wall_decor() -> void:
 			var rect: WallFace = parts[0]
 			var wedge: WallFace = parts[1]
 
-			# Wall decor routing:
+			# Wall decor routing: never place full trapezoids in hangover space.
 			if wall_decor_skip_trapezoids:
-				# Keep only the rectangular under-ramp portion.
-				if rect != null and rect.height >= wall_decor_min_height:
-					rect_faces.append(rect)
-			else:
-				# Legacy/debug path: allow full trapezoid in wall decor.
-				rect_faces.append(face)
+				pass
+			elif rect != null and rect.height >= wall_decor_min_height:
+				rect_faces.append(rect)
 
 			# Wedge decor routing:
 			if wedge == null or wedge.height <= 0.0005:
@@ -3122,9 +3119,7 @@ func _rebuild_wall_decor() -> void:
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
 			dbg_wedge_total += 1
-			var place_outward_count: Vector3 = _wall_place_outward(wf).normalized()
-			if wall_wedge_decor_flip_outward:
-				place_outward_count = -place_outward_count
+			var place_outward_count: Vector3 = _resolved_wedge_place_outward(wf)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_count += 1
@@ -3147,7 +3142,8 @@ func _rebuild_wall_decor() -> void:
 				dbg_wedge_skip_allow_count += 1
 				continue # COUNT_PASS: SKIP_NOT_ALLOWED
 			var widx: int = absi(wf.key + wall_wedge_decor_seed) % wedge_variant_count
-			if _wedge_is_right_side_outward(wf, place_outward_count):
+			var side_is_right: bool = not _wedge_is_right_side_outward(wf, place_outward_count)
+			if side_is_right:
 				wedge_counts_right[widx] += 1
 			else:
 				wedge_counts_left[widx] += 1
@@ -3308,9 +3304,7 @@ func _rebuild_wall_decor() -> void:
 		var wedge_place_fi: int = 0
 		for wf2: WallFace in wedge_faces:
 			wedge_place_fi += 1
-			var place_outward: Vector3 = _wall_place_outward(wf2).normalized()
-			if wall_wedge_decor_flip_outward:
-				place_outward = -place_outward
+			var place_outward: Vector3 = _resolved_wedge_place_outward(wf2)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_place += 1
@@ -3333,14 +3327,15 @@ func _rebuild_wall_decor() -> void:
 				dbg_wedge_skip_allow_place += 1
 				continue # PLACE_PASS: SKIP_NOT_ALLOWED
 			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
-			var side_is_right: bool = _wedge_is_right_side_outward(wf2, place_outward)
+			var side_is_right: bool = not _wedge_is_right_side_outward(wf2, place_outward)
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_right_by_variant[wsel] if side_is_right else wedge_mmi_left_by_variant[wsel]
 			if wmmi2 == null:
 				dbg_wedge_skip_variant_place += 1
 				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
 
 			var waabb: AABB = wedge_aabb_right_by_variant[wsel] if side_is_right else wedge_aabb_left_by_variant[wsel]
-			var overhang_flip_180: bool = wall_wedge_decor_enable_overhang_flip_180 and wf2.is_trapezoid
+			var n_cells: int = max(2, cells_per_side)
+			var overhang_flip_180: bool = wall_wedge_decor_enable_overhang_flip_180 and _is_wedge_overhang(wf2, place_outward, n_cells)
 			if wall_decor_debug_verbose and (wall_decor_debug_focus_fi < 0 or wall_decor_debug_focus_fi == wedge_place_fi):
 				var n_cells_dbg: int = max(2, cells_per_side)
 				var probe_step_dbg: float = _cell_size * 0.25
@@ -3348,7 +3343,10 @@ func _rebuild_wall_decor() -> void:
 				var c_out_dbg: Vector2i = _world_to_cell_xz(wf2.center + place_outward * probe_step_dbg, n_cells_dbg)
 				var ramp_in_dbg: bool = _cell_is_ramp(c_in_dbg.x, c_in_dbg.y, n_cells_dbg)
 				var ramp_out_dbg: bool = _cell_is_ramp(c_out_dbg.x, c_out_dbg.y, n_cells_dbg)
-				_wd("[WEDGE] fi=%d key=%d center=%s place_outward=%s side=%s flip_outward=%s attach_far=%s flip_facing=%s overhang_flip_180=%s ramp_in/out=%s/%s c_in=%s c_out=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, _fmt_v3(wf2.center), _fmt_v3(place_outward), ("R" if side_is_right else "L"), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_attach_far_side), str(wall_wedge_decor_flip_facing), str(overhang_flip_180), str(ramp_in_dbg), str(ramp_out_dbg), str(c_in_dbg), str(c_out_dbg), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
+				var wind_out_dbg: Vector3 = _wf_outward_from_winding(wf2)
+				var out_dot_dbg: float = wind_out_dbg.dot(place_outward) if wind_out_dbg.length_squared() > 1e-10 else 0.0
+				var edge_dbg: int = _wedge_face_edge_from_outward(place_outward)
+				_wd("[WEDGE] fi=%d key=%d trap=%s center=%s place_outward=%s wind_out=%s out_dot=%.3f side=%s edge=%d is_overhang=%s flip_outward=%s attach_far=%s flip_facing=%s overhang_flip_180=%s ramp_in/out=%s/%s c_in=%s c_out=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, str(wf2.is_trapezoid), _fmt_v3(wf2.center), _fmt_v3(place_outward), _fmt_v3(wind_out_dbg), out_dot_dbg, ("R" if side_is_right else "L"), edge_dbg, str(overhang_flip_180), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_attach_far_side), str(wall_wedge_decor_flip_facing), str(overhang_flip_180), str(ramp_in_dbg), str(ramp_out_dbg), str(c_in_dbg), str(c_out_dbg), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
 			var under_floor_margin: float = maxf(0.25, height_step * 0.25)
 			if wf2.center.y < outer_floor_height - under_floor_margin:
 				dbg_wedge_skip_under_surface_place += 1
@@ -3448,6 +3446,21 @@ func _wedge_is_right_side_outward(wf: WallFace, outward: Vector3) -> bool:
 	y_hi /= float(n_hi)
 	return y_hi > y_lo
 
+
+func _wf_outward_from_winding(wf: WallFace) -> Vector3:
+	var n: Vector3 = (wf.b - wf.a).cross(wf.c - wf.a)
+	n.y = 0.0
+	if n.length_squared() < 1e-10:
+		return Vector3.ZERO
+	return n.normalized()
+
+func _resolved_wedge_place_outward(wf: WallFace) -> Vector3:
+	var place_outward: Vector3 = _wall_place_outward(wf).normalized()
+	var wind_out: Vector3 = _wf_outward_from_winding(wf)
+	if wind_out.length_squared() > 1e-10 and wind_out.dot(place_outward) < 0.0:
+		place_outward = wind_out
+	return place_outward
+
 func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
 	var cx: int = int(floor((p.x - _ox) / _cell_size))
 	var cz: int = int(floor((p.z - _oz) / _cell_size))
@@ -3461,6 +3474,59 @@ func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
 	if _ramp_up_dir.size() != n * n:
 		return false
 	return _ramp_up_dir[_idx2(cx, cz, n)] != RAMP_NONE
+
+func _wedge_face_edge_from_outward(outward: Vector3) -> int:
+	if absf(outward.x) > absf(outward.z):
+		return _dir_to_edge(RAMP_EAST) if outward.x > 0.0 else _dir_to_edge(RAMP_WEST)
+	return _dir_to_edge(RAMP_SOUTH) if outward.z > 0.0 else _dir_to_edge(RAMP_NORTH)
+
+func _opposite_edge(edge: int) -> int:
+	match edge:
+		0:
+			return 1
+		1:
+			return 0
+		2:
+			return 3
+		3:
+			return 2
+		_:
+			return edge
+
+func _is_wedge_overhang(face: WallFace, place_outward: Vector3, n: int) -> bool:
+	if not face.is_trapezoid:
+		return false
+	var outward := Vector3(place_outward.x, 0.0, place_outward.z)
+	if outward.length_squared() < 1e-8:
+		outward = Vector3(face.normal.x, 0.0, face.normal.z)
+	if outward.length_squared() < 1e-8:
+		return false
+	outward = outward.normalized()
+
+	var probe: float = _cell_size * 0.25
+	var c_in: Vector2i = _world_to_cell_xz(face.center - outward * probe, n)
+	var c_out: Vector2i = _world_to_cell_xz(face.center + outward * probe, n)
+	if c_in == c_out:
+		return false
+	if not _in_bounds(c_in.x, c_in.y, n) or not _in_bounds(c_out.x, c_out.y, n):
+		return false
+
+	var ramp_in: bool = _cell_is_ramp(c_in.x, c_in.y, n)
+	var ramp_out: bool = _cell_is_ramp(c_out.x, c_out.y, n)
+	if ramp_in == ramp_out:
+		return false
+
+	var ramp_cell: Vector2i = c_in if ramp_in else c_out
+	var nb_cell: Vector2i = c_out if ramp_in else c_in
+	var edge_id: int = _wedge_face_edge_from_outward(outward)
+	var ramp_corners: Vector4 = _cell_corners(ramp_cell.x, ramp_cell.y)
+	var nb_corners: Vector4 = _cell_corners(nb_cell.x, nb_cell.y)
+	var ramp_edge: Vector2 = _edge_pair(ramp_corners, edge_id)
+	var nb_edge: Vector2 = _edge_pair(nb_corners, _opposite_edge(edge_id))
+
+	var ramp_top: float = maxf(ramp_edge.x, ramp_edge.y)
+	var nb_top: float = maxf(nb_edge.x, nb_edge.y)
+	return nb_top >= ramp_top - 0.01
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
@@ -3642,17 +3708,19 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: Vector3, outward_offset: float, attach_far_in: bool, overhang_flip_180: bool = false) -> Transform3D:
-	var outward: Vector3 = place_outward
-	outward.y = 0.0
-	if outward.length_squared() < 1e-8:
-		outward = Vector3(face.normal.x, 0.0, face.normal.z)
-		if outward.length_squared() < 1e-8:
-			outward = Vector3.FORWARD
-	outward = outward.normalized()
+	var outward_for_place: Vector3 = place_outward
+	outward_for_place.y = 0.0
+	if outward_for_place.length_squared() < 1e-8:
+		outward_for_place = Vector3(face.normal.x, 0.0, face.normal.z)
+		if outward_for_place.length_squared() < 1e-8:
+			outward_for_place = Vector3.FORWARD
+	outward_for_place = outward_for_place.normalized()
+	if wall_wedge_decor_flip_outward:
+		outward_for_place = -outward_for_place
 
-	# Build a stable frame:
+	# Build a stable frame from the placement outward:
 	# z_dir = outward (horizontal), x_dir = horizontal perpendicular to outward, y_dir orthonormal.
-	var z_dir: Vector3 = outward
+	var z_dir: Vector3 = outward_for_place
 	z_dir.y = 0.0
 	if z_dir.length_squared() < 1e-8:
 		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
@@ -3671,8 +3739,11 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var rot: Basis = Basis(x_dir, y_dir, z_dir).orthonormalized()
 
 	var attach_far: bool = attach_far_in
-	var yaw_flip: bool = wall_wedge_decor_flip_facing
-	var overhang_roll: bool = overhang_flip_180
+	var yaw_invert: bool = wall_wedge_decor_flip_facing
+	if overhang_flip_180:
+		yaw_invert = not yaw_invert
+	if wall_wedge_decor_flip_facing:
+		attach_far = !attach_far
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -3694,12 +3765,10 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	sz = maxf(sz, 0.001)
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
-	if yaw_flip:
+	if yaw_invert:
 		decor_basis = Basis(Vector3.UP, PI) * decor_basis
-		attach_far = !attach_far
-	if overhang_roll:
-		# Rotate 180 around the mesh's facing axis (local Z/outward) so front/back doesn't invert.
-		decor_basis = decor_basis * Basis(Vector3.FORWARD, PI)
+	if wall_decor_debug_verbose:
+		_wd("[WEDGE_XF] center=%s outward_for_place=%s yaw_invert=%s attach_far=%s flip_outward=%s flip_facing=%s attach_far_cfg=%s overhang_flip_180=%s" % [_fmt_v3(face.center), _fmt_v3(outward_for_place), str(yaw_invert), str(attach_far), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_flip_facing), str(wall_wedge_decor_attach_far_side), str(overhang_flip_180)])
 
 	var center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
@@ -3708,7 +3777,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
-	var target_world: Vector3 = face.center + outward * outward_offset
+	var target_world: Vector3 = face.center + outward_for_place * outward_offset
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
