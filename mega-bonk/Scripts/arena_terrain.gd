@@ -3123,8 +3123,6 @@ func _rebuild_wall_decor() -> void:
 		for wf: WallFace in wedge_faces:
 			dbg_wedge_total += 1
 			var place_outward_count: Vector3 = _wall_place_outward(wf).normalized()
-			if wall_wedge_decor_flip_outward:
-				place_outward_count = -place_outward_count
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_count += 1
@@ -3310,8 +3308,6 @@ func _rebuild_wall_decor() -> void:
 		for wf2: WallFace in wedge_faces:
 			wedge_place_fi += 1
 			var place_outward: Vector3 = _wall_place_outward(wf2).normalized()
-			if wall_wedge_decor_flip_outward:
-				place_outward = -place_outward
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_place += 1
@@ -3697,19 +3693,17 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	return Transform3D(decor_basis, origin)
 
 func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: Vector3, outward_offset: float, attach_far_in: bool, overhang_flip_180: bool = false) -> Transform3D:
-	var outward: Vector3 = place_outward
-	outward.y = 0.0
-	if outward.length_squared() < 1e-8:
-		outward = Vector3(face.normal.x, 0.0, face.normal.z)
-		if outward.length_squared() < 1e-8:
-			outward = Vector3.FORWARD
-	outward = outward.normalized()
-	if overhang_flip_180:
-		outward = -outward
+	var outward_for_place: Vector3 = place_outward
+	outward_for_place.y = 0.0
+	if outward_for_place.length_squared() < 1e-8:
+		outward_for_place = Vector3(face.normal.x, 0.0, face.normal.z)
+		if outward_for_place.length_squared() < 1e-8:
+			outward_for_place = Vector3.FORWARD
+	outward_for_place = outward_for_place.normalized()
 
 	# Build a stable frame:
 	# z_dir = outward (horizontal), x_dir = horizontal perpendicular to outward, y_dir orthonormal.
-	var z_dir: Vector3 = outward
+	var z_dir: Vector3 = outward_for_place
 	z_dir.y = 0.0
 	if z_dir.length_squared() < 1e-8:
 		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
@@ -3729,6 +3723,10 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 
 	var attach_far: bool = attach_far_in
 	var yaw_flip: bool = wall_wedge_decor_flip_facing
+	if wall_wedge_decor_flip_outward:
+		yaw_flip = not yaw_flip
+	if overhang_flip_180:
+		yaw_flip = not yaw_flip
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -3761,7 +3759,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
-	var target_world: Vector3 = face.center + outward * outward_offset
+	var target_world: Vector3 = face.center + outward_for_place * outward_offset
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
