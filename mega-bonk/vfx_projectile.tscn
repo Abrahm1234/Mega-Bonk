@@ -1,0 +1,246 @@
+[gd_scene load_steps=18 format=3 uid="uid://cd7onqtkh2rdf"]
+
+[ext_resource type="Script" uid="uid://6t85apmwrkgi" path="res://VFX/Scripts/vfx_projectile.gd" id="1_vfx"]
+[ext_resource type="Script" uid="uid://b6i30yhj4tabc" path="res://VFX/Scripts/vfx_preset.gd" id="1_wreey"]
+[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Scripts/free_camera.gd" id="2_wreey"]
+[ext_resource type="Texture2D" uid="uid://uaqjfrxwbwr4" path="res://VFX/Materials/ChatGPT Image Feb 6, 2026, 01_09_44 AM.png" id="4_xskxj"]
+
+[sub_resource type="Shader" id="Shader_8work"]
+code = "
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_prepass_alpha, blend_add;
+
+uniform sampler2D noise_tex;
+uniform vec4 albedo_color : source_color = vec4(1.0);
+uniform vec3 emission_color : source_color = vec3(1.0);
+uniform float emission_mul = 1.0;
+
+uniform float uv_scale = 1.0;
+uniform float scroll_speed = 0.35;
+uniform float time_offset = 0.0;
+
+uniform sampler2D main_tex;
+uniform float main_strength = 0.0;        // 0..1
+uniform vec2 main_uv_scale = vec2(1.0,1.0);
+uniform vec2 main_scroll = vec2(0.0,0.0);
+uniform float main_rotate_speed = 0.0;    // rotations/sec
+uniform float distort_strength = 0.0;
+
+vec2 rot2(vec2 p, float a){
+	float s = sin(a);
+	float c = cos(a);
+	return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+void fragment() {
+	float tt = TIME + time_offset;
+
+	// Base noise scroll (your existing motion)
+	vec2 uv = UV * uv_scale;
+	vec2 suv = uv + vec2(tt * scroll_speed, -tt * scroll_speed * 0.73);
+	float n = texture(noise_tex, suv).r;
+	float d = smoothstep(0.15, 0.85, n);
+
+	// Animated main texture (like tutorial “noise textures” in shader graph)
+	vec2 muv = UV * main_uv_scale;
+	muv += main_scroll * tt;
+
+	if (abs(main_rotate_speed) > 0.0001) {
+		float ang = tt * main_rotate_speed * 6.28318;
+		muv = rot2(muv - vec2(0.5), ang) + vec2(0.5);
+	}
+
+	// Distort main UVs using noise
+	vec2 dv = texture(noise_tex, suv * 1.25).rg * 2.0 - 1.0;
+	muv += dv * distort_strength;
+
+	float m = texture(main_tex, muv).r; // use red channel as mask
+	d = mix(d, d * m, clamp(main_strength, 0.0, 1.0));
+
+	ALBEDO = albedo_color.rgb;
+	ALPHA  = albedo_color.a * (0.25 + 0.75 * d);
+
+	EMISSION = emission_color * emission_mul * (0.35 + 0.65 * d);
+}
+"
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_egj41"]
+noise_type = 0
+frequency = 2.0
+fractal_octaves = 3
+
+[sub_resource type="NoiseTexture2D" id="NoiseTexture2D_xskxj"]
+width = 256
+height = 256
+noise = SubResource("FastNoiseLite_egj41")
+seamless = true
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_6e8c3"]
+render_priority = 0
+shader = SubResource("Shader_8work")
+shader_parameter/noise_tex = SubResource("NoiseTexture2D_xskxj")
+shader_parameter/albedo_color = Color(0.42001462, 1.7419126, 1.0822347, 0.55)
+shader_parameter/emission_color = Color(0.42001462, 1.7419126, 1.0822347, 1)
+shader_parameter/emission_mul = 1.6
+shader_parameter/uv_scale = 1.0
+shader_parameter/scroll_speed = 0.35
+shader_parameter/time_offset = 0.368
+shader_parameter/main_tex = ExtResource("4_xskxj")
+shader_parameter/main_strength = 0.6
+shader_parameter/main_uv_scale = Vector2(1, 1)
+shader_parameter/main_scroll = Vector2(0.25, -0.18)
+shader_parameter/main_rotate_speed = 0.0
+shader_parameter/distort_strength = 0.05
+
+[sub_resource type="SphereMesh" id="SphereMesh_egj41"]
+
+[sub_resource type="Shader" id="Shader_741cr"]
+code = "
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_prepass_alpha, blend_mix;
+
+uniform sampler2D noise_tex;
+uniform vec4 albedo_color : source_color = vec4(1.0);
+uniform vec3 emission_color : source_color = vec3(1.0);
+uniform float emission_mul = 1.0;
+
+uniform float uv_scale = 1.0;
+uniform float scroll_speed = 0.35;
+uniform float time_offset = 0.0;
+
+uniform sampler2D main_tex;
+uniform float main_strength = 0.0;        // 0..1
+uniform vec2 main_uv_scale = vec2(1.0,1.0);
+uniform vec2 main_scroll = vec2(0.0,0.0);
+uniform float main_rotate_speed = 0.0;    // rotations/sec
+uniform float distort_strength = 0.0;
+
+vec2 rot2(vec2 p, float a){
+	float s = sin(a);
+	float c = cos(a);
+	return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+void fragment() {
+	float tt = TIME + time_offset;
+
+	// Base noise scroll (your existing motion)
+	vec2 uv = UV * uv_scale;
+	vec2 suv = uv + vec2(tt * scroll_speed, -tt * scroll_speed * 0.73);
+	float n = texture(noise_tex, suv).r;
+	float d = smoothstep(0.15, 0.85, n);
+
+	// Animated main texture (like tutorial “noise textures” in shader graph)
+	vec2 muv = UV * main_uv_scale;
+	muv += main_scroll * tt;
+
+	if (abs(main_rotate_speed) > 0.0001) {
+		float ang = tt * main_rotate_speed * 6.28318;
+		muv = rot2(muv - vec2(0.5), ang) + vec2(0.5);
+	}
+
+	// Distort main UVs using noise
+	vec2 dv = texture(noise_tex, suv * 1.25).rg * 2.0 - 1.0;
+	muv += dv * distort_strength;
+
+	float m = texture(main_tex, muv).r; // use red channel as mask
+	d = mix(d, d * m, clamp(main_strength, 0.0, 1.0));
+
+	ALBEDO = albedo_color.rgb;
+	ALPHA  = albedo_color.a * (0.25 + 0.75 * d);
+
+	EMISSION = emission_color * emission_mul * (0.35 + 0.65 * d);
+}
+"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_sfq22"]
+render_priority = 0
+shader = SubResource("Shader_741cr")
+shader_parameter/noise_tex = SubResource("NoiseTexture2D_xskxj")
+shader_parameter/albedo_color = Color(0.6975591, 0.26576933, 1.1210214, 0.35)
+shader_parameter/emission_color = Color(0.6975591, 0.26576933, 1.1210214, 1)
+shader_parameter/emission_mul = 1.35
+shader_parameter/uv_scale = 1.0
+shader_parameter/scroll_speed = 0.35
+shader_parameter/time_offset = 0.368
+shader_parameter/main_tex = ExtResource("4_xskxj")
+shader_parameter/main_strength = 0.6
+shader_parameter/main_uv_scale = Vector2(1, 1)
+shader_parameter/main_scroll = Vector2(0.25, -0.18)
+shader_parameter/main_rotate_speed = 0.0
+shader_parameter/distort_strength = 0.05
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_8work"]
+radius = 0.1
+height = 4.978
+
+[sub_resource type="Gradient" id="Gradient_c7gw6"]
+offsets = PackedFloat32Array(0, 0.0005, 0.082833335, 0.08383334, 0.16616666, 0.16716667, 0.2495, 0.2505, 0.33283332, 0.33383334, 0.41616666, 0.41716668, 0.4995, 0.5005, 0.58283335, 0.58383334, 0.66616666, 0.66716665, 0.7495, 0.7505, 0.83283335, 0.83383334, 0.91616666, 0.91716665, 0.9995, 1)
+colors = PackedColorArray(0, 0, 0, 1, 3.1330433, 0.17170955, 0.17170955, 1, 3.1330433, 0.17170955, 0.17170955, 1, 3.1330433, 1.6523764, 0.17170955, 1, 3.1330433, 1.6523764, 0.17170955, 1, 3.1330433, 3.1330433, 0.17170955, 1, 3.1330433, 3.1330433, 0.17170955, 1, 1.6523764, 3.1330433, 0.17170955, 1, 1.6523764, 3.1330433, 0.17170955, 1, 0.17170955, 3.1330433, 0.17170955, 1, 0.17170955, 3.1330433, 0.17170955, 1, 0.17170955, 3.1330433, 1.6523764, 1, 0.17170955, 3.1330433, 1.6523764, 1, 0.17170955, 3.1330433, 3.1330433, 1, 0.17170955, 3.1330433, 3.1330433, 1, 0.17170955, 1.6523764, 3.1330433, 1, 0.17170955, 1.6523764, 3.1330433, 1, 0.17170955, 0.17170955, 3.1330433, 1, 0.17170955, 0.17170955, 3.1330433, 1, 1.6523764, 0.17170955, 3.1330433, 1, 1.6523764, 0.17170955, 3.1330433, 1, 3.1330433, 0.17170955, 3.1330433, 1, 3.1330433, 0.17170955, 3.1330433, 1, 3.1330433, 0.17170955, 1.6523764, 1, 3.1330433, 0.17170955, 1.6523764, 1, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_obdiq"]
+gradient = SubResource("Gradient_c7gw6")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_3bhfs"]
+lifetime_randomness = 0.35
+emission_shape = 6
+emission_ring_axis = Vector3(0, 0, -1)
+emission_ring_height = 1.0
+emission_ring_radius = 0.22
+emission_ring_inner_radius = 0.0
+emission_ring_cone_angle = 90.0
+direction = Vector3(0, 0, 1)
+spread = 14.0
+angular_velocity_min = -6.0
+angular_velocity_max = 6.0
+orbit_velocity_min = 2.7
+orbit_velocity_max = 3.3
+scale_min = 0.05
+scale_max = 0.1
+color_ramp = SubResource("GradientTexture1D_obdiq")
+
+[sub_resource type="QuadMesh" id="QuadMesh_rxbd6"]
+size = Vector2(0.14, 0.14)
+
+[sub_resource type="Environment" id="Environment_8work"]
+
+[node name="VFX_Projectile" type="Node3D"]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0)
+script = ExtResource("1_vfx")
+preset = ExtResource("1_wreey")
+env_glow_levels = PackedFloat32Array(0, 0.65, 0.58, 0.4, 0.22, 0.12, 0.06)
+sparks_texture = ExtResource("4_xskxj")
+core_texture = ExtResource("4_xskxj")
+head_texture = ExtResource("4_xskxj")
+tail_texture = ExtResource("4_xskxj")
+rings_texture = ExtResource("4_xskxj")
+
+[node name="Head" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.4663375, -0.20119104, -0.6815802, 0.3867509, 0.75577754, 0.041522276, 0.5961989, -0.33290017, 0.5061861, 0, 0, 0)
+material_override = SubResource("ShaderMaterial_6e8c3")
+mesh = SubResource("SphereMesh_egj41")
+
+[node name="Trail" type="MeshInstance3D" parent="."]
+transform = Transform3D(-0.001767227, 0.8999598, 0.008321936, 0.042885717, -0.008228293, 0.89893997, 0.89897585, 0.0021616996, -0.042867646, -1.4, 0, 0)
+material_override = SubResource("ShaderMaterial_sfq22")
+cast_shadow = 0
+mesh = SubResource("CapsuleMesh_8work")
+
+[node name="Sparks" type="GPUParticles3D" parent="."]
+transform = Transform3D(-0.016287418, -0.024795227, -0.9995599, 0.8358074, -0.54902273, 0, -0.5487811, -0.8354395, 0.029666198, 0, 0, 0)
+cast_shadow = 0
+amount = 135
+sub_emitter = NodePath(".")
+lifetime = 0.75
+trail_enabled = true
+trail_lifetime = 0.25
+process_material = SubResource("ParticleProcessMaterial_3bhfs")
+draw_pass_1 = SubResource("QuadMesh_rxbd6")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2.5355744)
+current = true
+script = ExtResource("2_wreey")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_8work")

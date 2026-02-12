@@ -66,8 +66,6 @@ class_name ArenaBlockyTerrain
 @export var tunnel_elevator_top_y_offset: float = 0.02
 @export var tunnel_elevator_min_separation_cells: int = 6
 @export var tunnel_elevator_fit_margin: float = 0.92
-@export var tunnel_elevator_require_clear_front: bool = true
-@export var tunnel_elevator_require_no_ramp_neighbors: bool = true
 @export_range(0, 6, 1) var tunnel_count: int = 2
 @export_range(1, 3, 1) var tunnel_radius_cells: int = 1
 @export_range(6, 128, 1) var tunnel_min_len_cells: int = 10
@@ -78,7 +76,6 @@ class_name ArenaBlockyTerrain
 @export var tunnel_ramp_drop: float = 8.0
 @export_range(4, 64, 1) var tunnel_ramp_max_steps: int = 16
 @export var tunnel_turn_penalty: float = 3.0
-@export_enum("Shaft", "Ramp") var tunnel_entrance_mode: int = 0
 @export var tunnel_floor_clearance_from_box: float = 2.0
 @export var tunnel_ceiling_clearance: float = 1.0
 @export var tunnel_edge_clearance: float = 0.5
@@ -143,6 +140,11 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_debug_focus_fi: int = -1
 @export var wall_decor_debug_cov_details: bool = false
 @export var wall_decor_debug_invalid_samples: bool = false
+@export var dbg_draw_rays: bool = false
+@export var dbg_draw_rays_clear_on_generate: bool = true
+@export var dbg_draw_rays_max: int = 3000
+@export var dbg_draw_rays_depth_test: bool = true
+@export var dbg_draw_rays_hit_markers: bool = true
 @export var wall_decor_surface_only: bool = false
 @export var wall_decor_surface_margin: float = 0.10
 @export var wall_decor_surface_probe_radius_cells: float = 0.55
@@ -161,6 +163,9 @@ class_name ArenaBlockyTerrain
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
 @export var enable_wall_wedge_decor: bool = true
 @export var wall_wedge_decor_meshes: Array[Mesh] = []
+@export var wall_wedge_decor_meshes_left: Array[Mesh] = []
+@export var wall_wedge_decor_meshes_right: Array[Mesh] = []
+@export var wall_wedge_decor_enable_overhang_flip_180: bool = true
 @export var wall_wedge_decor_seed: int = 1337
 @export var wall_wedge_decor_offset: float = 0.02
 @export var wall_wedge_decor_fit_to_face: bool = true
@@ -170,6 +175,8 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_flip_outward: bool = true
 @export var wall_wedge_decor_flip_facing: bool = false
 @export var wall_wedge_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
+@export var wall_wedge_decor_depth_scale: float = 1.0
+@export var wall_wedge_decor_max_depth_cells: float = 0.0 # 0 = no clamp
 @export var wall_decor_flip_outward: bool = true
 @export var wall_decor_flip_facing: bool = false
 @export var wall_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
@@ -179,6 +186,8 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_seed: int = 24601
 @export var floor_decor_offset: float = 0.01
 @export var floor_decor_fit_to_cell: bool = true
+@export var floor_decor_depth_scale: float = 0.20 # meters of thickness along the face normal
+@export var floor_decor_max_depth_cells: float = 1.0 # clamp thickness to <= 1 cell if desired
 @export var floor_decor_max_scale: float = 0.0
 @export var floor_decor_min_world_y: float = -INF
 @export var floor_decor_random_yaw_steps: int = 4
@@ -188,8 +197,14 @@ class_name ArenaBlockyTerrain
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
 
+func _validate_property(property: Dictionary) -> void:
+	if property.name == "wall_wedge_decor_meshes":
+		if wall_wedge_decor_meshes_left.size() > 0 or wall_wedge_decor_meshes_right.size() > 0:
+			property.usage = PROPERTY_USAGE_NO_EDITOR
+
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
+@onready var _dbg_rays_node: Node = get_node_or_null("DebugRays")
 
 var _cell_size: float
 var _ox: float
@@ -306,6 +321,9 @@ var _shaft_decor_faces: int = 0
 var _shaft_decor_instances: int = 0
 var _floor_mesh_normal_axis_cache: Dictionary = {}
 var _floor_mesh_cap_cache: Dictionary = {}
+
+var _dbg_ramp_cells_emitted: int = 0
+var _dbg_ramp_quads_added: int = 0
 
 
 func _wall_face_min_world_y(f: WallFace) -> float:
@@ -875,6 +893,43 @@ func _ensure_basin_escapes(n: int, want: int, levels: PackedInt32Array) -> bool:
 
 	return raised_any
 
+func _sync_debug_rays_settings() -> void:
+	if _dbg_rays_node == null:
+		return
+	_dbg_rays_node.set("enabled", dbg_draw_rays)
+	_dbg_rays_node.set("max_rays", dbg_draw_rays_max)
+	_dbg_rays_node.set("depth_test", dbg_draw_rays_depth_test)
+	_dbg_rays_node.set("show_hit_markers", dbg_draw_rays_hit_markers)
+	if _dbg_rays_node.has_method("_rebuild"):
+		_dbg_rays_node.call("_rebuild")
+
+func _dbg_add_ray(from: Vector3, to: Vector3, hit: Dictionary) -> void:
+	if not dbg_draw_rays or _dbg_rays_node == null:
+		return
+
+	var c: Color = Color(0, 1, 0, 0.85)
+	var hp: Variant = null
+	var end := to
+	if not hit.is_empty():
+		hp = hit.get("position", null)
+		if hp != null:
+			end = hp
+		c = Color(1, 0, 0, 0.85)
+
+	_dbg_rays_node.call("add_ray", from, end, c, hp)
+
+func _raycast_dbg(from: Vector3, to: Vector3, mask: int, exclude: Array = [], collide_areas: bool = false) -> Dictionary:
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = mask
+	q.exclude = exclude
+	q.collide_with_bodies = true
+	q.collide_with_areas = collide_areas
+	q.hit_from_inside = true
+	q.hit_back_faces = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	_dbg_add_ray(from, to, hit)
+	return hit
+
 func _ready() -> void:
 	if mesh_instance == null or collision_shape == null:
 		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
@@ -920,9 +975,23 @@ func _ready() -> void:
 	if print_seed:
 		print("Noise seed:", noise_seed)
 
+	_sync_debug_rays_settings()
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
+	var toggle := false
+
+	if e is InputEventKey and e.pressed and e.keycode == KEY_F9:
+		toggle = true
+	elif InputMap.has_action(&"toggle_debug_rays") and e.is_action_pressed(&"toggle_debug_rays"):
+		toggle = true
+
+	if toggle:
+		dbg_draw_rays = not dbg_draw_rays
+		_sync_debug_rays_settings()
+		if dbg_draw_rays and dbg_draw_rays_clear_on_generate and _dbg_rays_node != null:
+			_dbg_rays_node.call("clear")
+		return
 	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
 		if randomize_seed_on_regen_key:
 			var rng := RandomNumberGenerator.new()
@@ -933,6 +1002,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		generate()
 
 func generate() -> void:
+	if dbg_draw_rays_clear_on_generate and _dbg_rays_node != null:
+		_dbg_rays_node.call("clear")
 	var n: int = max(2, cells_per_side)
 	_cell_size = world_size_m / float(n)
 	if use_rock_shader and mesh_instance != null:
@@ -968,7 +1039,7 @@ func generate() -> void:
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
 	_build_tunnel_elevator_tops(n)
-	print("Ramp slots:", _count_ramps())
+	print("Ramp slots:", _count_ramps(), " ramp_cells_emitted:", _dbg_ramp_cells_emitted, " ramp_quads_added:", _dbg_ramp_quads_added)
 	_sync_sun()
 
 # -----------------------------
@@ -1194,46 +1265,6 @@ func _edge_is_open_at_ceil(n: int, a: Vector2i, b: Vector2i, ceil_y: float) -> b
 	var wall_bottom: float = minf(ha, hb)
 	return ceil_y <= (wall_bottom - tunnel_roof_clearance)
 
-func _pick_entrance_dir(n: int, entrance: Vector2i) -> int:
-	var center := Vector2i(n >> 1, n >> 1)
-	var best_dir: int = RAMP_EAST
-	var best_score: float = -1.0e20
-
-	var e_idx: int = _idx2(entrance.x, entrance.y, n)
-	var h0: float = _heights[e_idx]
-
-	for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-		var p := entrance
-		var ok := true
-		for _i in range(tunnel_ramp_max_steps + 2):
-			p = _neighbor_of(p.x, p.y, dir)
-			if not _in_bounds(p.x, p.y, n):
-				ok = false
-				break
-		if not ok:
-			continue
-
-		var nb: Vector2i = _neighbor_of(entrance.x, entrance.y, dir)
-		var nb_idx: int = _idx2(nb.x, nb.y, n)
-		var h1: float = _heights[nb_idx]
-
-		var to_center := Vector2(center - entrance)
-		var dvec := Vector2(nb - entrance)
-		var dotc: float = to_center.dot(dvec)
-
-		var score: float = 0.0
-		if h1 <= h0:
-			score += 10.0
-		if absf(h1 - h0) < 0.001:
-			score += 10.0
-		score += dotc * 0.05
-
-		if score > best_score:
-			best_score = score
-			best_dir = dir
-
-	return best_dir
-
 func _choose_tunnel_base_depth(_n: int, _entrances: Array[Vector2i]) -> void:
 	var thickness: float = _tunnel_ceil_resolved - _tunnel_floor_resolved
 	_tunnel_base_floor_y = outer_floor_height + tunnel_floor_clearance_from_box
@@ -1318,7 +1349,7 @@ func _tunnel_set_flat_cell(idx: int, y: float) -> void:
 	_tunnel_floor_max_y[idx] = y
 	_tunnel_ramp_dir[idx] = TUNNEL_DIR_NONE
 
-func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i, dir: int) -> Vector2i:
+func _tunnel_stamp_entrance_ramp(n: int, entrance: Vector2i) -> Vector2i:
 	# Shaft-only: no surface cutouts, no downward ramps.
 	# Mark the entrance cell as the top-of-shaft so we can place the elevator tile/mesh there.
 	var idx := entrance.y * n + entrance.x
@@ -1426,6 +1457,15 @@ func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Ve
 
 	return []
 
+func _entrance_far_enough(e: Vector2i, existing: Array[Vector2i], min_sep_cells: int) -> bool:
+	var min_sep2 := min_sep_cells * min_sep_cells
+	for a in existing:
+		var dx := a.x - e.x
+		var dz := a.y - e.y
+		if dx * dx + dz * dz < min_sep2:
+			return false
+	return true
+
 func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	_tunnel_arrays_resize(n)
 
@@ -1463,9 +1503,12 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			continue
 
 
-		if built == 0:
+		var min_sep := tunnel_elevator_min_separation_cells
+
+		if built == 0 and _entrance_far_enough(a, entrances, min_sep):
 			entrances.append(a)
-		entrances.append(b)
+		if _entrance_far_enough(b, entrances, min_sep):
+			entrances.append(b)
 
 		built += 1
 
@@ -1475,10 +1518,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 	var endpoints: Array[Vector2i] = []
 	_tunnel_entrance_cells.clear()
 	for entrance in entrances:
-		var dir: int = RAMP_EAST
-		if tunnel_entrance_mode == 1:
-			dir = _pick_entrance_dir(n, entrance)
-
 		var ei: int = _idx2(entrance.x, entrance.y, n)
 		var entrance_is_flat: bool = (_ramp_up_dir[ei] == RAMP_NONE)
 		_dbg_tunnel("candidate entrance=%s ei=%d passable=%s up=%d" % [str(entrance), ei, str(passable[ei] != 0), _ramp_up_dir[ei]])
@@ -1486,7 +1525,7 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			_dbg_tunnel("SKIP entrance on ramp: cell=%s ei=%d up=%d" % [str(entrance), ei, _ramp_up_dir[ei]])
 			continue
 
-		var top_cell: Vector2i = _tunnel_stamp_entrance_ramp(n, entrance, dir)
+		var top_cell: Vector2i = _tunnel_stamp_entrance_ramp(n, entrance)
 		endpoints.append(top_cell)
 		_tunnel_entrance_cells.append(top_cell)
 
@@ -1509,19 +1548,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			if v != 0:
 				tunnel_cell_count += 1
 		_dbg_tunnel("done: entrances=%d holes=%d tunnel_cells=%d" % [_tunnel_entrance_cells.size(), hole_count, tunnel_cell_count])
-
-func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
-	var dx: int = b.x - a.x
-	var dz: int = b.y - a.y
-	if dx == 1 and dz == 0:
-		return RAMP_EAST
-	if dx == -1 and dz == 0:
-		return RAMP_WEST
-	if dx == 0 and dz == 1:
-		return RAMP_SOUTH
-	if dx == 0 and dz == -1:
-		return RAMP_NORTH
-	return RAMP_EAST
 
 func _ensure_tunnel_nodes() -> void:
 	var terrain_body: Node = get_node_or_null("TerrainBody")
@@ -2025,6 +2051,8 @@ func _build_mesh_and_collision(n: int) -> void:
 	var dbg_wall_added: int = 0
 	var dbg_top_skipped: int = 0
 	var dbg_hole_on_ramp_cleared: int = 0
+	_dbg_ramp_cells_emitted = 0
+	_dbg_ramp_quads_added = 0
 	var levels: PackedInt32Array = PackedInt32Array()
 	levels.resize(n * n)
 	for i in range(n * n):
@@ -2070,6 +2098,10 @@ func _build_mesh_and_collision(n: int) -> void:
 					uv_scale_top,
 					top_col
 				)
+				if is_ramp:
+					_dbg_ramp_cells_emitted += 1
+					var sdiv_dbg: int = maxi(1, top_subdiv)
+					_dbg_ramp_quads_added += sdiv_dbg * sdiv_dbg
 
 	if enable_tunnels and tunnel_occluder_enabled:
 		var occluder_col := tunnel_occluder_color
@@ -2383,14 +2415,7 @@ func _wall_decor_open_side_effective_raycast_mask() -> int:
 	return wall_decor_open_side_raycast_mask
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collide_with_bodies = true
-	q.collide_with_areas = false
-	q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-	q.hit_from_inside = true
-	q.hit_back_faces = true
-	var hit := space.intersect_ray(q)
+	var hit := _raycast_dbg(from, to, _wall_decor_open_side_effective_raycast_mask(), [], false)
 	return hit.is_empty()
 
 func _sort_vec3_y_desc(a: Vector3, b: Vector3) -> bool:
@@ -2859,7 +2884,10 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
-func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
+func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
+	if not face.is_trapezoid:
+		return [face, null]
+
 	var e0_lo: Vector3 = face.a
 	var e0_hi: Vector3 = face.d
 	if e0_hi.y < e0_lo.y:
@@ -2879,7 +2907,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array[WallFace]:
 	var min_h: float = minf(h0, h1)
 
 	if absf(h0 - h1) < 0.0001:
-		return [face, WallFace.new(face.a, face.b, face.c, face.d, face.center, face.normal, face.width, 0.0, true, face.key)]
+		return [face, null]
 
 	var t0: float = clampf(min_h / maxf(h0, 0.0001), 0.0, 1.0)
 	var t1: float = clampf(min_h / maxf(h1, 0.0001), 0.0, 1.0)
@@ -2940,7 +2968,14 @@ func _decor_global_aabb(pad: float = 2.0) -> AABB:
 
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
-	var has_wedge_decor: bool = enable_wall_wedge_decor and not wall_wedge_decor_meshes.is_empty()
+	var wedge_meshes_left: Array[Mesh] = wall_wedge_decor_meshes_left
+	var wedge_meshes_right: Array[Mesh] = wall_wedge_decor_meshes_right
+	if wedge_meshes_left.is_empty() and not wall_wedge_decor_meshes.is_empty():
+		wedge_meshes_left = wall_wedge_decor_meshes
+	if wedge_meshes_right.is_empty() and not wall_wedge_decor_meshes.is_empty():
+		wedge_meshes_right = wall_wedge_decor_meshes
+	var wedge_variant_count: int = mini(wedge_meshes_left.size(), wedge_meshes_right.size())
+	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
 	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
@@ -2953,24 +2988,15 @@ func _rebuild_wall_decor() -> void:
 	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
 
-		var ss := get_world_3d().direct_space_state
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(a, b)
-		q.collision_mask = _wall_decor_open_side_effective_raycast_mask()
-		q.collide_with_bodies = true
-		q.collide_with_areas = false
-		q.hit_back_faces = true
-		q.hit_from_inside = true
-
-		var hit := ss.intersect_ray(q)
+		var hit := _raycast_dbg(a, b, _wall_decor_open_side_effective_raycast_mask(), [], false)
 		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
 	for child: Node in _wall_decor_root.get_children():
 		child.queue_free()
 
 	var rect_variant_count: int = wall_decor_meshes.size()
-	var wedge_variant_count: int = wall_wedge_decor_meshes.size()
 	var decor_aabb := _decor_global_aabb(4.0)
 
 	var rect_counts: Array[int] = []
@@ -2978,13 +3004,30 @@ func _rebuild_wall_decor() -> void:
 	for i: int in range(rect_variant_count):
 		rect_counts[i] = 0
 
-	var wedge_counts: Array[int] = []
-	wedge_counts.resize(wedge_variant_count)
+	var wedge_counts_left: Array[int] = []
+	var wedge_counts_right: Array[int] = []
+	wedge_counts_left.resize(wedge_variant_count)
+	wedge_counts_right.resize(wedge_variant_count)
 	for i2: int in range(wedge_variant_count):
-		wedge_counts[i2] = 0
+		wedge_counts_left[i2] = 0
+		wedge_counts_right[i2] = 0
 
 	var rect_faces: Array[WallFace] = []
 	var wedge_faces: Array[WallFace] = []
+	var dbg_wedge_total: int = 0
+	var dbg_wedge_kept: int = 0
+	var dbg_wedge_skip_trap: int = 0
+	var dbg_wedge_skip_null_or_short: int = 0
+	var dbg_wedge_skip_occluder_count: int = 0
+	var dbg_wedge_skip_surface_count: int = 0
+	var dbg_wedge_skip_allow_count: int = 0
+	var dbg_wedge_skip_occluder_place: int = 0
+	var dbg_wedge_skip_surface_place: int = 0
+	var dbg_wedge_skip_allow_place: int = 0
+	var dbg_wedge_skip_under_surface_place: int = 0
+	var dbg_wedge_skip_variant_place: int = 0
+	var dbg_rect_skip_surface_count: int = 0
+	var dbg_rect_skip_surface_place: int = 0
 	var trap_count: int = 0
 	for face in _wall_faces:
 		if face.is_trapezoid:
@@ -2992,9 +3035,22 @@ func _rebuild_wall_decor() -> void:
 			var parts := _split_trapezoid_wall_face_for_decor(face)
 			var rect: WallFace = parts[0]
 			var wedge: WallFace = parts[1]
-			if rect != null and not wall_decor_skip_trapezoids:
-				rect_faces.append(rect)
-			if wedge != null and not wall_wedge_decor_skip_trapezoids and wedge.height > 0.0005:
+
+			# Wall decor routing:
+			if wall_decor_skip_trapezoids:
+				# Keep only the rectangular under-ramp portion.
+				if rect != null and rect.height >= wall_decor_min_height:
+					rect_faces.append(rect)
+			else:
+				# Legacy/debug path: allow full trapezoid in wall decor.
+				rect_faces.append(face)
+
+			# Wedge decor routing:
+			if wedge == null or wedge.height <= 0.0005:
+				dbg_wedge_skip_null_or_short += 1
+			elif wall_wedge_decor_skip_trapezoids:
+				dbg_wedge_skip_trap += 1
+			else:
 				wedge_faces.append(wedge)
 		else:
 			rect_faces.append(face)
@@ -3006,6 +3062,8 @@ func _rebuild_wall_decor() -> void:
 		" wall_skip_trap:", wall_decor_skip_trapezoids,
 		" wedge_skip_trap:", wall_wedge_decor_skip_trapezoids
 	)
+	if wall_decor_surface_only:
+		_wd("[WD] surface_only active (rect skip counters populated in count/place passes)")
 
 	if has_rect_decor:
 		for f: WallFace in rect_faces:
@@ -3018,17 +3076,29 @@ func _rebuild_wall_decor() -> void:
 				continue
 			if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
 				continue
+			if wall_decor_surface_only:
+				var max_y_count: float = _wall_face_max_world_y(f)
+				if max_y_count > outer_floor_height + wall_decor_surface_margin:
+					var cov_count := _wall_face_covered_both_sides(f.center, max_y_count, f.normal)
+					if bool(cov_count["covered"]):
+						dbg_rect_skip_surface_count += 1
+						continue
 			var idx: int = (f.key + wall_decor_seed) % rect_variant_count
 			rect_counts[idx] += 1
 
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
+			dbg_wedge_total += 1
+			var place_outward_count: Vector3 = _wall_place_outward(wf).normalized()
+			if wall_wedge_decor_flip_outward:
+				place_outward_count = -place_outward_count
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
-					continue
+					dbg_wedge_skip_occluder_count += 1
+					continue # COUNT_PASS: SKIP_OCCLUDER_CAP
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf)
-				var outward := _wall_place_outward(wf)
+				var outward := place_outward_count
 
 				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
 				var p_side := wf.center + outward * (eps + 0.001)
@@ -3038,11 +3108,16 @@ func _rebuild_wall_decor() -> void:
 				var h_ceiling := maxf(h_side, h_center)
 
 				if h_ceiling > top_y + wall_decor_surface_margin:
-					continue
+					dbg_wedge_skip_surface_count += 1
+					continue # COUNT_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf):
-				continue
-			var widx: int = (wf.key + wall_wedge_decor_seed) % wedge_variant_count
-			wedge_counts[widx] += 1
+				dbg_wedge_skip_allow_count += 1
+				continue # COUNT_PASS: SKIP_NOT_ALLOWED
+			var widx: int = absi(wf.key + wall_wedge_decor_seed) % wedge_variant_count
+			if _wedge_is_right_side_outward(wf, place_outward_count):
+				wedge_counts_right[widx] += 1
+			else:
+				wedge_counts_left[widx] += 1
 
 	var rect_mmi_by_variant: Array[MultiMeshInstance3D] = []
 	rect_mmi_by_variant.resize(rect_variant_count)
@@ -3068,39 +3143,61 @@ func _rebuild_wall_decor() -> void:
 		rect_mmi_by_variant[v] = mmi
 		rect_aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
 
-	var wedge_mmi_by_variant: Array[MultiMeshInstance3D] = []
-	wedge_mmi_by_variant.resize(wedge_variant_count)
+	var wedge_mmi_left_by_variant: Array[MultiMeshInstance3D] = []
+	var wedge_mmi_right_by_variant: Array[MultiMeshInstance3D] = []
+	wedge_mmi_left_by_variant.resize(wedge_variant_count)
+	wedge_mmi_right_by_variant.resize(wedge_variant_count)
 
-	var wedge_aabb_by_variant: Array[AABB] = []
-	wedge_aabb_by_variant.resize(wedge_variant_count)
+	var wedge_aabb_left_by_variant: Array[AABB] = []
+	var wedge_aabb_right_by_variant: Array[AABB] = []
+	wedge_aabb_left_by_variant.resize(wedge_variant_count)
+	wedge_aabb_right_by_variant.resize(wedge_variant_count)
 
 	for wv: int in range(wedge_variant_count):
-		if wedge_counts[wv] <= 0:
-			wedge_mmi_by_variant[wv] = null
-			continue
+		if wedge_counts_left[wv] > 0:
+			var wmm_left: MultiMesh = MultiMesh.new()
+			wmm_left.transform_format = MultiMesh.TRANSFORM_3D
+			wmm_left.mesh = wedge_meshes_left[wv]
+			wmm_left.instance_count = wedge_counts_left[wv]
 
-		var wmm: MultiMesh = MultiMesh.new()
-		wmm.transform_format = MultiMesh.TRANSFORM_3D
-		wmm.mesh = wall_wedge_decor_meshes[wv]
-		wmm.instance_count = wedge_counts[wv]
+			var wmmi_left: MultiMeshInstance3D = MultiMeshInstance3D.new()
+			wmmi_left.multimesh = wmm_left
+			wmmi_left.custom_aabb = decor_aabb
 
-		var wmmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-		wmmi.multimesh = wmm
-		wmmi.custom_aabb = decor_aabb
+			_wall_decor_root.add_child(wmmi_left)
+			wedge_mmi_left_by_variant[wv] = wmmi_left
+			wedge_aabb_left_by_variant[wv] = wedge_meshes_left[wv].get_aabb()
+		else:
+			wedge_mmi_left_by_variant[wv] = null
 
-		_wall_decor_root.add_child(wmmi)
-		wedge_mmi_by_variant[wv] = wmmi
-		wedge_aabb_by_variant[wv] = wall_wedge_decor_meshes[wv].get_aabb()
+		if wedge_counts_right[wv] > 0:
+			var wmm_right: MultiMesh = MultiMesh.new()
+			wmm_right.transform_format = MultiMesh.TRANSFORM_3D
+			wmm_right.mesh = wedge_meshes_right[wv]
+			wmm_right.instance_count = wedge_counts_right[wv]
+
+			var wmmi_right: MultiMeshInstance3D = MultiMeshInstance3D.new()
+			wmmi_right.multimesh = wmm_right
+			wmmi_right.custom_aabb = decor_aabb
+
+			_wall_decor_root.add_child(wmmi_right)
+			wedge_mmi_right_by_variant[wv] = wmmi_right
+			wedge_aabb_right_by_variant[wv] = wedge_meshes_right[wv].get_aabb()
+		else:
+			wedge_mmi_right_by_variant[wv] = null
 
 	var rect_write_i: Array[int] = []
 	rect_write_i.resize(rect_variant_count)
 	for v2: int in range(rect_variant_count):
 		rect_write_i[v2] = 0
 
-	var wedge_write_i: Array[int] = []
-	wedge_write_i.resize(wedge_variant_count)
+	var wedge_write_left_i: Array[int] = []
+	var wedge_write_right_i: Array[int] = []
+	wedge_write_left_i.resize(wedge_variant_count)
+	wedge_write_right_i.resize(wedge_variant_count)
 	for wv2: int in range(wedge_variant_count):
-		wedge_write_i[wv2] = 0
+		wedge_write_left_i[wv2] = 0
+		wedge_write_right_i[wv2] = 0
 
 	var total_rect_instances: int = 0
 	for count in rect_counts:
@@ -3109,8 +3206,8 @@ func _rebuild_wall_decor() -> void:
 		push_warning("Wall decor: 0 rectangular instances after filtering. Check max size.")
 
 	var total_wedge_instances: int = 0
-	for wcount in wedge_counts:
-		total_wedge_instances += wcount
+	for wvi: int in range(wedge_variant_count):
+		total_wedge_instances += wedge_counts_left[wvi] + wedge_counts_right[wvi]
 	if has_wedge_decor and total_wedge_instances <= 0:
 		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
 
@@ -3137,7 +3234,7 @@ func _rebuild_wall_decor() -> void:
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
-			var under_now: bool = cov_p["covered"]
+			var under_now: bool = bool(cov_p["covered"])
 
 			# --- extra under-map diagnostics ---
 			if wall_decor_debug_dump_under_surface and wall_decor_debug_cov_details:
@@ -3165,7 +3262,8 @@ func _rebuild_wall_decor() -> void:
 					)
 			# --- end diagnostics ---
 
-			if under_now:
+			if wall_decor_surface_only and top_y > outer_floor_height + wall_decor_surface_margin and under_now:
+				dbg_rect_skip_surface_place += 1
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
 
@@ -3174,13 +3272,19 @@ func _rebuild_wall_decor() -> void:
 			rect_write_i[vsel] = wi + 1
 
 	if has_wedge_decor:
+		var wedge_place_fi: int = 0
 		for wf2: WallFace in wedge_faces:
+			wedge_place_fi += 1
+			var place_outward: Vector3 = _wall_place_outward(wf2).normalized()
+			if wall_wedge_decor_flip_outward:
+				place_outward = -place_outward
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
-					continue
+					dbg_wedge_skip_occluder_place += 1
+					continue # PLACE_PASS: SKIP_OCCLUDER_CAP
 			if wall_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf2)
-				var outward := _wall_place_outward(wf2)
+				var outward := place_outward
 
 				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
 				var p_side := wf2.center + outward * (eps + 0.001)
@@ -3190,20 +3294,41 @@ func _rebuild_wall_decor() -> void:
 				var h_ceiling := maxf(h_side, h_center)
 
 				if h_ceiling > top_y + wall_decor_surface_margin:
-					continue
+					dbg_wedge_skip_surface_place += 1
+					continue # PLACE_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf2):
-				continue
-			var wsel: int = (wf2.key + wall_wedge_decor_seed) % wedge_variant_count
-			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_variant[wsel]
+				dbg_wedge_skip_allow_place += 1
+				continue # PLACE_PASS: SKIP_NOT_ALLOWED
+			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
+			var side_is_right: bool = _wedge_is_right_side_outward(wf2, place_outward)
+			var wmmi2: MultiMeshInstance3D = wedge_mmi_right_by_variant[wsel] if side_is_right else wedge_mmi_left_by_variant[wsel]
 			if wmmi2 == null:
+				dbg_wedge_skip_variant_place += 1
+				continue # PLACE_PASS: SKIP_NO_VARIANT_MM
+
+			var waabb: AABB = wedge_aabb_right_by_variant[wsel] if side_is_right else wedge_aabb_left_by_variant[wsel]
+			var overhang_flip_180: bool = wall_wedge_decor_enable_overhang_flip_180 and wf2.is_trapezoid
+			if wall_decor_debug_verbose and (wall_decor_debug_focus_fi < 0 or wall_decor_debug_focus_fi == wedge_place_fi):
+				var n_cells_dbg: int = max(2, cells_per_side)
+				var probe_step_dbg: float = _cell_size * 0.25
+				var c_in_dbg: Vector2i = _world_to_cell_xz(wf2.center - place_outward * probe_step_dbg, n_cells_dbg)
+				var c_out_dbg: Vector2i = _world_to_cell_xz(wf2.center + place_outward * probe_step_dbg, n_cells_dbg)
+				var ramp_in_dbg: bool = _cell_is_ramp(c_in_dbg.x, c_in_dbg.y, n_cells_dbg)
+				var ramp_out_dbg: bool = _cell_is_ramp(c_out_dbg.x, c_out_dbg.y, n_cells_dbg)
+				_wd("[WEDGE] fi=%d key=%d center=%s place_outward=%s side=%s flip_outward=%s attach_far=%s flip_facing=%s overhang_flip_180=%s ramp_in/out=%s/%s c_in=%s c_out=%s a=%s b=%s c=%s d=%s" % [wedge_place_fi, wf2.key, _fmt_v3(wf2.center), _fmt_v3(place_outward), ("R" if side_is_right else "L"), str(wall_wedge_decor_flip_outward), str(wall_wedge_decor_attach_far_side), str(wall_wedge_decor_flip_facing), str(overhang_flip_180), str(ramp_in_dbg), str(ramp_out_dbg), str(c_in_dbg), str(c_out_dbg), _fmt_v3(wf2.a), _fmt_v3(wf2.b), _fmt_v3(wf2.c), _fmt_v3(wf2.d)])
+			var under_floor_margin: float = maxf(0.25, height_step * 0.25)
+			if wf2.center.y < outer_floor_height - under_floor_margin:
+				dbg_wedge_skip_under_surface_place += 1
 				continue
+			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, place_outward, wall_wedge_decor_offset, wall_wedge_decor_attach_far_side, overhang_flip_180)
 
-			var waabb: AABB = wedge_aabb_by_variant[wsel]
-			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, wall_wedge_decor_offset)
-
-			var wwi: int = wedge_write_i[wsel]
+			var wwi: int = wedge_write_right_i[wsel] if side_is_right else wedge_write_left_i[wsel]
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
-			wedge_write_i[wsel] = wwi + 1
+			if side_is_right:
+				wedge_write_right_i[wsel] = wwi + 1
+			else:
+				wedge_write_left_i[wsel] = wwi + 1
+			dbg_wedge_kept += 1
 
 
 	if has_rect_decor:
@@ -3215,10 +3340,94 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for wv3: int in range(wedge_variant_count):
-			var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_variant[wv3]
-			if wedge_mmi == null:
-				continue
-			wedge_mmi.multimesh.visible_instance_count = wedge_write_i[wv3]
+			var wedge_mmi_left: MultiMeshInstance3D = wedge_mmi_left_by_variant[wv3]
+			if wedge_mmi_left != null:
+				wedge_mmi_left.multimesh.visible_instance_count = wedge_write_left_i[wv3]
+			var wedge_mmi_right: MultiMeshInstance3D = wedge_mmi_right_by_variant[wv3]
+			if wedge_mmi_right != null:
+				wedge_mmi_right.multimesh.visible_instance_count = wedge_write_right_i[wv3]
+		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d) place(occluder=%d,surface=%d,allow=%d,under=%d,variant=%d)" % [
+			dbg_wedge_total,
+			dbg_wedge_kept,
+			dbg_wedge_skip_trap,
+			dbg_wedge_skip_null_or_short,
+			dbg_wedge_skip_occluder_count,
+			dbg_wedge_skip_surface_count,
+			dbg_wedge_skip_allow_count,
+			dbg_wedge_skip_occluder_place,
+			dbg_wedge_skip_surface_place,
+			dbg_wedge_skip_allow_place,
+			dbg_wedge_skip_under_surface_place,
+			dbg_wedge_skip_variant_place
+		])
+
+func _wedge_is_right_side(wf: WallFace) -> bool:
+	var avg_left: float = 0.5 * (wf.a.y + wf.d.y)
+	var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
+	return avg_right > avg_left
+
+func _wedge_is_right_side_outward(wf: WallFace, outward: Vector3) -> bool:
+	var z: Vector3 = Vector3(outward.x, 0.0, outward.z)
+	if z.length_squared() < 1e-8:
+		z = Vector3(wf.normal.x, 0.0, wf.normal.z)
+	if z.length_squared() < 1e-8:
+		return _wedge_is_right_side(wf)
+	z = z.normalized()
+
+	var right: Vector3 = Vector3.UP.cross(z)
+	if right.length_squared() < 1e-8:
+		return _wedge_is_right_side(wf)
+	right = right.normalized()
+
+	var center: Vector3 = wf.center
+	var verts: Array[Vector3] = [wf.a, wf.b, wf.c, wf.d]
+
+	var tmin: float = INF
+	var tmax: float = -INF
+	for v in verts:
+		var t: float = (v - center).dot(right)
+		tmin = minf(tmin, t)
+		tmax = maxf(tmax, t)
+
+	var ext: float = tmax - tmin
+	if ext < 1e-4:
+		return _wedge_is_right_side(wf)
+
+	var band: float = ext * 0.25
+	var y_lo: float = 0.0
+	var y_hi: float = 0.0
+	var n_lo: int = 0
+	var n_hi: int = 0
+
+	for v2 in verts:
+		var t2: float = (v2 - center).dot(right)
+		if t2 <= tmin + band:
+			y_lo += v2.y
+			n_lo += 1
+		if t2 >= tmax - band:
+			y_hi += v2.y
+			n_hi += 1
+
+	if n_lo == 0 or n_hi == 0:
+		return _wedge_is_right_side(wf)
+
+	y_lo /= float(n_lo)
+	y_hi /= float(n_hi)
+	return y_hi > y_lo
+
+func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
+	var cx: int = int(floor((p.x - _ox) / _cell_size))
+	var cz: int = int(floor((p.z - _oz) / _cell_size))
+	cx = clamp(cx, 0, n - 1)
+	cz = clamp(cz, 0, n - 1)
+	return Vector2i(cx, cz)
+
+func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
+	if not _in_bounds(cx, cz, n):
+		return false
+	if _ramp_up_dir.size() != n * n:
+		return false
+	return _ramp_up_dir[_idx2(cx, cz, n)] != RAMP_NONE
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
@@ -3399,9 +3608,8 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var origin: Vector3 = target_world - (decor_basis * anchor_local)
 	return Transform3D(decor_basis, origin)
 
-func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset: float) -> Transform3D:
-	# Use the same open-side/uncovered-side logic as rectangular wall decor.
-	var outward := _wall_place_outward(face)
+func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: Vector3, outward_offset: float, attach_far_in: bool, overhang_flip_180: bool = false) -> Transform3D:
+	var outward: Vector3 = place_outward
 	outward.y = 0.0
 	if outward.length_squared() < 1e-8:
 		outward = Vector3(face.normal.x, 0.0, face.normal.z)
@@ -3409,22 +3617,30 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
-	var y_dir := Vector3.UP
+	# Build a stable frame:
+	# z_dir = outward (horizontal), x_dir = horizontal perpendicular to outward, y_dir orthonormal.
+	var z_dir: Vector3 = outward
+	z_dir.y = 0.0
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3.FORWARD
+	z_dir = z_dir.normalized()
 
-	var left_avg: float = (face.a.y + face.d.y) * 0.5
-	var right_avg: float = (face.b.y + face.c.y) * 0.5
-	var slope_up_toward_right: bool = right_avg > left_avg
-	var x_dir := (outward.cross(y_dir) if slope_up_toward_right else y_dir.cross(outward)).normalized()
+	var x_dir: Vector3 = Vector3.UP.cross(z_dir)
 	if x_dir.length_squared() < 1e-8:
 		x_dir = Vector3.RIGHT
-	var z_dir := outward
+	x_dir = x_dir.normalized()
 
-	var rot := Basis(x_dir, y_dir, z_dir).orthonormalized()
+	var y_dir: Vector3 = z_dir.cross(x_dir).normalized()
+	x_dir = y_dir.cross(z_dir).normalized()
 
-	var attach_far: bool = wall_wedge_decor_attach_far_side
-	if wall_wedge_decor_flip_facing:
-		rot = Basis(Vector3.UP, PI) * rot
-		attach_far = not attach_far
+	var rot: Basis = Basis(x_dir, y_dir, z_dir).orthonormalized()
+
+	var attach_far: bool = attach_far_in
+	var yaw_flip: bool = wall_wedge_decor_flip_facing
+	if overhang_flip_180:
+		yaw_flip = !yaw_flip
 
 	var ref_w: float = max(aabb.size.x, 0.001)
 	var ref_h: float = max(aabb.size.y, 0.001)
@@ -3436,9 +3652,19 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, outward_offset:
 		if wall_wedge_decor_max_scale > 0.0:
 			sx = min(sx, wall_wedge_decor_max_scale)
 			sy = min(sy, wall_wedge_decor_max_scale)
-	var sz: float = 1.0
+	# Depth (thickness) along the outward axis (mesh local Z).
+	var sz: float = wall_wedge_decor_depth_scale
+	if wall_wedge_decor_max_depth_cells > 0.0:
+		var max_world: float = _cell_size * wall_wedge_decor_max_depth_cells
+		var ref_z: float = maxf(aabb.size.z, 0.001)
+		var max_scale: float = max_world / ref_z
+		sz = minf(sz, max_scale)
+	sz = maxf(sz, 0.001)
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	if yaw_flip:
+		decor_basis = Basis(Vector3.UP, PI) * decor_basis
+		attach_far = !attach_far
 
 	var center_x: float = aabb.position.x + aabb.size.x * 0.5
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
@@ -3759,11 +3985,15 @@ func _floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		sx = s
 		sd = s
 
-	# Scale in local space (do not scale thickness)
+	# Scale in local space; include thickness along the surface normal axis.
 	var scale_vec := Vector3.ONE
 	scale_vec[width_axis] = sx
 	scale_vec[depth_axis] = sd
-	scale_vec[normal_axis] = 1.0
+	var sz: float = maxf(0.001, floor_decor_depth_scale)
+	if floor_decor_fit_to_cell:
+		var max_sz: float = maxf(0.001, _cell_size) * maxf(0.001, floor_decor_max_depth_cells)
+		sz = minf(sz, max_sz)
+	scale_vec[normal_axis] = sz
 	var basis_scaled := local_basis
 	basis_scaled.x = basis_scaled.x * scale_vec.x
 	basis_scaled.y = basis_scaled.y * scale_vec.y
@@ -3948,14 +4178,6 @@ func _add_shaft_walls_segmented(
 func _build_tunnel_elevator_tops(n: int) -> void:
 	# Places a mesh on the surface cell that has a tunnel shaft beneath it.
 	# This mesh is intended to be animated as an elevator later.
-	#
-	# Placement constraints:
-	# - Keep a minimum separation between elevators.
-	# - Never place on/adjacent to ramps (avoid blocking traversal).
-	# - Require at least one walkable cell in front (entry clearance) and keep the
-	#   front from hanging over a cliff (same level).
-	# - Face the tunnel direction underneath when possible; otherwise prefer
-	#   facing away from the nearest wall.
 
 	if tunnel_elevator_top_mesh == null:
 		return
@@ -3972,158 +4194,12 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 		return
 
 	# Local helpers.
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var _inb := func(cx: int, cz: int) -> bool:
-		return _in_bounds(cx, cz, n)
-	
 	var _idx := func(cx: int, cz: int) -> int:
 		return _idx2(cx, cz, n)
-	
-	var _is_ramp := func(cx: int, cz: int) -> bool:
-		return _ramp_up_dir[_idx.call(cx, cz)] != RAMP_NONE
-	
-	var _is_hole := func(cx: int, cz: int) -> bool:
-		return _tunnel_hole_mask[_idx.call(cx, cz)] != 0
-	
-	var _is_platform := func(cx: int, cz: int) -> bool:
-		if !_inb.call(cx, cz):
-			return false
-		if _is_ramp.call(cx, cz):
-			return false
-		if _is_hole.call(cx, cz):
-			return false
-		return true
-	
-	var _cell_level := func(cx: int, cz: int) -> int:
-		return _h_to_level(_heights[_idx.call(cx, cz)])
-	
-	var _platform_neighbor_count := func(cell: Vector2i) -> int:
-		var c := 0
-		for d: Vector2i in dirs:
-			if _is_platform.call(cell.x + d.x, cell.y + d.y):
-				c += 1
-		return c
-	
-	var _tunnel_dirs_for := func(cell: Vector2i) -> Array[Vector2i]:
-		# Directions that connect into the tunnel network Under this entrance.
-		var out: Array[Vector2i] = []
-		for d: Vector2i in dirs:
-			var nx: int = cell.x + d.x
-			var nz: int = cell.y + d.y
-			if !_inb.call(nx, nz):
-				continue
-			var ni := _idx.call(nx, nz)
-			if _tunnel_mask[ni] == 0:
-				continue
-			out.append(d)
-		return out
-	
-	var _yaw_for_front_dir := func(front: Vector2i) -> float:
-		# Godot "forward" is -Z. Rotate so -Z points along front_dir.
-		var dv := Vector3(front.x, 0.0, front.y).normalized()
-		return atan2(dv.x, -dv.z)
-	
-	var _has_clear_front := func(cell: Vector2i, front: Vector2i) -> bool:
-		if !tunnel_elevator_require_clear_front:
-			return true
-		var fx := cell.x + front.x
-		var fz := cell.y + front.y
-		if !_is_platform.call(fx, fz):
-			return false
-		# Require same level so it doesn't hang over a cliff.
-		return _cell_level.call(fx, fz) == _cell_level.call(cell.x, cell.y)
-	
-	var _has_no_ramp_neighbors := func(cell: Vector2i) -> bool:
-		if !tunnel_elevator_require_no_ramp_neighbors:
-			return true
-		for d: Vector2i in dirs:
-			var nx: int = cell.x + d.x
-			var nz: int = cell.y + d.y
-			if !_inb.call(nx, nz):
-				continue
-			if _is_ramp.call(nx, nz):
-				return false
-			if _is_hole.call(nx, nz):
-				return false
-		return true
-	
-	var _best_front_dir := func(cell: Vector2i) -> Vector2i:
-		# 1) Prefer a tunnel-connected direction with clear front.
-		var tdirs: Array[Vector2i] = _tunnel_dirs_for.call(cell)
-		for d: Vector2i in tdirs:
-			# Ignore "back into a hole" where the neighbor is also an entrance.
-			var ni := _idx.call(cell.x + d.x, cell.y + d.y)
-			if _tunnel_hole_mask[ni] != 0:
-				continue
-			if _has_clear_front.call(cell, d):
-				return d
-		for d: Vector2i in tdirs:
-			if _has_clear_front.call(cell, d):
-				return d
-	
-		# 2) Otherwise, face away from the nearest wall if possible.
-		for wall_d in dirs:
-			var bx: int = cell.x + wall_d.x
-			var bz: int = cell.y + wall_d.y
-			if _inb.call(bx, bz) and _is_platform.call(bx, bz):
-				continue
-			var front: Vector2i = -wall_d
-			if _has_clear_front.call(cell, front):
-				return front
-	
-		# 3) Final fallback: any clear-front direction.
-		for d: Vector2i in dirs:
-			if _has_clear_front.call(cell, d):
-				return d
-		return Vector2i(0, 1)
-	
-	# Shuffle candidates deterministically.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(noise_seed) ^ 0xC0FFEE
 
-	var candidates: Array[Vector2i] = []
-	candidates.assign(_tunnel_entrance_cells)
-	# Fisher-Yates
-	for i in range(candidates.size() - 1, 0, -1):
-		var j := rng.randi_range(0, i)
-		var tmp := candidates[i]
-		candidates[i] = candidates[j]
-		candidates[j] = tmp
 
-	# Greedy select entrances under constraints.
-	var accepted: Array[Vector2i] = []
-	var min_sep2 := tunnel_elevator_min_separation_cells * tunnel_elevator_min_separation_cells
-
-	for cell in candidates:
-		if !_inb.call(cell.x, cell.y):
-			continue
-		# Never put an elevator on a ramp.
-		if _is_ramp.call(cell.x, cell.y):
-			continue
-		# Ensure it is on a platform (neighbors) and not a tiny isolated ledge.
-		if _platform_neighbor_count.call(cell) < 2:
-			continue
-		if !_has_no_ramp_neighbors.call(cell):
-			continue
-
-		var front_dir: Vector2i = _best_front_dir.call(cell)
-		if !_has_clear_front.call(cell, front_dir):
-			continue
-
-		# Separation constraint.
-		var ok_sep := true
-		for a in accepted:
-			var dx := a.x - cell.x
-			var dz := a.y - cell.y
-			if dx * dx + dz * dz < min_sep2:
-				ok_sep = false
-				break
-		if !ok_sep:
-			continue
-
-		accepted.append(cell)
-
-	if accepted.is_empty():
+	var candidates: Array[Vector2i] = _tunnel_entrance_cells.duplicate()
+	if candidates.is_empty():
 		return
 
 	# Place instances.
@@ -4135,15 +4211,12 @@ func _build_tunnel_elevator_tops(n: int) -> void:
 	# Uniform scale to fit within a single cell footprint (prevents overhang / ramp blocking).
 	var target_xz: float = _cell_size * clamp(tunnel_elevator_fit_margin, 0.1, 1.0)
 	var s_uniform: float = min(target_xz / size.x, target_xz / size.z)
-	var scale := Vector3(s_uniform, s_uniform, s_uniform)
+	var basis := Basis.IDENTITY.scaled(Vector3(s_uniform, s_uniform, s_uniform))
 
-	for k in range(accepted.size()):
-		var cell := accepted[k]
-		var idx_e: int = _idx.call(cell.x, cell.y)
+	for k in range(candidates.size()):
+		var cell := candidates[k]
 
-		var front_dir: Vector2i = _best_front_dir.call(cell)
-		var yaw: float = _yaw_for_front_dir.call(front_dir)
-		var basis := Basis(Vector3.UP, yaw).scaled(scale)
+		var idx_e: int = int(_idx.call(cell.x, cell.y))
 
 		var cx := _ox + float(cell.x) * _cell_size + _cell_size * 0.5
 		var cz := _oz + float(cell.y) * _cell_size + _cell_size * 0.5
