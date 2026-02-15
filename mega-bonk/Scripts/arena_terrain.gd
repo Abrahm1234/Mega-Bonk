@@ -560,12 +560,19 @@ func _tag_ramp_side_slots(n: int) -> void:
 					continue
 				side_edges_expected += 1
 				var nb: Vector2i = _get_edge_nb(c, edge_id, n)
-				var overhang: bool = _edge_is_overhang(c, edge_id, nb, n)
 				var slot: int = WEDGE_SLOT_RAMP_LEFT
 				if side == 0:
-					slot = WEDGE_SLOT_OVERHANG_LEFT if overhang else WEDGE_SLOT_RAMP_LEFT
+					slot = WEDGE_SLOT_RAMP_LEFT
 				else:
-					slot = WEDGE_SLOT_OVERHANG_RIGHT if overhang else WEDGE_SLOT_RAMP_RIGHT
+					slot = WEDGE_SLOT_RAMP_RIGHT
+
+				if nb.x >= 0 and nb.y >= 0:
+					var overhang: bool = _edge_is_overhang(c, edge_id, nb, n)
+					if overhang:
+						if side == 0:
+							slot = WEDGE_SLOT_OVERHANG_LEFT
+						else:
+							slot = WEDGE_SLOT_OVERHANG_RIGHT
 				_set_edge_slot(c, edge_id, slot, n)
 				side_edges_tagged += 1
 	if wall_decor_debug_verbose:
@@ -3282,6 +3289,12 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, face.is_trapezoid, wkey)
 	wedge_face.normal = face.normal
 
+	if _wall_face_meta.has(face.key):
+		var src_meta: FaceMeta = _wall_face_meta[face.key] as FaceMeta
+		if src_meta != null:
+			_wall_face_meta[rect_face.key] = src_meta
+			_wall_face_meta[wedge_face.key] = src_meta
+
 	return [rect_face, wedge_face]
 
 func _decor_global_aabb(pad: float = 2.0) -> AABB:
@@ -3466,7 +3479,8 @@ func _rebuild_wall_decor() -> void:
 			var cls_c: Dictionary = _wedge_slot_classify(wf, place_outward_count, max(2, cells_per_side))
 			var slot_c: int = int(cls_c.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_c < 0 or slot_c >= WEDGE_SLOT_COUNT:
-				slot_c = WEDGE_SLOT_RAMP_LEFT
+				dbg_wedge_skip_variant_place += 1
+				continue
 			var slot_meshes_c: Array[Mesh] = _wd_slot_meshes(slot_c)
 			if slot_meshes_c.is_empty():
 				continue
@@ -3653,7 +3667,8 @@ func _rebuild_wall_decor() -> void:
 			var cls_p: Dictionary = _wedge_slot_classify(wf2, place_outward, max(2, cells_per_side))
 			var slot_p: int = int(cls_p.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_p < 0 or slot_p >= WEDGE_SLOT_COUNT:
-				slot_p = WEDGE_SLOT_RAMP_LEFT
+				dbg_wedge_skip_variant_place += 1
+				continue
 			var slot_meshes_p: Array[Mesh] = _wd_slot_meshes(slot_p)
 			if slot_meshes_p.is_empty():
 				dbg_wedge_skip_variant_place += 1
@@ -3736,6 +3751,14 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 		if m0 != null and m0.ramp_edge_kind >= 0:
 			return {
 				"slot": m0.ramp_edge_kind,
+				"ramp_dir": m0.ramp_dir,
+				"edge_id": m0.owner_edge_id,
+				"edge_kind": 0
+			}
+		if m0 != null:
+			# Metadata exists but is unresolved: keep strict to expose tagging gaps.
+			return {
+				"slot": -1,
 				"ramp_dir": m0.ramp_dir,
 				"edge_id": m0.owner_edge_id,
 				"edge_kind": 0
