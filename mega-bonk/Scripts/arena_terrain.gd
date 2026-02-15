@@ -542,9 +542,11 @@ func _edge_is_overhang(ramp_c: Vector2i, edge_id: int, nb_c: Vector2i, n: int) -
 	var ramp_ec: Vector2 = _edge_pair(_cell_corners(ramp_c.x, ramp_c.y), edge_id)
 	var nb_ec: Vector2 = _edge_pair(_cell_corners(nb_c.x, nb_c.y), _edge_opposite(edge_id))
 	var margin: float = maxf(0.01, wall_decor_surface_margin)
-	return (nb_ec.x > ramp_ec.x + margin) or (nb_ec.y > ramp_ec.y + margin)
+	return (nb_ec.x > ramp_ec.x + margin) and (nb_ec.y > ramp_ec.y + margin)
 
 func _tag_ramp_side_slots(n: int) -> void:
+	var side_edges_expected: int = 0
+	var side_edges_tagged: int = 0
 	for z in range(n):
 		for x in range(n):
 			var c := Vector2i(x, z)
@@ -556,6 +558,7 @@ func _tag_ramp_side_slots(n: int) -> void:
 				var side: int = _ramp_side_from_dir_edge(ramp_dir, edge_id)
 				if side < 0:
 					continue
+				side_edges_expected += 1
 				var nb: Vector2i = _get_edge_nb(c, edge_id, n)
 				var overhang: bool = _edge_is_overhang(c, edge_id, nb, n)
 				var slot: int = WEDGE_SLOT_RAMP_LEFT
@@ -564,6 +567,9 @@ func _tag_ramp_side_slots(n: int) -> void:
 				else:
 					slot = WEDGE_SLOT_OVERHANG_RIGHT if overhang else WEDGE_SLOT_RAMP_RIGHT
 				_set_edge_slot(c, edge_id, slot, n)
+				side_edges_tagged += 1
+	if wall_decor_debug_verbose:
+		_wd("[WEDGE_TAG] ramp_side_edges expected=%d tagged=%d missing=%d" % [side_edges_expected, side_edges_tagged, maxi(0, side_edges_expected - side_edges_tagged)])
 
 func _tag_edge_pair(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
 	if not _in_bounds(cell_a.x, cell_a.y, n):
@@ -3166,12 +3172,29 @@ func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int
 	var bi: int = _idx2(cell_b.x, cell_b.y, n)
 	var a_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[ai] == 1
 	var b_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[bi] == 1
+	var edge_id_b: int = _edge_opposite(edge_id_a)
+	var a_side: int = -1
+	var b_side: int = -1
+	if a_is_ramp:
+		a_side = _ramp_side_from_dir_edge(_ramp_up_dir[ai], edge_id_a)
+	if b_is_ramp and edge_id_b >= 0:
+		b_side = _ramp_side_from_dir_edge(_ramp_up_dir[bi], edge_id_b)
+
 	if a_is_ramp and not b_is_ramp:
 		meta.ramp_cell = cell_a
 	elif b_is_ramp and not a_is_ramp:
 		meta.ramp_cell = cell_b
-	elif a_is_ramp:
+	elif a_side >= 0 and b_side < 0:
 		meta.ramp_cell = cell_a
+	elif b_side >= 0 and a_side < 0:
+		meta.ramp_cell = cell_b
+	elif a_side >= 0 and b_side >= 0:
+		# Both sides treat this as a ramp side-edge. Pick lower edge owner.
+		var a_edge: Vector2 = _edge_pair(_cell_corners(cell_a.x, cell_a.y), edge_id_a)
+		var b_edge: Vector2 = _edge_pair(_cell_corners(cell_b.x, cell_b.y), edge_id_b)
+		var a_avg: float = 0.5 * (a_edge.x + a_edge.y)
+		var b_avg: float = 0.5 * (b_edge.x + b_edge.y)
+		meta.ramp_cell = cell_a if a_avg <= b_avg else cell_b
 	else:
 		meta.ramp_cell = Vector2i(-1, -1)
 
@@ -3181,7 +3204,7 @@ func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int
 		if meta.ramp_cell == cell_a:
 			meta.owner_edge_id = edge_id_a
 		else:
-			meta.owner_edge_id = _edge_opposite(edge_id_a)
+			meta.owner_edge_id = edge_id_b
 		meta.ramp_edge_kind = _get_edge_slot(meta.owner_cell, meta.owner_edge_id, n)
 	else:
 		meta.ramp_dir = RAMP_NONE
@@ -3344,6 +3367,10 @@ func _rebuild_wall_decor() -> void:
 	var dbg_wedge_skip_allow_place: int = 0
 	var dbg_wedge_skip_under_surface_place: int = 0
 	var dbg_wedge_skip_variant_place: int = 0
+	var dbg_wedge_missing_meta_count: int = 0
+	var dbg_wedge_missing_slot_count: int = 0
+	var dbg_wedge_missing_meta_place: int = 0
+	var dbg_wedge_missing_slot_place: int = 0
 	var dbg_rect_skip_surface_count: int = 0
 	var dbg_rect_skip_surface_place: int = 0
 	var trap_count: int = 0
@@ -3408,6 +3435,12 @@ func _rebuild_wall_decor() -> void:
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
 			dbg_wedge_total += 1
+			if not _wall_face_meta.has(wf.key):
+				dbg_wedge_missing_meta_count += 1
+			else:
+				var m_count: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+				if m_count == null or m_count.ramp_edge_kind < 0:
+					dbg_wedge_missing_slot_count += 1
 			var place_outward_count: Vector3 = _wall_place_outward(wf)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
@@ -3589,6 +3622,12 @@ func _rebuild_wall_decor() -> void:
 		var wedge_place_fi: int = 0
 		for wf2: WallFace in wedge_faces:
 			wedge_place_fi += 1
+			if not _wall_face_meta.has(wf2.key):
+				dbg_wedge_missing_meta_place += 1
+			else:
+				var m_place: FaceMeta = _wall_face_meta[wf2.key] as FaceMeta
+				if m_place == null or m_place.ramp_edge_kind < 0:
+					dbg_wedge_missing_slot_place += 1
 			var place_outward: Vector3 = _wall_place_outward(wf2)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
@@ -3656,7 +3695,7 @@ func _rebuild_wall_decor() -> void:
 				var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_slot[sidx6][wv3]
 				if wedge_mmi != null:
 					wedge_mmi.multimesh.visible_instance_count = int(wedge_write_i_by_slot[sidx6][wv3])
-		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d) place(occluder=%d,surface=%d,allow=%d,under=%d,variant=%d)" % [
+		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d,missing_meta=%d,missing_slot=%d) place(occluder=%d,surface=%d,allow=%d,under=%d,variant=%d,missing_meta=%d,missing_slot=%d)" % [
 			dbg_wedge_total,
 			dbg_wedge_kept,
 			dbg_wedge_skip_trap,
@@ -3664,11 +3703,15 @@ func _rebuild_wall_decor() -> void:
 			dbg_wedge_skip_occluder_count,
 			dbg_wedge_skip_surface_count,
 			dbg_wedge_skip_allow_count,
+			dbg_wedge_missing_meta_count,
+			dbg_wedge_missing_slot_count,
 			dbg_wedge_skip_occluder_place,
 			dbg_wedge_skip_surface_place,
 			dbg_wedge_skip_allow_place,
 			dbg_wedge_skip_under_surface_place,
-			dbg_wedge_skip_variant_place
+			dbg_wedge_skip_variant_place,
+			dbg_wedge_missing_meta_place,
+			dbg_wedge_missing_slot_place
 		])
 
 func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
