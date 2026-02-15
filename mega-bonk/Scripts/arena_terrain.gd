@@ -199,6 +199,11 @@ class_name ArenaBlockyTerrain
 @export var base_wall_mesh: Mesh
 @export var base_floor_material: Material
 @export var base_wall_material: Material
+@export_range(0.1, 2.0, 0.01) var base_floor_fill_ratio: float = 1.0
+@export var base_floor_offset: float = 0.0
+@export var base_floor_depth_scale: float = 1.0 # scale multiplier along mesh thickness axis
+@export var base_floor_max_scale: float = 0.0 # 0 = unlimited
+@export var base_floor_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
 @export var base_wall_offset: float = 0.0
 @export var base_wall_depth_scale: float = 1.0 # scale multiplier along local Z (mesh thickness axis)
 @export var base_wall_max_scale: float = 0.0 # 0 = unlimited
@@ -2533,11 +2538,65 @@ func _rebuild_base_floor_visuals() -> void:
 	mm.instance_count = _floor_faces.size()
 	for i in range(_floor_faces.size()):
 		var ff: FloorFace = _floor_faces[i]
-		var xf: Transform3D = _floor_transform_for_face(ff, base_floor_mesh)
+		var xf: Transform3D = _base_floor_transform_for_face(ff, base_floor_mesh)
 		mm.set_instance_transform(i, xf)
 
 	_base_floor_mmi.multimesh = mm
 	_base_floor_mmi.material_override = base_floor_material
+
+func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	if mesh == null:
+		return Transform3D.IDENTITY
+
+	var aabb: AABB = mesh.get_aabb()
+	var edge_u: Vector3 = face.b - face.a
+	var edge_v: Vector3 = face.d - face.a
+	var n_axis: Vector3 = edge_u.cross(edge_v).normalized()
+	if n_axis.length_squared() < 1e-8:
+		n_axis = Vector3.UP
+	if n_axis.y < 0.0:
+		n_axis = -n_axis
+
+	var u_axis: Vector3 = edge_u.normalized()
+	if u_axis.length_squared() < 1e-8:
+		u_axis = Vector3.RIGHT
+	var v_axis: Vector3 = n_axis.cross(u_axis).normalized()
+	u_axis = v_axis.cross(n_axis).normalized()
+
+	var axis_n: int = clampi(base_floor_mesh_normal_axis, 0, 2)
+	var plane_axes: PackedInt32Array = _dominant_plane_axes(axis_n)
+	var axis0: int = plane_axes[0]
+	var axis1: int = plane_axes[1]
+
+	var cols: Array = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	cols[axis_n] = n_axis
+	cols[axis0] = u_axis
+	cols[axis1] = v_axis
+	var rot: Basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
+
+	var ref0: float = maxf(absf(aabb.size[axis0]), 0.001)
+	var ref1: float = maxf(absf(aabb.size[axis1]), 0.001)
+	var refn: float = maxf(absf(aabb.size[axis_n]), 0.001)
+
+	var s0: float = maxf((face.width * base_floor_fill_ratio) / ref0, 0.001)
+	var s1: float = maxf((face.depth * base_floor_fill_ratio) / ref1, 0.001)
+	var sn: float = maxf(base_floor_depth_scale, 0.001)
+
+	if base_floor_max_scale > 0.0:
+		s0 = minf(s0, base_floor_max_scale)
+		s1 = minf(s1, base_floor_max_scale)
+		sn = minf(sn, base_floor_max_scale)
+
+	var scale_vec := Vector3.ONE
+	scale_vec[axis0] = s0
+	scale_vec[axis1] = s1
+	scale_vec[axis_n] = sn
+	var basis: Basis = rot.scaled(scale_vec)
+
+	var center_local: Vector3 = aabb.position + aabb.size * 0.5
+	var target_world: Vector3 = face.center + n_axis * base_floor_offset
+	var origin: Vector3 = target_world - (basis * center_local)
+	return Transform3D(basis, origin)
 
 func _rebuild_base_wall_visuals() -> void:
 	if _base_walls_mmi == null:
