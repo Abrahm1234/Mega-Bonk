@@ -200,7 +200,9 @@ class_name ArenaBlockyTerrain
 @export var base_floor_material: Material
 @export var base_wall_material: Material
 @export var base_wall_offset: float = 0.0
-@export var base_wall_depth_scale: float = 1.0
+@export var base_wall_depth_scale: float = 1.0 # scale multiplier along local Z (mesh thickness axis)
+@export var base_wall_max_scale: float = 0.0 # 0 = unlimited
+@export var base_wall_attach_far_side: bool = false
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2497,6 +2499,8 @@ func _ensure_base_visuals_root() -> void:
 		_base_visuals_root = Node3D.new()
 		_base_visuals_root.name = "BaseVisuals"
 		terrain_body.add_child(_base_visuals_root)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_visuals_root.owner = get_tree().edited_scene_root
 
 	if _base_floor_mmi == null or not is_instance_valid(_base_floor_mmi):
 		_base_floor_mmi = _base_visuals_root.get_node_or_null("BaseFloor") as MultiMeshInstance3D
@@ -2504,6 +2508,8 @@ func _ensure_base_visuals_root() -> void:
 		_base_floor_mmi = MultiMeshInstance3D.new()
 		_base_floor_mmi.name = "BaseFloor"
 		_base_visuals_root.add_child(_base_floor_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_floor_mmi.owner = get_tree().edited_scene_root
 
 	if _base_walls_mmi == null or not is_instance_valid(_base_walls_mmi):
 		_base_walls_mmi = _base_visuals_root.get_node_or_null("BaseWalls") as MultiMeshInstance3D
@@ -2511,6 +2517,8 @@ func _ensure_base_visuals_root() -> void:
 		_base_walls_mmi = MultiMeshInstance3D.new()
 		_base_walls_mmi.name = "BaseWalls"
 		_base_visuals_root.add_child(_base_walls_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_walls_mmi.owner = get_tree().edited_scene_root
 
 func _rebuild_base_floor_visuals() -> void:
 	if _base_floor_mmi == null:
@@ -2559,13 +2567,14 @@ func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: f
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = max(face.width / ref_w, 0.1)
 	var sy: float = max(face.height / ref_h, 0.1)
-	if wall_decor_max_scale > 0.0:
-		sx = min(sx, wall_decor_max_scale)
-		sy = min(sy, wall_decor_max_scale)
+	if base_wall_max_scale > 0.0:
+		sx = min(sx, base_wall_max_scale)
+		sy = min(sy, base_wall_max_scale)
 	var sz: float = maxf(0.001, depth_scale)
 
 	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
-	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, aabb.position.z)
+	var attach_z: float = aabb.position.z + aabb.size.z if base_wall_attach_far_side else aabb.position.z
+	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, attach_z)
 	var target_world: Vector3 = face.center + outward * outward_offset
 	var origin: Vector3 = target_world - (basis * anchor_local)
 	return Transform3D(basis, origin)
