@@ -276,6 +276,10 @@ const WEDGE_SLOT_RAMP_RIGHT: int = 1
 const WEDGE_SLOT_OVERHANG_LEFT: int = 2
 const WEDGE_SLOT_OVERHANG_RIGHT: int = 3
 const WEDGE_SLOT_COUNT: int = 4
+const EDGE_E: int = 0
+const EDGE_W: int = 1
+const EDGE_N: int = 2
+const EDGE_S: int = 3
 const TUNNEL_DIR_NONE := 255
 const SURF_TOP := 0.0
 const SURF_WALL := 0.55
@@ -311,6 +315,23 @@ class WallFace:
 		self.key = k
 
 var _wall_faces: Array[WallFace] = []
+class FaceMeta extends RefCounted:
+	var cell_a: Vector2i = Vector2i(-1, -1)
+	var cell_b: Vector2i = Vector2i(-1, -1)
+	var owner_cell: Vector2i = Vector2i(-1, -1)
+	var owner_edge_id: int = -1
+	var owner_kind: int = 0
+	var ramp_cell: Vector2i = Vector2i(-1, -1)
+	var ramp_dir: int = RAMP_NONE
+	var ramp_edge_kind: int = 0
+
+var _wall_face_meta: Dictionary = {}
+var _floor_face_meta: Dictionary = {}
+var _cell_kind: PackedByteArray
+var _cell_floor_y: PackedFloat32Array
+var _edge_flags: PackedInt32Array
+var _edge_nb: PackedInt32Array
+
 var _wall_decor_root: Node3D = null
 var _shaft_faces: Array[WallFace] = []
 var _shaft_decor_root: Node3D = null
@@ -368,6 +389,83 @@ func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 			return Vector2i(x, z - 1)
 		_:
 			return Vector2i(x, z)
+
+func _edge_index(cx: int, cz: int, edge_id: int, n: int) -> int:
+	return (_idx2(cx, cz, n) * 4) + edge_id
+
+func _pack_cell(c: Vector2i) -> int:
+	return (c.x << 16) | (c.y & 0xFFFF)
+
+func _unpack_cell(v: int) -> Vector2i:
+	var x: int = v >> 16
+	var z: int = v & 0xFFFF
+	if z & 0x8000:
+		z -= 0x10000
+	return Vector2i(x, z)
+
+func _edge_opposite(edge_id: int) -> int:
+	match edge_id:
+		EDGE_E:
+			return EDGE_W
+		EDGE_W:
+			return EDGE_E
+		EDGE_N:
+			return EDGE_S
+		EDGE_S:
+			return EDGE_N
+		_:
+			return -1
+
+func _cell_from_world_xz(p: Vector3, n: int) -> Vector2i:
+	var cx: int = int(floor((p.x - _ox) / _cell_size))
+	var cz: int = int(floor((p.z - _oz) / _cell_size))
+	return Vector2i(clamp(cx, 0, n - 1), clamp(cz, 0, n - 1))
+
+func _tags_init(n: int) -> void:
+	_cell_kind = PackedByteArray()
+	_cell_floor_y = PackedFloat32Array()
+	_edge_flags = PackedInt32Array()
+	_edge_nb = PackedInt32Array()
+
+	_cell_kind.resize(n * n)
+	_cell_floor_y.resize(n * n)
+	_edge_flags.resize(n * n * 4)
+	_edge_nb.resize(n * n * 4)
+
+	for i in range(n * n):
+		_cell_kind[i] = 0
+		_cell_floor_y[i] = 0.0
+	for e in range(n * n * 4):
+		_edge_flags[e] = 0
+		_edge_nb[e] = -1
+
+	_wall_face_meta.clear()
+	_floor_face_meta.clear()
+
+func _tag_cells(n: int) -> void:
+	if _cell_kind.size() != n * n or _cell_floor_y.size() != n * n:
+		return
+	for cz in range(n):
+		for cx in range(n):
+			var i: int = _idx2(cx, cz, n)
+			_cell_floor_y[i] = _heights[i]
+			_cell_kind[i] = 1 if _ramp_up_dir[i] != RAMP_NONE else 0
+
+func _tag_edge_pair(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if not _in_bounds(cell_b.x, cell_b.y, n):
+		return
+	if _edge_nb.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	_edge_nb[ia] = _pack_cell(cell_b)
+
+	var edge_id_b: int = _edge_opposite(edge_id_a)
+	if edge_id_b < 0:
+		return
+	var ib: int = _edge_index(cell_b.x, cell_b.y, edge_id_b, n)
+	_edge_nb[ib] = _pack_cell(cell_a)
 
 func _opposite_dir(dir: int) -> int:
 	match dir:
@@ -1045,6 +1143,7 @@ func generate() -> void:
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
 	_oz = -world_size_m * 0.5
+	_tags_init(n)
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -1063,6 +1162,7 @@ func generate() -> void:
 		if guard >= ramp_regen_guard:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
+	_tag_cells(n)
 
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
@@ -2187,7 +2287,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_b: float = (b_w.x + b_w.y) * 0.5
 						var normal_pos_x: bool = mean_a > mean_b
 						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x
+							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x,
+							true, Vector2i(x, z), Vector2i(x + 1, z)
 						)
 						dbg_wall_added += 1
 			if z + 1 < n:
@@ -2210,7 +2311,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_c: float = (c_n.x + c_n.y) * 0.5
 						var normal_pos_z: bool = mean_a > mean_c
 						_add_wall_z_between(
-							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z
+							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z,
+							true, Vector2i(x, z), Vector2i(x, z + 1)
 						)
 						dbg_wall_added += 1
 	# Container walls (keeps everything “inside a box”)
@@ -2928,6 +3030,43 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
+func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
+	if _wall_faces.is_empty():
+		return
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if not _in_bounds(cell_b.x, cell_b.y, n):
+		return
+
+	var wf: WallFace = _wall_faces[_wall_faces.size() - 1]
+	var meta := FaceMeta.new()
+	meta.cell_a = cell_a
+	meta.cell_b = cell_b
+	meta.owner_cell = cell_a
+	meta.owner_edge_id = edge_id_a
+	meta.owner_kind = 0
+
+	var ai: int = _idx2(cell_a.x, cell_a.y, n)
+	var bi: int = _idx2(cell_b.x, cell_b.y, n)
+	var a_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[ai] == 1
+	var b_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[bi] == 1
+	if a_is_ramp and not b_is_ramp:
+		meta.ramp_cell = cell_a
+	elif b_is_ramp and not a_is_ramp:
+		meta.ramp_cell = cell_b
+	elif a_is_ramp:
+		meta.ramp_cell = cell_a
+	else:
+		meta.ramp_cell = Vector2i(-1, -1)
+
+	if meta.ramp_cell.x >= 0:
+		meta.ramp_dir = _ramp_up_dir[_idx2(meta.ramp_cell.x, meta.ramp_cell.y, n)]
+	else:
+		meta.ramp_dir = RAMP_NONE
+
+	_wall_face_meta[wf.key] = meta
+	_tag_edge_pair(cell_a, cell_b, edge_id_a, n)
+
 func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	if not face.is_trapezoid:
 		return [face, null]
@@ -3442,42 +3581,52 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 	var c_a: Vector2i = _world_to_cell_xz(wf.center - outward * step, n)
 	var c_b: Vector2i = _world_to_cell_xz(wf.center + outward * step, n)
 
-	var a_is_ramp: bool = _cell_is_ramp(c_a.x, c_a.y, n)
-	var b_is_ramp: bool = _cell_is_ramp(c_b.x, c_b.y, n)
-
 	# Pick which side is the ramp cell.
 	var ramp_cell: Vector2i = c_a
 	var nb_cell: Vector2i = c_b
 	var have_ramp_cell: bool = false
-	if b_is_ramp and not a_is_ramp:
-		ramp_cell = c_b
-		nb_cell = c_a
-		have_ramp_cell = true
-	elif a_is_ramp and not b_is_ramp:
-		have_ramp_cell = true
-	elif a_is_ramp and b_is_ramp:
-		have_ramp_cell = true
-	else:
-		# Both side probes missed. Scan center cell + 4-neighbors for an adjacent ramp cell.
-		var cc: Vector2i = _world_to_cell_xz(wf.center, n)
-		var search_cells: Array[Vector2i] = [
-			cc,
-			Vector2i(cc.x + 1, cc.y),
-			Vector2i(cc.x - 1, cc.y),
-			Vector2i(cc.x, cc.y - 1),
-			Vector2i(cc.x, cc.y + 1)
-		]
-		var best_dist2: float = INF
-		for sc in search_cells:
-			if not _cell_is_ramp(sc.x, sc.y, n):
-				continue
-			var sx: float = _ox + (float(sc.x) + 0.5) * _cell_size
-			var sz: float = _oz + (float(sc.y) + 0.5) * _cell_size
-			var d2: float = Vector2(wf.center.x - sx, wf.center.z - sz).length_squared()
-			if d2 < best_dist2:
-				best_dist2 = d2
-				ramp_cell = sc
-				have_ramp_cell = true
+	if _wall_face_meta.has(wf.key):
+		var m: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if m != null and m.ramp_cell.x >= 0 and _in_bounds(m.ramp_cell.x, m.ramp_cell.y, n):
+			ramp_cell = m.ramp_cell
+			if m.cell_a == ramp_cell and _in_bounds(m.cell_b.x, m.cell_b.y, n):
+				nb_cell = m.cell_b
+			elif _in_bounds(m.cell_a.x, m.cell_a.y, n):
+				nb_cell = m.cell_a
+			have_ramp_cell = true
+
+	if not have_ramp_cell:
+		var a_is_ramp: bool = _cell_is_ramp(c_a.x, c_a.y, n)
+		var b_is_ramp: bool = _cell_is_ramp(c_b.x, c_b.y, n)
+		if b_is_ramp and not a_is_ramp:
+			ramp_cell = c_b
+			nb_cell = c_a
+			have_ramp_cell = true
+		elif a_is_ramp and not b_is_ramp:
+			have_ramp_cell = true
+		elif a_is_ramp and b_is_ramp:
+			have_ramp_cell = true
+		else:
+			# Both side probes missed. Scan center cell + 4-neighbors for an adjacent ramp cell.
+			var cc: Vector2i = _world_to_cell_xz(wf.center, n)
+			var search_cells: Array[Vector2i] = [
+				cc,
+				Vector2i(cc.x + 1, cc.y),
+				Vector2i(cc.x - 1, cc.y),
+				Vector2i(cc.x, cc.y - 1),
+				Vector2i(cc.x, cc.y + 1)
+			]
+			var best_dist2: float = INF
+			for sc in search_cells:
+				if not _cell_is_ramp(sc.x, sc.y, n):
+					continue
+				var sx: float = _ox + (float(sc.x) + 0.5) * _cell_size
+				var sz: float = _oz + (float(sc.y) + 0.5) * _cell_size
+				var d2: float = Vector2(wf.center.x - sx, wf.center.z - sz).length_squared()
+				if d2 < best_dist2:
+					best_dist2 = d2
+					ramp_cell = sc
+					have_ramp_cell = true
 
 	var ramp_dir: int = RAMP_NONE
 	if have_ramp_cell:
@@ -4625,7 +4774,7 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_x: bool, capture_decor: bool = true) -> void:
+	normal_pos_x: bool, capture_decor: bool = true, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -4655,6 +4804,9 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 		d = tmp
 	if capture_decor:
 		_capture_wall_face(a, b, c, d)
+		var n_cells: int = max(2, cells_per_side)
+		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
+			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_E, n_cells)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -4683,7 +4835,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 
 func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_z: bool, capture_decor: bool = true) -> void:
+	normal_pos_z: bool, capture_decor: bool = true, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -4713,6 +4865,9 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 		d = tmp
 	if capture_decor:
 		_capture_wall_face(a, b, c, d)
+		var n_cells: int = max(2, cells_per_side)
+		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
+			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_S, n_cells)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
