@@ -14,42 +14,68 @@ extends Camera3D
 @export var toggle_mouse_key: Key = KEY_ESCAPE
 @export var make_current_on_ready: bool = true
 
+# Muzzle flash (assign in Inspector by dragging your muzzle flash instance here)
+@export var muzzle_flash_path: NodePath
+@export var muzzle_flash_button: MouseButton = MOUSE_BUTTON_RIGHT
+
 var _yaw: float = 0.0
 var _pitch: float = 0.0
 var _vel: Vector3 = Vector3.ZERO
+var _muzzle_flash: Node = null
+
 
 func _ready() -> void:
 	_yaw = rotation.y
 	_pitch = rotation.x
+
 	if make_current_on_ready:
 		make_current()
+
 	if capture_mouse_on_ready:
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == toggle_mouse_key:
-		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
-			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-		else:
-			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	_muzzle_flash = get_node_or_null(muzzle_flash_path)
 
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Toggle mouse capture
+	if event is InputEventKey:
+		var ek := event as InputEventKey
+		if ek.pressed and ek.keycode == toggle_mouse_key:
+			if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+				Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+			else:
+				Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+	# If mouse isn't captured, don't look or fire
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		return
 
+	# Mouse look
 	if event is InputEventMouseMotion:
-		_yaw -= event.relative.x * mouse_sensitivity
-		_pitch -= event.relative.y * mouse_sensitivity
+		var mm := event as InputEventMouseMotion
+		_yaw -= mm.relative.x * mouse_sensitivity
+		_pitch -= mm.relative.y * mouse_sensitivity
 		_pitch = clamp(_pitch, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
 		rotation = Vector3(_pitch, _yaw, 0.0)
+		return
+
+	# Right mouse = play muzzle flash
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == muzzle_flash_button:
+			_trigger_muzzle_flash()
+			return
+
 
 func _physics_process(delta: float) -> void:
 	var wish := Vector3.ZERO
 
-	# Prefer custom actions; fallback to ui_* if you haven't added them yet.
-	var forward := _axis("move_forward", "a")
-	var back := _axis("move_backward", "s")
-	var left := _axis("move_left", "a")
-	var right := _axis("move_right", "d")
+	# Prefer custom actions; fallback to default ui_* actions.
+	var forward := _axis(&"move_forward", &"ui_up")
+	var back := _axis(&"move_backward", &"ui_down")
+	var left := _axis(&"move_left", &"ui_left")
+	var right := _axis(&"move_right", &"ui_right")
 
 	var x := right - left
 	var z := back - forward
@@ -58,8 +84,8 @@ func _physics_process(delta: float) -> void:
 	wish += -global_transform.basis.z * (-z)
 
 	if enable_fly_vertical:
-		var up := _axis("move_up", "")
-		var down := _axis("move_down", "")
+		var up := _axis(&"move_up", &"")
+		var down := _axis(&"move_down", &"")
 		wish += global_transform.basis.y * (up - down)
 
 	if wish.length() > 0.0001:
@@ -79,10 +105,35 @@ func _physics_process(delta: float) -> void:
 
 	global_position += _vel * delta
 
+
 func _axis(primary: StringName, fallback: StringName) -> float:
 	var v := 0.0
-	if primary != "" and InputMap.has_action(primary):
+	if primary != &"" and InputMap.has_action(primary):
 		v = Input.get_action_strength(primary)
-	elif fallback != "" and InputMap.has_action(fallback):
+	elif fallback != &"" and InputMap.has_action(fallback):
 		v = Input.get_action_strength(fallback)
 	return v
+
+
+func _trigger_muzzle_flash() -> void:
+	if _muzzle_flash == null:
+		return
+
+	# Preferred: your muzzle flash scene has a script with a `play()` method.
+	if _muzzle_flash.has_method("play"):
+		_muzzle_flash.call("play")
+		return
+
+	# Fallback: restart any GPUParticles3D found under the muzzle flash node.
+	_restart_particles_recursive(_muzzle_flash)
+
+
+func _restart_particles_recursive(n: Node) -> void:
+	if n is GPUParticles3D:
+		var p := n as GPUParticles3D
+		p.emitting = false
+		p.restart()
+		p.emitting = true
+
+	for child: Node in n.get_children():
+		_restart_particles_recursive(child)

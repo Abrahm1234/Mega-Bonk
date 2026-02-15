@@ -1,121 +1,142 @@
 extends Node3D
-class_name DebugRays3D
 
-@export var enabled: bool = false
-@export var max_rays: int = 5000
-@export var depth_test: bool = false
+# Drop-in debug ray visualizer (Godot 4.x)
+# - Draws ray segments as line primitives (ImmediateMesh)
+# - Optionally draws hit markers via MultiMesh (requires TRANSFORM_3D + use_colors)
+
+@export var enabled: bool = true
+@export_range(1, 20000, 1) var max_rays: int = 5000
+@export var rebuild_on_add: bool = true
+
 @export var show_hit_markers: bool = true
-@export var hit_size: float = 0.05
+@export_range(0.005, 0.25, 0.005) var hit_radius: float = 0.04
+@export var no_depth_test: bool = true
 
-var _rays: Array = [] # each: [from:Vector3, to:Vector3, color:Color, hit_pos:Variant]
+var _segments: Array[Dictionary] = []
 
-var _mesh := ImmediateMesh.new()
-var _mi := MeshInstance3D.new()
-var _mat := StandardMaterial3D.new()
+var _line_mi: MeshInstance3D
+var _line_mesh: ImmediateMesh
+var _line_mat: StandardMaterial3D
 
-var _hit_mmi := MultiMeshInstance3D.new()
-var _hit_mm := MultiMesh.new()
-var _hit_mesh := SphereMesh.new()
-var _hit_mat := StandardMaterial3D.new()
+var _hit_mmi: MultiMeshInstance3D
+var _hit_mm: MultiMesh
+var _hit_mat: StandardMaterial3D
 
 func _ready() -> void:
-	top_level = true
-
-	_mi.mesh = _mesh
-	add_child(_mi)
-
-	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_mat.vertex_color_use_as_albedo = true
-	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_mi.material_override = _mat
-
-	_hit_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_hit_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-
-	_hit_mm.mesh = _hit_mesh
-	_hit_mmi.multimesh = _hit_mm
-	_hit_mmi.material_override = _hit_mat
-	add_child(_hit_mmi)
-
-	_apply_material_settings()
-	_apply_visibility()
+	_setup()
+	_rebuild()
 
 func set_enabled(v: bool) -> void:
 	enabled = v
-	_apply_visibility()
-	if not enabled:
-		clear()
+	visible = v
 
 func clear() -> void:
-	_rays.clear()
-	_mesh.clear_surfaces()
-	_hit_mm.instance_count = 0
+	_segments.clear()
+	_rebuild()
 
-func add_ray(a: Vector3, b: Vector3, c: Color, hit_pos: Variant) -> void:
+func rebuild() -> void:
+	_rebuild()
+
+func add_ray(from: Vector3, to: Vector3, color: Color = Color(0, 1, 0, 0.85), hit_pos: Variant = null) -> void:
 	if not enabled:
 		return
 
-	if _rays.size() >= max_rays:
-		_rays.pop_front()
+	_segments.append({
+		"a": from,
+		"b": to,
+		"c": color,
+		"hit": hit_pos,
+	})
 
-	_rays.append([a, b, c, hit_pos])
-	_rebuild()
+	if _segments.size() > max_rays:
+		_segments.pop_front()
+
+	if rebuild_on_add:
+		_rebuild()
+
+func _setup() -> void:
+	# Lines
+	_line_mi = get_node_or_null(^"Lines") as MeshInstance3D
+	if _line_mi == null:
+		_line_mi = MeshInstance3D.new()
+		_line_mi.name = "Lines"
+		add_child(_line_mi)
+
+	_line_mesh = ImmediateMesh.new()
+	_line_mi.mesh = _line_mesh
+
+	_line_mat = StandardMaterial3D.new()
+	_line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_line_mat.vertex_color_use_as_albedo = true
+	_line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_line_mat.no_depth_test = no_depth_test
+	_line_mi.material_override = _line_mat
+
+	# Hit markers
+	if show_hit_markers:
+		_hit_mmi = get_node_or_null(^"Hits") as MultiMeshInstance3D
+		if _hit_mmi == null:
+			_hit_mmi = MultiMeshInstance3D.new()
+			_hit_mmi.name = "Hits"
+			add_child(_hit_mmi)
+
+		_hit_mm = MultiMesh.new()
+		_hit_mm.transform_format = MultiMesh.TRANSFORM_3D
+		_hit_mm.use_colors = true
+
+		var sm := SphereMesh.new()
+		sm.radius = hit_radius
+		sm.height = hit_radius * 2.0
+		_hit_mm.mesh = sm
+		_hit_mmi.multimesh = _hit_mm
+
+		_hit_mat = StandardMaterial3D.new()
+		_hit_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_hit_mat.vertex_color_use_as_albedo = true
+		_hit_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_hit_mat.no_depth_test = no_depth_test
+		_hit_mmi.material_override = _hit_mat
+	else:
+		_hit_mmi = get_node_or_null(^"Hits") as MultiMeshInstance3D
+		if _hit_mmi != null:
+			_hit_mmi.queue_free()
+		_hit_mmi = null
+		_hit_mm = null
+		_hit_mat = null
 
 func _rebuild() -> void:
-	_apply_material_settings()
-	_apply_visibility()
+	if _line_mesh == null:
+		_setup()
 
-	_mesh.clear_surfaces()
-
-	if _rays.is_empty():
-		_hit_mm.instance_count = 0
+	# Rebuild line mesh
+	_line_mesh.clear_surfaces()
+	if _segments.is_empty():
+		# Avoid ImmediateMesh.surface_end() error when there are no vertices.
+		if _hit_mm != null:
+			_hit_mm.instance_count = 0
 		return
 
-	_mesh.surface_begin(Mesh.PRIMITIVE_LINES, _mat)
-	for r in _rays:
-		var a: Vector3 = r[0]
-		var b: Vector3 = r[1]
-		var col: Color = r[2]
+	_line_mesh.surface_begin(Mesh.PRIMITIVE_LINES, _line_mat)
+	for s in _segments:
+		var col: Color = s.get("c", Color(0, 1, 0, 0.85))
+		_line_mesh.surface_set_color(col)
+		_line_mesh.surface_add_vertex(to_local(s.get("a", Vector3.ZERO)))
+		_line_mesh.surface_add_vertex(to_local(s.get("b", Vector3.ZERO)))
+	_line_mesh.surface_end()
 
-		var la := to_local(a)
-		var lb := to_local(b)
+	# Rebuild hit markers
+	if _hit_mm == null:
+		return
 
-		_mesh.surface_set_color(col)
-		_mesh.surface_add_vertex(la)
-		_mesh.surface_add_vertex(lb)
-	_mesh.surface_end()
-
-	if show_hit_markers:
-		_build_hits()
-	else:
-		_hit_mm.instance_count = 0
-
-func _build_hits() -> void:
-	var hits: Array[Vector3] = []
-	for r in _rays:
-		var hp: Variant = r[3]
-		if hp != null:
-			hits.append(hp as Vector3)
+	var hits: Array[Dictionary] = []
+	for s2 in _segments:
+		var hp: Variant = s2.get("hit", null)
+		if hp is Vector3:
+			hits.append(s2)
 
 	_hit_mm.instance_count = hits.size()
-	for i in hits.size():
-		var p := hits[i]
-		var t := Transform3D(Basis(), to_local(p))
-		_hit_mm.set_instance_transform(i, t)
-		_hit_mm.set_instance_color(i, Color(1, 0.2, 0.2, 1))
-
-func _apply_material_settings() -> void:
-	_mat.no_depth_test = not depth_test
-	_hit_mat.no_depth_test = not depth_test
-	_hit_mesh.radius = hit_size
-	_hit_mesh.height = hit_size * 2.0
-
-func _apply_visibility() -> void:
-	visible = enabled
-	_mi.visible = enabled
-	_hit_mmi.visible = enabled and show_hit_markers
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_TRANSFORM_CHANGED:
-		if enabled:
-			_rebuild()
+	for i in range(hits.size()):
+		var h: Dictionary = hits[i]
+		var hp3: Vector3 = h["hit"]
+		_hit_mm.set_instance_transform(i, Transform3D(Basis(), to_local(hp3)))
+		_hit_mm.set_instance_color(i, h.get("c", Color(1, 0, 0, 0.85)))
