@@ -208,6 +208,7 @@ class_name ArenaBlockyTerrain
 @export var base_wall_depth_scale: float = 1.0 # scale multiplier along local Z (mesh thickness axis)
 @export var base_wall_max_scale: float = 0.0 # 0 = unlimited
 @export var base_wall_attach_far_side: bool = false
+@export var base_wall_flip_outward: bool = false
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2562,15 +2563,13 @@ func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if n_axis.y < 0.0:
 		n_axis = -n_axis
 
-	var u_axis: Vector3 = edge_u.normalized()
+	# Compute stable tangents by projecting world axes into the face plane.
+	var u_axis: Vector3 = Vector3.RIGHT - n_axis * n_axis.dot(Vector3.RIGHT)
 	if u_axis.length_squared() < 1e-8:
-		u_axis = Vector3.RIGHT
+		u_axis = Vector3.FORWARD - n_axis * n_axis.dot(Vector3.FORWARD)
+	u_axis = u_axis.normalized()
 	var v_axis: Vector3 = n_axis.cross(u_axis).normalized()
 	u_axis = v_axis.cross(n_axis).normalized()
-	# Canonicalize tangent direction to avoid checkerboard-style flips between faces.
-	if u_axis.dot(Vector3.RIGHT) < 0.0:
-		u_axis = -u_axis
-		v_axis = -v_axis
 
 	var axis_n: int = clampi(base_floor_mesh_normal_axis, 0, 2)
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(axis_n)
@@ -2626,8 +2625,18 @@ func _rebuild_base_wall_visuals() -> void:
 	_base_walls_mmi.multimesh = mm
 	_base_walls_mmi.material_override = base_wall_material
 
+func _base_wall_place_outward(face: WallFace) -> Vector3:
+	var outward: Vector3 = face.normal
+	outward.y = 0.0
+	if outward.length_squared() < 1e-8:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	if base_wall_flip_outward:
+		outward = -outward
+	return outward
+
 func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float, depth_scale: float) -> Transform3D:
-	var outward: Vector3 = _wall_place_outward(face)
+	var outward: Vector3 = _base_wall_place_outward(face)
 	var rot: Basis = _basis_from_outward(outward)
 
 	var ref_w: float = max(aabb.size.x, 0.001)
@@ -2638,6 +2647,8 @@ func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: f
 		sx = min(sx, base_wall_max_scale)
 		sy = min(sy, base_wall_max_scale)
 	var sz: float = maxf(0.001, depth_scale)
+	if base_wall_max_scale > 0.0:
+		sz = minf(sz, base_wall_max_scale)
 
 	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 	var attach_z: float = aabb.position.z + aabb.size.z if base_wall_attach_far_side else aabb.position.z
