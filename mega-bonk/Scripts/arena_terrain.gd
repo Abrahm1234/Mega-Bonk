@@ -194,10 +194,20 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
+@export var show_baked_debug_mesh: bool = false
+@export var base_floor_mesh: Mesh
+@export var base_wall_mesh: Mesh
+@export var base_floor_material: Material
+@export var base_wall_material: Material
+@export var base_wall_offset: float = 0.0
+@export var base_wall_depth_scale: float = 1.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
 @onready var _dbg_rays_node: Node3D = get_node_or_null("DebugRays") as Node3D
+@onready var _base_visuals_root: Node3D = get_node_or_null("TerrainBody/BaseVisuals") as Node3D
+@onready var _base_floor_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseFloor") as MultiMeshInstance3D
+@onready var _base_walls_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWalls") as MultiMeshInstance3D
 
 var _cell_size: float
 var _ox: float
@@ -1232,6 +1242,7 @@ func _ready() -> void:
 
 	_ensure_debug_rays_node()
 	_sync_debug_rays_settings()
+	_ensure_base_visuals_root()
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -2455,9 +2466,17 @@ func _build_mesh_and_collision(n: int) -> void:
 
 	st.generate_normals()
 	st.generate_tangents()
-	var mesh: ArrayMesh = st.commit()
-	mesh_instance.mesh = mesh
-	collision_shape.shape = mesh.create_trimesh_shape()
+	var baked_mesh: ArrayMesh = st.commit()
+	collision_shape.shape = baked_mesh.create_trimesh_shape()
+	if show_baked_debug_mesh:
+		mesh_instance.mesh = baked_mesh
+		mesh_instance.visible = true
+	else:
+		mesh_instance.mesh = null
+		mesh_instance.visible = false
+	_ensure_base_visuals_root()
+	_rebuild_base_floor_visuals()
+	_rebuild_base_wall_visuals()
 	if wall_decor_open_side_use_raycast:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
@@ -2467,6 +2486,89 @@ func _build_mesh_and_collision(n: int) -> void:
 func _rebuild_wall_decor_after_physics() -> void:
 	await get_tree().physics_frame
 	_rebuild_wall_decor()
+
+func _ensure_base_visuals_root() -> void:
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body == null:
+		return
+	if _base_visuals_root == null or not is_instance_valid(_base_visuals_root):
+		_base_visuals_root = terrain_body.get_node_or_null("BaseVisuals") as Node3D
+	if _base_visuals_root == null:
+		_base_visuals_root = Node3D.new()
+		_base_visuals_root.name = "BaseVisuals"
+		terrain_body.add_child(_base_visuals_root)
+
+	if _base_floor_mmi == null or not is_instance_valid(_base_floor_mmi):
+		_base_floor_mmi = _base_visuals_root.get_node_or_null("BaseFloor") as MultiMeshInstance3D
+	if _base_floor_mmi == null:
+		_base_floor_mmi = MultiMeshInstance3D.new()
+		_base_floor_mmi.name = "BaseFloor"
+		_base_visuals_root.add_child(_base_floor_mmi)
+
+	if _base_walls_mmi == null or not is_instance_valid(_base_walls_mmi):
+		_base_walls_mmi = _base_visuals_root.get_node_or_null("BaseWalls") as MultiMeshInstance3D
+	if _base_walls_mmi == null:
+		_base_walls_mmi = MultiMeshInstance3D.new()
+		_base_walls_mmi.name = "BaseWalls"
+		_base_visuals_root.add_child(_base_walls_mmi)
+
+func _rebuild_base_floor_visuals() -> void:
+	if _base_floor_mmi == null:
+		return
+	if base_floor_mesh == null:
+		_base_floor_mmi.multimesh = null
+		return
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_floor_mesh
+	mm.instance_count = _floor_faces.size()
+	for i in range(_floor_faces.size()):
+		var ff: FloorFace = _floor_faces[i]
+		var xf: Transform3D = _floor_transform_for_face(ff, base_floor_mesh)
+		mm.set_instance_transform(i, xf)
+
+	_base_floor_mmi.multimesh = mm
+	_base_floor_mmi.material_override = base_floor_material
+
+func _rebuild_base_wall_visuals() -> void:
+	if _base_walls_mmi == null:
+		return
+	if base_wall_mesh == null:
+		_base_walls_mmi.multimesh = null
+		return
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_wall_mesh
+	mm.instance_count = _wall_faces.size()
+	var wall_aabb: AABB = base_wall_mesh.get_aabb()
+	for i in range(_wall_faces.size()):
+		var wf: WallFace = _wall_faces[i]
+		var xf: Transform3D = _base_wall_transform_for_face(wf, wall_aabb, base_wall_offset, base_wall_depth_scale)
+		mm.set_instance_transform(i, xf)
+
+	_base_walls_mmi.multimesh = mm
+	_base_walls_mmi.material_override = base_wall_material
+
+func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float, depth_scale: float) -> Transform3D:
+	var outward: Vector3 = _wall_place_outward(face)
+	var rot: Basis = _basis_from_outward(outward)
+
+	var ref_w: float = max(aabb.size.x, 0.001)
+	var ref_h: float = max(aabb.size.y, 0.001)
+	var sx: float = max(face.width / ref_w, 0.1)
+	var sy: float = max(face.height / ref_h, 0.1)
+	if wall_decor_max_scale > 0.0:
+		sx = min(sx, wall_decor_max_scale)
+		sy = min(sy, wall_decor_max_scale)
+	var sz: float = maxf(0.001, depth_scale)
+
+	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, aabb.position.z)
+	var target_world: Vector3 = face.center + outward * outward_offset
+	var origin: Vector3 = target_world - (basis * anchor_local)
+	return Transform3D(basis, origin)
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
