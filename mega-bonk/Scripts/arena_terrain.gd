@@ -168,6 +168,7 @@ class_name ArenaBlockyTerrain
 @export var wall_wedge_decor_meshes_overhang_right: Array[Mesh] = []
 @export var wall_wedge_decor_seed: int = 1337
 @export var wall_wedge_decor_offset: float = 0.02
+@export var wall_wedge_decor_attach_far_side: bool = false
 @export var wall_wedge_decor_fit_to_face: bool = true
 @export var wall_wedge_decor_max_scale: float = 0.0 # 0 = unlimited (recommended if meshes are authored at unit size)
 @export var wall_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
@@ -3522,7 +3523,7 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 
 	# Overhang routing should be determined by whether the *open-air side* is under a ceiling.
 	var seam_overhang: bool = false
-	if wf.is_trapezoid and edge_id >= 0 and edge_kind != 0:
+	if wf.is_trapezoid and edge_id >= 0:
 		var p_side := wf.center + outward * (wall_decor_open_side_epsilon + 0.001)
 		var top_y: float = _wall_face_max_world_y(wf)
 		var h_ceiling: float = _wd_surface_only_ceiling_y_at(p_side)
@@ -3758,7 +3759,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
 	var z_min: float = aabb.position.z
 	var z_max: float = aabb.position.z + aabb.size.z
-	var attach_far: bool = true
+	var attach_far: bool = wall_wedge_decor_attach_far_side
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
