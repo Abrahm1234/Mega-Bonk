@@ -162,9 +162,6 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
 @export var enable_wall_wedge_decor: bool = true
-@export var wall_wedge_decor_meshes: Array[Mesh] = []
-@export var wall_wedge_decor_meshes_left: Array[Mesh] = []
-@export var wall_wedge_decor_meshes_right: Array[Mesh] = []
 @export var wall_wedge_decor_meshes_ramp_left: Array[Mesh] = []
 @export var wall_wedge_decor_meshes_ramp_right: Array[Mesh] = []
 @export var wall_wedge_decor_meshes_overhang_left: Array[Mesh] = []
@@ -196,16 +193,6 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
-
-func _validate_property(property: Dictionary) -> void:
-	if property.name == "wall_wedge_decor_meshes":
-		if wall_wedge_decor_meshes_left.size() > 0 \
-		or wall_wedge_decor_meshes_right.size() > 0 \
-		or wall_wedge_decor_meshes_ramp_left.size() > 0 \
-		or wall_wedge_decor_meshes_ramp_right.size() > 0 \
-		or wall_wedge_decor_meshes_overhang_left.size() > 0 \
-		or wall_wedge_decor_meshes_overhang_right.size() > 0:
-			property.usage = PROPERTY_USAGE_NO_EDITOR
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2983,7 +2970,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	var rheight: float = maxf((rd - ra).length(), (rc - rb).length())
 	var rkey := face.key ^ 0x51ED_0A11
 
-	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, false, rkey)
+	var rect_face := WallFace.new(ra, rb, rc, rd, rcenter, rn, rwidth, rheight, face.is_trapezoid, rkey)
 	rect_face.normal = face.normal
 
 	var wa := p0
@@ -3005,7 +2992,7 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	var wheight: float = maxf((wd - wa).length(), (wc - wb).length())
 	var wkey := face.key ^ 0xA7D3_19C3
 
-	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, true, wkey)
+	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, face.is_trapezoid, wkey)
 	wedge_face.normal = face.normal
 
 	return [rect_face, wedge_face]
@@ -3028,24 +3015,6 @@ func _rebuild_wall_decor() -> void:
 	var wedge_meshes_overhang_left: Array[Mesh] = wall_wedge_decor_meshes_overhang_left
 	var wedge_meshes_overhang_right: Array[Mesh] = wall_wedge_decor_meshes_overhang_right
 
-	# Legacy fallbacks for old scenes that only populated LEFT/RIGHT/shared wedge arrays.
-	if wedge_meshes_ramp_left.is_empty() and not wall_wedge_decor_meshes_left.is_empty():
-		wedge_meshes_ramp_left = wall_wedge_decor_meshes_left
-	if wedge_meshes_ramp_right.is_empty() and not wall_wedge_decor_meshes_right.is_empty():
-		wedge_meshes_ramp_right = wall_wedge_decor_meshes_right
-	if wedge_meshes_overhang_left.is_empty() and not wall_wedge_decor_meshes_left.is_empty():
-		wedge_meshes_overhang_left = wall_wedge_decor_meshes_left
-	if wedge_meshes_overhang_right.is_empty() and not wall_wedge_decor_meshes_right.is_empty():
-		wedge_meshes_overhang_right = wall_wedge_decor_meshes_right
-
-	if wedge_meshes_ramp_left.is_empty() and not wall_wedge_decor_meshes.is_empty():
-		wedge_meshes_ramp_left = wall_wedge_decor_meshes
-	if wedge_meshes_ramp_right.is_empty() and not wall_wedge_decor_meshes.is_empty():
-		wedge_meshes_ramp_right = wall_wedge_decor_meshes
-	if wedge_meshes_overhang_left.is_empty() and not wall_wedge_decor_meshes.is_empty():
-		wedge_meshes_overhang_left = wall_wedge_decor_meshes
-	if wedge_meshes_overhang_right.is_empty() and not wall_wedge_decor_meshes.is_empty():
-		wedge_meshes_overhang_right = wall_wedge_decor_meshes
 
 	var wedge_variant_count: int = mini(mini(wedge_meshes_ramp_left.size(), wedge_meshes_ramp_right.size()), mini(wedge_meshes_overhang_left.size(), wedge_meshes_overhang_right.size()))
 	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
