@@ -77,7 +77,7 @@ func _setup() -> void:
 	_line_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	_line_mi.material_override = _line_mat
 	_line_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_line_mi.render_priority = 0
+	_line_mat.render_priority = 0
 
 	# Hit markers
 	if show_hit_markers:
@@ -105,7 +105,7 @@ func _setup() -> void:
 		_hit_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 		_hit_mmi.material_override = _hit_mat
 		_hit_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_hit_mmi.render_priority = 0
+		_hit_mat.render_priority = 0
 	else:
 		_hit_mmi = get_node_or_null(^"Hits") as MultiMeshInstance3D
 		if _hit_mmi != null:
