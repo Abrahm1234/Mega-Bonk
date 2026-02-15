@@ -2576,7 +2576,6 @@ func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 
 	var ref0: float = maxf(absf(aabb.size[axis0]), 0.001)
 	var ref1: float = maxf(absf(aabb.size[axis1]), 0.001)
-	var refn: float = maxf(absf(aabb.size[axis_n]), 0.001)
 
 	var s0: float = maxf((face.width * base_floor_fill_ratio) / ref0, 0.001)
 	var s1: float = maxf((face.depth * base_floor_fill_ratio) / ref1, 0.001)
