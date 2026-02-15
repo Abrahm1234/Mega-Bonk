@@ -2394,9 +2394,10 @@ func _sample_top_surface_y_wide(
 
 	return agg
 
-func _wd_surface_only_ceiling_y_at(p: Vector3) -> float:
+func _wd_surface_only_ceiling_y_at(p: Vector3, hint_dir: Vector3 = Vector3.ZERO) -> float:
 	# Use max aggregation so any nearby top surface counts as overhead terrain.
-	return _sample_top_surface_y_wide(p.x, p.z, Vector3.ZERO, false)
+	# hint_dir helps ramp seam sampling choose the correct side near triangles/half-cells.
+	return _sample_top_surface_y_wide(p.x, p.z, hint_dir, false)
 
 
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
@@ -3571,11 +3572,26 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 	# Overhang routing should be determined by whether the *open-air side* is under a ceiling.
 	var seam_overhang: bool = false
 	if wf.is_trapezoid:
-		var p_side_near := wf.center + outward * (eps + 0.001)
-		var p_side_far := wf.center + outward * step
+		# Sample near the wedge tip (highest point), not centroid, to avoid seam misses.
+		var tip: Vector3 = wf.a
+		var tip_y: float = wf.a.y
+		if wf.b.y > tip_y:
+			tip = wf.b
+			tip_y = wf.b.y
+		if wf.c.y > tip_y:
+			tip = wf.c
+			tip_y = wf.c.y
+		if wf.d.y > tip_y:
+			tip = wf.d
+			tip_y = wf.d.y
+
+		var near_d: float = minf(0.08 * _cell_size, maxf(0.02 * _cell_size, step * 0.25))
+		var p_side_near := tip + outward * near_d
+		var p_side_far := tip + outward * step
 		var top_y: float = _wall_face_max_world_y(wf)
-		var h_ceiling_near: float = _wd_surface_only_ceiling_y_at(p_side_near)
-		var h_ceiling_far: float = _wd_surface_only_ceiling_y_at(p_side_far)
+		var hint: Vector3 = -outward
+		var h_ceiling_near: float = _wd_surface_only_ceiling_y_at(p_side_near, hint)
+		var h_ceiling_far: float = _wd_surface_only_ceiling_y_at(p_side_far, hint)
 		var cover_near: bool = h_ceiling_near > top_y + wall_decor_surface_margin
 		var cover_far: bool = h_ceiling_far > top_y + wall_decor_surface_margin
 		seam_overhang = cover_near or cover_far
