@@ -3009,16 +3009,27 @@ func _decor_global_aabb(pad: float = 2.0) -> AABB:
 		Vector3(side + pad * 2.0, (y1 - y0) + pad * 2.0, side + pad * 2.0)
 	)
 
+func _wd_slot_meshes(slot: int) -> Array[Mesh]:
+	match slot:
+		WEDGE_SLOT_RAMP_LEFT:
+			return wall_wedge_decor_meshes_ramp_left
+		WEDGE_SLOT_RAMP_RIGHT:
+			return wall_wedge_decor_meshes_ramp_right
+		WEDGE_SLOT_OVERHANG_LEFT:
+			return wall_wedge_decor_meshes_overhang_left
+		WEDGE_SLOT_OVERHANG_RIGHT:
+			return wall_wedge_decor_meshes_overhang_right
+		_:
+			return []
+
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
-	var wedge_meshes_ramp_left: Array[Mesh] = wall_wedge_decor_meshes_ramp_left
-	var wedge_meshes_ramp_right: Array[Mesh] = wall_wedge_decor_meshes_ramp_right
-	var wedge_meshes_overhang_left: Array[Mesh] = wall_wedge_decor_meshes_overhang_left
-	var wedge_meshes_overhang_right: Array[Mesh] = wall_wedge_decor_meshes_overhang_right
-
-
-	var wedge_variant_count: int = maxi(maxi(wedge_meshes_ramp_left.size(), wedge_meshes_ramp_right.size()), maxi(wedge_meshes_overhang_left.size(), wedge_meshes_overhang_right.size()))
-	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
+	var has_wedge_decor: bool = false
+	if enable_wall_wedge_decor:
+		for wslot: int in range(WEDGE_SLOT_COUNT):
+			if not _wd_slot_meshes(wslot).is_empty():
+				has_wedge_decor = true
+				break
 	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
@@ -3047,20 +3058,14 @@ func _rebuild_wall_decor() -> void:
 	for i: int in range(rect_variant_count):
 		rect_counts[i] = 0
 
-	var wedge_slot_meshes: Array = [
-		wedge_meshes_ramp_left,
-		wedge_meshes_ramp_right,
-		wedge_meshes_overhang_left,
-		wedge_meshes_overhang_right
-	]
-
 	var wedge_counts_by_slot: Array = []
 	wedge_counts_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx: int in range(WEDGE_SLOT_COUNT):
-		wedge_counts_by_slot[sidx] = []
-		wedge_counts_by_slot[sidx].resize(wedge_variant_count)
-		for i2: int in range(wedge_variant_count):
-			wedge_counts_by_slot[sidx][i2] = 0
+		var slot_counts: Array[int] = []
+		slot_counts.resize(_wd_slot_meshes(sidx).size())
+		for i2: int in range(slot_counts.size()):
+			slot_counts[i2] = 0
+		wedge_counts_by_slot[sidx] = slot_counts
 
 	var rect_faces: Array[WallFace] = []
 	var wedge_faces: Array[WallFace] = []
@@ -3166,7 +3171,7 @@ func _rebuild_wall_decor() -> void:
 			var slot_c: int = int(cls_c.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_c < 0 or slot_c >= WEDGE_SLOT_COUNT:
 				slot_c = WEDGE_SLOT_RAMP_LEFT
-			var slot_meshes_c: Array[Mesh] = wedge_slot_meshes[slot_c]
+			var slot_meshes_c: Array[Mesh] = _wd_slot_meshes(slot_c)
 			if slot_meshes_c.is_empty():
 				continue
 			var widx: int = absi(wf.key + wall_wedge_decor_seed) % slot_meshes_c.size()
@@ -3201,24 +3206,20 @@ func _rebuild_wall_decor() -> void:
 	wedge_mmi_by_slot.resize(WEDGE_SLOT_COUNT)
 	wedge_aabb_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx2: int in range(WEDGE_SLOT_COUNT):
+		var slot_meshes_alloc: Array[Mesh] = _wd_slot_meshes(sidx2)
 		wedge_mmi_by_slot[sidx2] = []
 		wedge_aabb_by_slot[sidx2] = []
-		wedge_mmi_by_slot[sidx2].resize(wedge_variant_count)
-		wedge_aabb_by_slot[sidx2].resize(wedge_variant_count)
-
-	for wv: int in range(wedge_variant_count):
-		for sidx3: int in range(WEDGE_SLOT_COUNT):
-			var slot_count: int = int(wedge_counts_by_slot[sidx3][wv])
+		wedge_mmi_by_slot[sidx2].resize(slot_meshes_alloc.size())
+		wedge_aabb_by_slot[sidx2].resize(slot_meshes_alloc.size())
+		for wv: int in range(slot_meshes_alloc.size()):
+			var slot_count: int = int(wedge_counts_by_slot[sidx2][wv])
 			if slot_count <= 0:
-				wedge_mmi_by_slot[sidx3][wv] = null
+				wedge_mmi_by_slot[sidx2][wv] = null
 				continue
 
-			if wv >= wedge_slot_meshes[sidx3].size():
-				wedge_mmi_by_slot[sidx3][wv] = null
-				continue
-			var wmesh: Mesh = wedge_slot_meshes[sidx3][wv]
+			var wmesh: Mesh = slot_meshes_alloc[wv]
 			if wmesh == null:
-				wedge_mmi_by_slot[sidx3][wv] = null
+				wedge_mmi_by_slot[sidx2][wv] = null
 				continue
 
 			var wmm: MultiMesh = MultiMesh.new()
@@ -3231,8 +3232,8 @@ func _rebuild_wall_decor() -> void:
 			wmmi.custom_aabb = decor_aabb
 
 			_wall_decor_root.add_child(wmmi)
-			wedge_mmi_by_slot[sidx3][wv] = wmmi
-			wedge_aabb_by_slot[sidx3][wv] = wmesh.get_aabb()
+			wedge_mmi_by_slot[sidx2][wv] = wmmi
+			wedge_aabb_by_slot[sidx2][wv] = wmesh.get_aabb()
 
 	var rect_write_i: Array[int] = []
 	rect_write_i.resize(rect_variant_count)
@@ -3242,10 +3243,11 @@ func _rebuild_wall_decor() -> void:
 	var wedge_write_i_by_slot: Array = []
 	wedge_write_i_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx4: int in range(WEDGE_SLOT_COUNT):
-		wedge_write_i_by_slot[sidx4] = []
-		wedge_write_i_by_slot[sidx4].resize(wedge_variant_count)
-		for wv2: int in range(wedge_variant_count):
-			wedge_write_i_by_slot[sidx4][wv2] = 0
+		var slot_write_i: Array[int] = []
+		slot_write_i.resize(_wd_slot_meshes(sidx4).size())
+		for wv2: int in range(slot_write_i.size()):
+			slot_write_i[wv2] = 0
+		wedge_write_i_by_slot[sidx4] = slot_write_i
 
 	var total_rect_instances: int = 0
 	for count in rect_counts:
@@ -3255,8 +3257,8 @@ func _rebuild_wall_decor() -> void:
 
 	var total_wedge_instances: int = 0
 	for sidx5: int in range(WEDGE_SLOT_COUNT):
-		for wvi: int in range(wedge_variant_count):
-			total_wedge_instances += int(wedge_counts_by_slot[sidx5][wvi])
+		for slot_count in wedge_counts_by_slot[sidx5]:
+			total_wedge_instances += int(slot_count)
 	if has_wedge_decor and total_wedge_instances <= 0:
 		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
 
@@ -3350,7 +3352,7 @@ func _rebuild_wall_decor() -> void:
 			var slot_p: int = int(cls_p.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_p < 0 or slot_p >= WEDGE_SLOT_COUNT:
 				slot_p = WEDGE_SLOT_RAMP_LEFT
-			var slot_meshes_p: Array[Mesh] = wedge_slot_meshes[slot_p]
+			var slot_meshes_p: Array[Mesh] = _wd_slot_meshes(slot_p)
 			if slot_meshes_p.is_empty():
 				dbg_wedge_skip_variant_place += 1
 				continue
@@ -3387,7 +3389,7 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for sidx6: int in range(WEDGE_SLOT_COUNT):
-			for wv3: int in range(wedge_variant_count):
+			for wv3: int in range(_wd_slot_meshes(sidx6).size()):
 				var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_slot[sidx6][wv3]
 				if wedge_mmi != null:
 					wedge_mmi.multimesh.visible_instance_count = int(wedge_write_i_by_slot[sidx6][wv3])
