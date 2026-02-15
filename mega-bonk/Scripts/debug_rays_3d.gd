@@ -74,7 +74,7 @@ func _setup() -> void:
 	_line_mat.vertex_color_use_as_albedo = true
 	_line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_line_mat.no_depth_test = no_depth_test
-	_line_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE
+	_line_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	_line_mi.material_override = _line_mat
 	_line_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_line_mi.render_priority = 0
@@ -102,7 +102,7 @@ func _setup() -> void:
 		_hit_mat.vertex_color_use_as_albedo = true
 		_hit_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		_hit_mat.no_depth_test = no_depth_test
-		_hit_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE
+		_hit_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 		_hit_mmi.material_override = _hit_mat
 		_hit_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_hit_mmi.render_priority = 0
