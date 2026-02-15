@@ -3451,7 +3451,7 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 		var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
 		var fallback_is_right: bool = avg_right > avg_left
 		var fallback_slot: int = WEDGE_SLOT_RAMP_RIGHT if fallback_is_right else WEDGE_SLOT_RAMP_LEFT
-		return {"slot": fallback_slot, "ramp_dir": RAMP_NONE, "edge_id": -1}
+		return {"slot": fallback_slot, "ramp_dir": RAMP_NONE, "edge_id": -1, "edge_kind": 0}
 
 	var ridx: int = _idx2(ramp_cell.x, ramp_cell.y, n)
 	var ramp_dir: int = _ramp_up_dir[ridx]
@@ -3497,18 +3497,41 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 
 	var slot: int = WEDGE_SLOT_RAMP_RIGHT if side_is_right else WEDGE_SLOT_RAMP_LEFT
 
+	# Identify whether this face is on the ramp's TOP/BOTTOM edge (climb axis) or a SIDE edge.
+	var up_edge: int = -1
+	var down_edge: int = -1
+	match ramp_dir:
+		RAMP_EAST:
+			up_edge = 0
+			down_edge = 1
+		RAMP_WEST:
+			up_edge = 1
+			down_edge = 0
+		RAMP_NORTH:
+			up_edge = 2
+			down_edge = 3
+		RAMP_SOUTH:
+			up_edge = 3
+			down_edge = 2
+
+	var edge_kind: int = 0 # 0=SIDE, 1=TOP, 2=BOTTOM
+	if edge_id == up_edge:
+		edge_kind = 1
+	elif edge_id == down_edge:
+		edge_kind = 2
+
+	# Overhang routing should be determined by whether the *open-air side* is under a ceiling.
 	var seam_overhang: bool = false
-	if wf.is_trapezoid and edge_id >= 0 and _in_bounds(nb_cell.x, nb_cell.y, n) and not _cell_is_ramp(nb_cell.x, nb_cell.y, n):
-		var nidx: int = _idx2(nb_cell.x, nb_cell.y, n)
-		var ramp_h: float = _heights[ridx]
-		var nb_h: float = _heights[nidx]
-		var seam_eps: float = maxf(height_step * 0.5, 0.01)
-		seam_overhang = nb_h >= ramp_h + seam_eps
+	if wf.is_trapezoid and edge_id >= 0 and edge_kind != 0:
+		var p_side := wf.center + outward * (wall_decor_open_side_epsilon + 0.001)
+		var top_y: float = _wall_face_max_world_y(wf)
+		var h_ceiling: float = _wd_surface_only_ceiling_y_at(p_side)
+		seam_overhang = h_ceiling > top_y + wall_decor_surface_margin
 
 	if seam_overhang:
 		slot = WEDGE_SLOT_OVERHANG_RIGHT if side_is_right else WEDGE_SLOT_OVERHANG_LEFT
 
-	return {"slot": slot, "ramp_dir": ramp_dir, "edge_id": edge_id}
+	return {"slot": slot, "ramp_dir": ramp_dir, "edge_id": edge_id, "edge_kind": edge_kind}
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
