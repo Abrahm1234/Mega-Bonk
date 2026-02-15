@@ -239,6 +239,7 @@ var _tunnel_entrance_cells: Array[Vector2i] = []
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
+var _base_visuals_root_missing_warned: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -2497,7 +2498,11 @@ func _rebuild_wall_decor_after_physics() -> void:
 func _ensure_base_visuals_root() -> void:
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body == null:
+		if not _base_visuals_root_missing_warned:
+			_base_visuals_root_missing_warned = true
+			push_warning("ArenaBlockyTerrain: TerrainBody node is missing; base visuals cannot be created.")
 		return
+	_base_visuals_root_missing_warned = false
 	if _base_visuals_root == null or not is_instance_valid(_base_visuals_root):
 		_base_visuals_root = terrain_body.get_node_or_null("BaseVisuals") as Node3D
 	if _base_visuals_root == null:
@@ -2562,6 +2567,10 @@ func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 		u_axis = Vector3.RIGHT
 	var v_axis: Vector3 = n_axis.cross(u_axis).normalized()
 	u_axis = v_axis.cross(n_axis).normalized()
+	# Canonicalize tangent direction to avoid checkerboard-style flips between faces.
+	if u_axis.dot(Vector3.RIGHT) < 0.0:
+		u_axis = -u_axis
+		v_axis = -v_axis
 
 	var axis_n: int = clampi(base_floor_mesh_normal_axis, 0, 2)
 	var plane_axes: PackedInt32Array = _dominant_plane_axes(axis_n)
