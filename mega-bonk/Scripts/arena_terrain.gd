@@ -323,7 +323,7 @@ class FaceMeta extends RefCounted:
 	var owner_kind: int = 0
 	var ramp_cell: Vector2i = Vector2i(-1, -1)
 	var ramp_dir: int = RAMP_NONE
-	var ramp_edge_kind: int = 0
+	var ramp_edge_kind: int = -1
 
 var _wall_face_meta: Dictionary = {}
 var _floor_face_meta: Dictionary = {}
@@ -331,6 +331,7 @@ var _cell_kind: PackedByteArray
 var _cell_floor_y: PackedFloat32Array
 var _edge_flags: PackedInt32Array
 var _edge_nb: PackedInt32Array
+var _edge_slot: PackedInt32Array
 
 var _wall_decor_root: Node3D = null
 var _shaft_faces: Array[WallFace] = []
@@ -426,11 +427,13 @@ func _tags_init(n: int) -> void:
 	_cell_floor_y = PackedFloat32Array()
 	_edge_flags = PackedInt32Array()
 	_edge_nb = PackedInt32Array()
+	_edge_slot = PackedInt32Array()
 
 	_cell_kind.resize(n * n)
 	_cell_floor_y.resize(n * n)
 	_edge_flags.resize(n * n * 4)
 	_edge_nb.resize(n * n * 4)
+	_edge_slot.resize(n * n * 4)
 
 	for i in range(n * n):
 		_cell_kind[i] = 0
@@ -438,6 +441,7 @@ func _tags_init(n: int) -> void:
 	for e in range(n * n * 4):
 		_edge_flags[e] = 0
 		_edge_nb[e] = -1
+		_edge_slot[e] = -1
 
 	_wall_face_meta.clear()
 	_floor_face_meta.clear()
@@ -450,6 +454,116 @@ func _tag_cells(n: int) -> void:
 			var i: int = _idx2(cx, cz, n)
 			_cell_floor_y[i] = _heights[i]
 			_cell_kind[i] = 1 if _ramp_up_dir[i] != RAMP_NONE else 0
+
+func _set_edge_nb(cell_a: Vector2i, edge_id_a: int, cell_b: Vector2i, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if _edge_nb.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if _in_bounds(cell_b.x, cell_b.y, n):
+		_edge_nb[ia] = _pack_cell(cell_b)
+	else:
+		_edge_nb[ia] = -1
+
+func _get_edge_nb(cell_a: Vector2i, edge_id_a: int, n: int) -> Vector2i:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return Vector2i(-1, -1)
+	if _edge_nb.size() != n * n * 4:
+		return Vector2i(-1, -1)
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if ia < 0 or ia >= _edge_nb.size():
+		return Vector2i(-1, -1)
+	var packed: int = _edge_nb[ia]
+	if packed < 0:
+		return Vector2i(-1, -1)
+	var nb: Vector2i = _unpack_cell(packed)
+	if not _in_bounds(nb.x, nb.y, n):
+		return Vector2i(-1, -1)
+	return nb
+
+func _set_edge_slot(cell_a: Vector2i, edge_id_a: int, slot: int, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if _edge_slot.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	_edge_slot[ia] = slot
+
+func _get_edge_slot(cell_a: Vector2i, edge_id_a: int, n: int) -> int:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return -1
+	if _edge_slot.size() != n * n * 4:
+		return -1
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if ia < 0 or ia >= _edge_slot.size():
+		return -1
+	return int(_edge_slot[ia])
+
+func _tags_build_full_adjacency(n: int) -> void:
+	for z in range(n):
+		for x in range(n):
+			var c := Vector2i(x, z)
+			_set_edge_nb(c, EDGE_E, Vector2i(x + 1, z), n)
+			_set_edge_nb(c, EDGE_W, Vector2i(x - 1, z), n)
+			_set_edge_nb(c, EDGE_S, Vector2i(x, z + 1), n)
+			_set_edge_nb(c, EDGE_N, Vector2i(x, z - 1), n)
+
+func _ramp_side_from_dir_edge(ramp_dir: int, edge_id: int) -> int:
+	# -1: not side edge, 0: left side, 1: right side
+	match ramp_dir:
+		RAMP_EAST:
+			if edge_id == EDGE_N:
+				return 0
+			if edge_id == EDGE_S:
+				return 1
+		RAMP_WEST:
+			if edge_id == EDGE_S:
+				return 0
+			if edge_id == EDGE_N:
+				return 1
+		RAMP_SOUTH:
+			if edge_id == EDGE_E:
+				return 0
+			if edge_id == EDGE_W:
+				return 1
+		RAMP_NORTH:
+			if edge_id == EDGE_W:
+				return 0
+			if edge_id == EDGE_E:
+				return 1
+	return -1
+
+func _edge_is_overhang(ramp_c: Vector2i, edge_id: int, nb_c: Vector2i, n: int) -> bool:
+	if not _in_bounds(ramp_c.x, ramp_c.y, n):
+		return false
+	if not _in_bounds(nb_c.x, nb_c.y, n):
+		return false
+	var ramp_ec: Vector2 = _edge_pair(_cell_corners(ramp_c.x, ramp_c.y), edge_id)
+	var nb_ec: Vector2 = _edge_pair(_cell_corners(nb_c.x, nb_c.y), _edge_opposite(edge_id))
+	var margin: float = maxf(0.01, wall_decor_surface_margin)
+	return (nb_ec.x > ramp_ec.x + margin) or (nb_ec.y > ramp_ec.y + margin)
+
+func _tag_ramp_side_slots(n: int) -> void:
+	for z in range(n):
+		for x in range(n):
+			var c := Vector2i(x, z)
+			var i: int = _idx2(x, z, n)
+			if _cell_kind.size() != n * n or _cell_kind[i] != 1:
+				continue
+			var ramp_dir: int = _ramp_up_dir[i]
+			for edge_id in [EDGE_N, EDGE_S, EDGE_E, EDGE_W]:
+				var side: int = _ramp_side_from_dir_edge(ramp_dir, edge_id)
+				if side < 0:
+					continue
+				var nb: Vector2i = _get_edge_nb(c, edge_id, n)
+				var overhang: bool = _edge_is_overhang(c, edge_id, nb, n)
+				var slot: int = WEDGE_SLOT_RAMP_LEFT
+				if side == 0:
+					slot = WEDGE_SLOT_OVERHANG_LEFT if overhang else WEDGE_SLOT_RAMP_LEFT
+				else:
+					slot = WEDGE_SLOT_OVERHANG_RIGHT if overhang else WEDGE_SLOT_RAMP_RIGHT
+				_set_edge_slot(c, edge_id, slot, n)
 
 func _tag_edge_pair(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
 	if not _in_bounds(cell_a.x, cell_a.y, n):
@@ -1163,6 +1277,8 @@ func generate() -> void:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
 	_tag_cells(n)
+	_tags_build_full_adjacency(n)
+	_tag_ramp_side_slots(n)
 
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
@@ -3061,8 +3177,15 @@ func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int
 
 	if meta.ramp_cell.x >= 0:
 		meta.ramp_dir = _ramp_up_dir[_idx2(meta.ramp_cell.x, meta.ramp_cell.y, n)]
+		meta.owner_cell = meta.ramp_cell
+		if meta.ramp_cell == cell_a:
+			meta.owner_edge_id = edge_id_a
+		else:
+			meta.owner_edge_id = _edge_opposite(edge_id_a)
+		meta.ramp_edge_kind = _get_edge_slot(meta.owner_cell, meta.owner_edge_id, n)
 	else:
 		meta.ramp_dir = RAMP_NONE
+		meta.ramp_edge_kind = -1
 
 	_wall_face_meta[wf.key] = meta
 	_tag_edge_pair(cell_a, cell_b, edge_id_a, n)
@@ -3565,6 +3688,16 @@ func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
 func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dictionary:
 	# Returns: { slot, ramp_dir, edge_id }
 	# slot is one of WEDGE_SLOT_* constants.
+	if _wall_face_meta.has(wf.key):
+		var m0: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if m0 != null and m0.ramp_edge_kind >= 0:
+			return {
+				"slot": m0.ramp_edge_kind,
+				"ramp_dir": m0.ramp_dir,
+				"edge_id": m0.owner_edge_id,
+				"edge_kind": 0
+			}
+
 	var outward: Vector3 = place_outward
 	outward.y = 0.0
 	if outward.length_squared() < 1e-8:
