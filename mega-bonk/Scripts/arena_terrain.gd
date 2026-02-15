@@ -3016,7 +3016,7 @@ func _rebuild_wall_decor() -> void:
 	var wedge_meshes_overhang_right: Array[Mesh] = wall_wedge_decor_meshes_overhang_right
 
 
-	var wedge_variant_count: int = mini(mini(wedge_meshes_ramp_left.size(), wedge_meshes_ramp_right.size()), mini(wedge_meshes_overhang_left.size(), wedge_meshes_overhang_right.size()))
+	var wedge_variant_count: int = maxi(maxi(wedge_meshes_ramp_left.size(), wedge_meshes_ramp_right.size()), maxi(wedge_meshes_overhang_left.size(), wedge_meshes_overhang_right.size()))
 	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
 	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
@@ -3045,6 +3045,13 @@ func _rebuild_wall_decor() -> void:
 	rect_counts.resize(rect_variant_count)
 	for i: int in range(rect_variant_count):
 		rect_counts[i] = 0
+
+	var wedge_slot_meshes: Array = [
+		wedge_meshes_ramp_left,
+		wedge_meshes_ramp_right,
+		wedge_meshes_overhang_left,
+		wedge_meshes_overhang_right
+	]
 
 	var wedge_counts_by_slot: Array = []
 	wedge_counts_by_slot.resize(WEDGE_SLOT_COUNT)
@@ -3154,11 +3161,14 @@ func _rebuild_wall_decor() -> void:
 			if not _allow_wedge_decor_face(wf):
 				dbg_wedge_skip_allow_count += 1
 				continue # COUNT_PASS: SKIP_NOT_ALLOWED
-			var widx: int = absi(wf.key + wall_wedge_decor_seed) % wedge_variant_count
 			var cls_c: Dictionary = _wedge_slot_classify(wf, place_outward_count, max(2, cells_per_side))
 			var slot_c: int = int(cls_c.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_c < 0 or slot_c >= WEDGE_SLOT_COUNT:
 				slot_c = WEDGE_SLOT_RAMP_LEFT
+			var slot_meshes_c: Array[Mesh] = wedge_slot_meshes[slot_c]
+			if slot_meshes_c.is_empty():
+				continue
+			var widx: int = absi(wf.key + wall_wedge_decor_seed) % slot_meshes_c.size()
 			wedge_counts_by_slot[slot_c][widx] += 1
 
 	var rect_mmi_by_variant: Array[MultiMeshInstance3D] = []
@@ -3185,12 +3195,6 @@ func _rebuild_wall_decor() -> void:
 		rect_mmi_by_variant[v] = mmi
 		rect_aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
 
-	var wedge_slot_meshes: Array = [
-		wedge_meshes_ramp_left,
-		wedge_meshes_ramp_right,
-		wedge_meshes_overhang_left,
-		wedge_meshes_overhang_right
-	]
 	var wedge_mmi_by_slot: Array = []
 	var wedge_aabb_by_slot: Array = []
 	wedge_mmi_by_slot.resize(WEDGE_SLOT_COUNT)
@@ -3208,6 +3212,9 @@ func _rebuild_wall_decor() -> void:
 				wedge_mmi_by_slot[sidx3][wv] = null
 				continue
 
+			if wv >= wedge_slot_meshes[sidx3].size():
+				wedge_mmi_by_slot[sidx3][wv] = null
+				continue
 			var wmesh: Mesh = wedge_slot_meshes[sidx3][wv]
 			if wmesh == null:
 				wedge_mmi_by_slot[sidx3][wv] = null
@@ -3338,11 +3345,15 @@ func _rebuild_wall_decor() -> void:
 			if not _allow_wedge_decor_face(wf2):
 				dbg_wedge_skip_allow_place += 1
 				continue # PLACE_PASS: SKIP_NOT_ALLOWED
-			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % wedge_variant_count
 			var cls_p: Dictionary = _wedge_slot_classify(wf2, place_outward, max(2, cells_per_side))
 			var slot_p: int = int(cls_p.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_p < 0 or slot_p >= WEDGE_SLOT_COUNT:
 				slot_p = WEDGE_SLOT_RAMP_LEFT
+			var slot_meshes_p: Array[Mesh] = wedge_slot_meshes[slot_p]
+			if slot_meshes_p.is_empty():
+				dbg_wedge_skip_variant_place += 1
+				continue
+			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % slot_meshes_p.size()
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_slot[slot_p][wsel]
 			if wmmi2 == null:
 				dbg_wedge_skip_variant_place += 1
@@ -3485,7 +3496,16 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 		side_is_right = avg_right2 > avg_left2
 
 	var slot: int = WEDGE_SLOT_RAMP_RIGHT if side_is_right else WEDGE_SLOT_RAMP_LEFT
-	if wf.is_trapezoid and edge_id >= 0:
+
+	var seam_overhang: bool = false
+	if wf.is_trapezoid and edge_id >= 0 and _in_bounds(nb_cell.x, nb_cell.y, n) and not _cell_is_ramp(nb_cell.x, nb_cell.y, n):
+		var nidx: int = _idx2(nb_cell.x, nb_cell.y, n)
+		var ramp_h: float = _heights[ridx]
+		var nb_h: float = _heights[nidx]
+		var seam_eps: float = maxf(height_step * 0.5, 0.01)
+		seam_overhang = nb_h >= ramp_h + seam_eps
+
+	if seam_overhang:
 		slot = WEDGE_SLOT_OVERHANG_RIGHT if side_is_right else WEDGE_SLOT_OVERHANG_LEFT
 
 	return {"slot": slot, "ramp_dir": ramp_dir, "edge_id": edge_id}
