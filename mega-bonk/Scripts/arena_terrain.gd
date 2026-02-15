@@ -241,6 +241,8 @@ var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
 var _base_visuals_root_missing_warned: bool = false
+var _terrain_mesh_missing_warned: bool = false
+var _terrain_collision_missing_warned: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -1205,39 +1207,41 @@ func _raycast_dbg(from: Vector3, to: Vector3, mask: int, exclude: Array = [], co
 	return hit
 
 func _ready() -> void:
-	if mesh_instance == null or collision_shape == null:
-		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
-		return
+	if mesh_instance == null:
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainMesh is missing; baked debug mesh will stay hidden.")
+	if collision_shape == null:
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainCollision is missing; baked collision will not be generated.")
 
-	if use_rock_shader:
-		var sm := ShaderMaterial.new()
-		sm.shader = load("res://shaders/blocky_rock.gdshader")
-		sm.set_shader_parameter("noise_top", noise_top_tex)
-		sm.set_shader_parameter("noise_wall", noise_wall_tex)
-		sm.set_shader_parameter("noise_ramp", noise_ramp_tex)
-		sm.set_shader_parameter("disp_strength_top", disp_strength_top)
-		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
-		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
-		sm.set_shader_parameter("disp_scale_top", disp_scale_top)
-		sm.set_shader_parameter("disp_scale_wall", disp_scale_wall)
-		sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
-		sm.set_shader_parameter("albedo_top", albedo_top_tex)
-		sm.set_shader_parameter("albedo_wall", albedo_wall_tex)
-		sm.set_shader_parameter("albedo_ramp", albedo_ramp_tex)
-		sm.set_shader_parameter("normal_top", normal_top_tex)
-		sm.set_shader_parameter("normal_wall", normal_wall_tex)
-		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
-		sm.set_shader_parameter("normal_strength", normal_strength)
-		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
-		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
-		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
-		mesh_instance.material_override = sm
-	else:
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		mat.vertex_color_use_as_albedo = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mesh_instance.material_override = mat
+	if mesh_instance != null:
+		if use_rock_shader:
+			var sm := ShaderMaterial.new()
+			sm.shader = load("res://shaders/blocky_rock.gdshader")
+			sm.set_shader_parameter("noise_top", noise_top_tex)
+			sm.set_shader_parameter("noise_wall", noise_wall_tex)
+			sm.set_shader_parameter("noise_ramp", noise_ramp_tex)
+			sm.set_shader_parameter("disp_strength_top", disp_strength_top)
+			sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
+			sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
+			sm.set_shader_parameter("disp_scale_top", disp_scale_top)
+			sm.set_shader_parameter("disp_scale_wall", disp_scale_wall)
+			sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
+			sm.set_shader_parameter("albedo_top", albedo_top_tex)
+			sm.set_shader_parameter("albedo_wall", albedo_wall_tex)
+			sm.set_shader_parameter("albedo_ramp", albedo_ramp_tex)
+			sm.set_shader_parameter("normal_top", normal_top_tex)
+			sm.set_shader_parameter("normal_wall", normal_wall_tex)
+			sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
+			sm.set_shader_parameter("normal_strength", normal_strength)
+			sm.set_shader_parameter("seam_lock_width", seam_lock_width)
+			sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
+			sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
+			mesh_instance.material_override = sm
+		else:
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			mat.vertex_color_use_as_albedo = true
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
 
@@ -2476,16 +2480,31 @@ func _build_mesh_and_collision(n: int) -> void:
 	st.generate_normals()
 	st.generate_tangents()
 	var baked_mesh: ArrayMesh = st.commit()
-	collision_shape.shape = baked_mesh.create_trimesh_shape()
-	if show_baked_debug_mesh:
-		mesh_instance.mesh = baked_mesh
-		mesh_instance.visible = true
-	else:
-		mesh_instance.mesh = null
-		mesh_instance.visible = false
+	if collision_shape != null and is_instance_valid(collision_shape):
+		collision_shape.shape = baked_mesh.create_trimesh_shape()
+		_terrain_collision_missing_warned = false
+	elif not _terrain_collision_missing_warned:
+		_terrain_collision_missing_warned = true
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainCollision is missing; collision was not updated.")
+
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		if show_baked_debug_mesh:
+			mesh_instance.mesh = baked_mesh
+			mesh_instance.visible = true
+		else:
+			mesh_instance.mesh = null
+			mesh_instance.visible = false
+		_terrain_mesh_missing_warned = false
+	elif not _terrain_mesh_missing_warned:
+		_terrain_mesh_missing_warned = true
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainMesh is missing; baked debug mesh cannot be displayed.")
 	_ensure_base_visuals_root()
 	_rebuild_base_floor_visuals()
 	_rebuild_base_wall_visuals()
+	if wall_decor_debug_verbose:
+		var floor_instances: int = _floor_faces.size() if base_floor_mesh != null else 0
+		var wall_instances: int = _wall_faces.size() if base_wall_mesh != null else 0
+		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d show_baked=%s" % [floor_instances, wall_instances, str(show_baked_debug_mesh)])
 	if wall_decor_open_side_use_raycast:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
