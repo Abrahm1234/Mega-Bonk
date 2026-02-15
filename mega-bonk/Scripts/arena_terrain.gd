@@ -3431,9 +3431,13 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
-	var probe: float = _cell_size * 0.25
-	var c_a: Vector2i = _world_to_cell_xz(wf.center - outward * probe, n)
-	var c_b: Vector2i = _world_to_cell_xz(wf.center + outward * probe, n)
+	var eps: float = maxf(wall_decor_open_side_epsilon, 0.001)
+	var probe: float = maxf(eps + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+	var step: float = minf(probe, _cell_size * 0.49)
+	step = maxf(step, eps + 0.001)
+
+	var c_a: Vector2i = _world_to_cell_xz(wf.center - outward * step, n)
+	var c_b: Vector2i = _world_to_cell_xz(wf.center + outward * step, n)
 
 	var a_is_ramp: bool = _cell_is_ramp(c_a.x, c_a.y, n)
 	var b_is_ramp: bool = _cell_is_ramp(c_b.x, c_b.y, n)
@@ -3441,34 +3445,75 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 	# Pick which side is the ramp cell.
 	var ramp_cell: Vector2i = c_a
 	var nb_cell: Vector2i = c_b
+	var have_ramp_cell: bool = false
 	if b_is_ramp and not a_is_ramp:
 		ramp_cell = c_b
 		nb_cell = c_a
+		have_ramp_cell = true
 	elif a_is_ramp and not b_is_ramp:
-		pass
+		have_ramp_cell = true
+	elif a_is_ramp and b_is_ramp:
+		have_ramp_cell = true
 	else:
-		# Degenerate (no ramp or both ramps): stable fallback based on face winding.
-		var avg_left: float = 0.5 * (wf.a.y + wf.d.y)
-		var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
-		var fallback_is_right: bool = avg_right > avg_left
-		var fallback_slot: int = WEDGE_SLOT_RAMP_RIGHT if fallback_is_right else WEDGE_SLOT_RAMP_LEFT
-		return {"slot": fallback_slot, "ramp_dir": RAMP_NONE, "edge_id": -1, "edge_kind": 0}
+		# Both side probes missed. Scan center cell + 4-neighbors for an adjacent ramp cell.
+		var cc: Vector2i = _world_to_cell_xz(wf.center, n)
+		var search_cells: Array[Vector2i] = [
+			cc,
+			Vector2i(cc.x + 1, cc.y),
+			Vector2i(cc.x - 1, cc.y),
+			Vector2i(cc.x, cc.y - 1),
+			Vector2i(cc.x, cc.y + 1)
+		]
+		var best_dist2: float = INF
+		for sc in search_cells:
+			if not _cell_is_ramp(sc.x, sc.y, n):
+				continue
+			var sx: float = _ox + (float(sc.x) + 0.5) * _cell_size
+			var sz: float = _oz + (float(sc.y) + 0.5) * _cell_size
+			var d2: float = Vector2(wf.center.x - sx, wf.center.z - sz).length_squared()
+			if d2 < best_dist2:
+				best_dist2 = d2
+				ramp_cell = sc
+				have_ramp_cell = true
 
-	var ridx: int = _idx2(ramp_cell.x, ramp_cell.y, n)
-	var ramp_dir: int = _ramp_up_dir[ridx]
+	var ramp_dir: int = RAMP_NONE
+	if have_ramp_cell:
+		var ridx: int = _idx2(ramp_cell.x, ramp_cell.y, n)
+		ramp_dir = _ramp_up_dir[ridx]
 
 	# Determine which edge of the ramp cell this face is on from neighbor delta.
-	var dx: int = nb_cell.x - ramp_cell.x
-	var dz: int = nb_cell.y - ramp_cell.y
 	var edge_id: int = -1
-	if dx == 1 and dz == 0:
-		edge_id = 0 # E
-	elif dx == -1 and dz == 0:
-		edge_id = 1 # W
-	elif dz == -1 and dx == 0:
-		edge_id = 2 # N
-	elif dz == 1 and dx == 0:
-		edge_id = 3 # S
+	if have_ramp_cell:
+		var dx: int = nb_cell.x - ramp_cell.x
+		var dz: int = nb_cell.y - ramp_cell.y
+		if dx == 1 and dz == 0:
+			edge_id = 0 # E
+		elif dx == -1 and dz == 0:
+			edge_id = 1 # W
+		elif dz == -1 and dx == 0:
+			edge_id = 2 # N
+		elif dz == 1 and dx == 0:
+			edge_id = 3 # S
+
+		if edge_id < 0:
+			var rcx: float = _ox + (float(ramp_cell.x) + 0.5) * _cell_size
+			var rcz: float = _oz + (float(ramp_cell.y) + 0.5) * _cell_size
+			var rel_x: float = wf.center.x - rcx
+			var rel_z: float = wf.center.z - rcz
+			if absf(rel_x) >= absf(rel_z):
+				edge_id = 0 if rel_x >= 0.0 else 1
+			else:
+				edge_id = 3 if rel_z >= 0.0 else 2
+
+			match edge_id:
+				0:
+					nb_cell = Vector2i(ramp_cell.x + 1, ramp_cell.y)
+				1:
+					nb_cell = Vector2i(ramp_cell.x - 1, ramp_cell.y)
+				2:
+					nb_cell = Vector2i(ramp_cell.x, ramp_cell.y - 1)
+				3:
+					nb_cell = Vector2i(ramp_cell.x, ramp_cell.y + 1)
 
 	# Map ramp-dir to its left/right side edges.
 	var left_edge: int = -1
@@ -3491,7 +3536,7 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 			right_edge = 3
 
 	var side_is_right: bool = (edge_id == right_edge)
-	if edge_id < 0:
+	if edge_id < 0 or ramp_dir == RAMP_NONE:
 		var avg_left2: float = 0.5 * (wf.a.y + wf.d.y)
 		var avg_right2: float = 0.5 * (wf.b.y + wf.c.y)
 		side_is_right = avg_right2 > avg_left2
@@ -3523,11 +3568,15 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 
 	# Overhang routing should be determined by whether the *open-air side* is under a ceiling.
 	var seam_overhang: bool = false
-	if wf.is_trapezoid and edge_id >= 0:
-		var p_side := wf.center + outward * (wall_decor_open_side_epsilon + 0.001)
+	if wf.is_trapezoid:
+		var p_side_near := wf.center + outward * (eps + 0.001)
+		var p_side_far := wf.center + outward * step
 		var top_y: float = _wall_face_max_world_y(wf)
-		var h_ceiling: float = _wd_surface_only_ceiling_y_at(p_side)
-		seam_overhang = h_ceiling > top_y + wall_decor_surface_margin
+		var h_ceiling_near: float = _wd_surface_only_ceiling_y_at(p_side_near)
+		var h_ceiling_far: float = _wd_surface_only_ceiling_y_at(p_side_far)
+		var cover_near: bool = h_ceiling_near > top_y + wall_decor_surface_margin
+		var cover_far: bool = h_ceiling_far > top_y + wall_decor_surface_margin
+		seam_overhang = cover_near or cover_far
 
 	if seam_overhang:
 		slot = WEDGE_SLOT_OVERHANG_RIGHT if side_is_right else WEDGE_SLOT_OVERHANG_LEFT
