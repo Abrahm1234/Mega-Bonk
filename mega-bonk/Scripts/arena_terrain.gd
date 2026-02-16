@@ -202,6 +202,8 @@ class FloorFace extends RefCounted:
 var _floor_faces: Array[FloorFace] = []
 var _floor_decor_root: Node3D
 var _floor_decor_instances: Array[MultiMeshInstance3D] = []
+var _floor_mesh_normal_axis_cache: Dictionary = {}
+var _floor_mesh_cap_cache: Dictionary = {}
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 	match dir:
@@ -1999,10 +2001,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0 > ceil_pair.x + eps or top1 > ceil_pair.y + eps:
 							if b_is_hole:
 								# Face into the +X cell (the hole is in cell B)
-								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv, true, false)
+								_add_wall_x_between(st, x1, z0, z1, ceil_pair.x, ceil_pair.y, top0, top1, uv_scale_wall, wall_subdiv, true)
 							else:
 								# Face into the -X cell (the hole is in cell A) by flipping z order
-								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv, false, false)
+								_add_wall_x_between(st, x1, z1, z0, ceil_pair.y, ceil_pair.x, top1, top0, uv_scale_wall, wall_subdiv, false)
 						continue
 					if ramps_openings and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
 						pass
@@ -2045,10 +2047,10 @@ func _build_mesh_and_collision(n: int) -> void:
 						if top0z > ceil_pair_z.x + eps or top1z > ceil_pair_z.y + eps:
 							if d_is_hole:
 								# Face into the +Z cell (the hole is in cell D)
-								_add_wall_z_between(st, x0, x1, z1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv, true, false)
+								_add_wall_z_between(st, x0, x1, z1, ceil_pair_z.x, ceil_pair_z.y, top0z, top1z, uv_scale_wall, wall_subdiv, true)
 							else:
 								# Face into the -Z cell (the hole is in cell C) by flipping x order
-								_add_wall_z_between(st, x1, x0, z1, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv, false, false)
+								_add_wall_z_between(st, x1, x0, z1, ceil_pair_z.y, ceil_pair_z.x, top1z, top0z, uv_scale_wall, wall_subdiv, false)
 						continue
 					if ramps_openings and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
 						pass
