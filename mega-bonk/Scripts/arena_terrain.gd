@@ -207,6 +207,7 @@ class_name ArenaBlockyTerrain
 @export var base_floor_offset: float = 0.0
 @export var base_floor_depth_scale: float = 1.0 # scale multiplier along mesh thickness axis
 @export var base_floor_max_scale: float = 0.0 # 0 = unlimited
+@export_range(0.0, 1.0, 0.01) var base_floor_flat_min_dot: float = 0.95 # skip sloped faces (e.g. ramps) from base-floor pass
 @export var base_floor_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
 @export var base_wall_offset: float = 0.0
 @export var base_wall_depth_scale: float = 1.0 # scale multiplier along local Z (mesh thickness axis)
@@ -589,7 +590,11 @@ func _edge_is_overhang(ramp_c: Vector2i, edge_id: int, nb_c: Vector2i, n: int) -
 	var ramp_ec: Vector2 = _edge_pair(_cell_corners(ramp_c.x, ramp_c.y), edge_id)
 	var nb_ec: Vector2 = _edge_pair(_cell_corners(nb_c.x, nb_c.y), _edge_opposite(edge_id))
 	var margin: float = maxf(0.01, wall_decor_surface_margin)
-	return (nb_ec.x > ramp_ec.x + margin) and (nb_ec.y > ramp_ec.y + margin)
+	var ramp_avg: float = (ramp_ec.x + ramp_ec.y) * 0.5
+	var nb_avg: float = (nb_ec.x + nb_ec.y) * 0.5
+	var avg_overhang: bool = nb_avg > ramp_avg + margin
+	var high_overhang: bool = maxf(nb_ec.x, nb_ec.y) > maxf(ramp_ec.x, ramp_ec.y) + margin * 0.5
+	return avg_overhang or high_overhang
 
 func _tag_ramp_side_slots(n: int) -> void:
 	var side_edges_expected: int = 0
@@ -2659,18 +2664,31 @@ func _rebuild_base_floor_visuals() -> int:
 		_base_floor_mmi.multimesh = null
 		return 0
 
+	var flat_faces: Array[FloorFace] = []
+	var flat_min_dot: float = clampf(base_floor_flat_min_dot, 0.0, 1.0)
+	for ff: FloorFace in _floor_faces:
+		if ff == null:
+			continue
+		if ff.normal.normalized().dot(Vector3.UP) < flat_min_dot:
+			continue
+		flat_faces.append(ff)
+
+	if flat_faces.is_empty():
+		_base_floor_mmi.multimesh = null
+		return 0
+
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = base_floor_mesh
-	mm.instance_count = _floor_faces.size()
-	for i in range(_floor_faces.size()):
-		var ff: FloorFace = _floor_faces[i]
+	mm.instance_count = flat_faces.size()
+	for i in range(flat_faces.size()):
+		var ff: FloorFace = flat_faces[i]
 		var xf: Transform3D = _base_floor_transform_for_face(ff, base_floor_mesh)
 		mm.set_instance_transform(i, xf)
 
 	_base_floor_mmi.multimesh = mm
 	_base_floor_mmi.material_override = base_floor_material
-	return _floor_faces.size()
+	return flat_faces.size()
 
 func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if mesh == null:
