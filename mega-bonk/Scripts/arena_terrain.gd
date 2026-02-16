@@ -216,8 +216,11 @@ class_name ArenaBlockyTerrain
 @export var base_wall_flip_outward: bool = false
 @export var base_ramp_fill_ratio: float = 1.0
 @export var base_ramp_offset: float = 0.0
-@export var base_ramp_depth_scale: float = 1.0
+@export var base_ramp_depth_scale: float = 1.0 # additional scale along local Y (ramp thickness/height multiplier)
 @export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
+@export var base_ramp_use_module_convention: bool = true # expects +Y=up, +Z=uphill, +X=right mesh authoring
+@export var base_ramp_module_has_side_walls: bool = true # when true, skip spawning base wall/wedge meshes on ramp side faces
+@export var base_ramp_up_dir_points_to_high_neighbor: bool = true # set false if generator stores direction toward low neighbor
 @export_enum("X+", "X-", "Z+", "Z-") var base_ramp_mesh_uphill_axis: int = 2
 @export var base_ramp_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
 @export var enable_base_wedges: bool = false
@@ -2752,19 +2755,41 @@ func _rebuild_base_wall_visuals() -> int:
 		_base_walls_mmi.multimesh = null
 		return 0
 
+	var wall_faces: Array[WallFace] = _wall_faces
+	if base_ramp_module_has_side_walls:
+		wall_faces = []
+		for wf: WallFace in _wall_faces:
+			if _wall_face_is_ramp_side(wf):
+				continue
+			wall_faces.append(wf)
+
+	if wall_faces.is_empty():
+		_base_walls_mmi.multimesh = null
+		return 0
+
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = base_wall_mesh
-	mm.instance_count = _wall_faces.size()
+	mm.instance_count = wall_faces.size()
 	var wall_aabb: AABB = base_wall_mesh.get_aabb()
-	for i in range(_wall_faces.size()):
-		var wf: WallFace = _wall_faces[i]
+	for i in range(wall_faces.size()):
+		var wf: WallFace = wall_faces[i]
 		var xf: Transform3D = _base_wall_transform_for_face(wf, wall_aabb, base_wall_offset, base_wall_depth_scale)
 		mm.set_instance_transform(i, xf)
 
 	_base_walls_mmi.multimesh = mm
 	_base_walls_mmi.material_override = base_wall_material
-	return _wall_faces.size()
+	return wall_faces.size()
+
+func _wall_face_is_ramp_side(face: WallFace) -> bool:
+	if face == null:
+		return false
+	if not _wall_face_meta.has(face.key):
+		return false
+	var meta: FaceMeta = _wall_face_meta[face.key] as FaceMeta
+	if meta == null:
+		return false
+	return meta.ramp_edge_kind >= 0
 
 func _base_wall_place_outward(face: WallFace) -> Vector3:
 	var outward: Vector3 = face.normal
@@ -2878,6 +2903,42 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 		rise = maxf(height_step, 0.0001)
 
 	var uphill: Vector3 = _ramp_uphill_dir_world(dir_up)
+	if not base_ramp_up_dir_points_to_high_neighbor:
+		uphill = -uphill
+
+	if base_ramp_use_module_convention:
+		var aabb_mod: AABB = mesh.get_aabb()
+		var ref_x: float = maxf(absf(aabb_mod.size.x), 0.001)
+		var ref_y: float = maxf(absf(aabb_mod.size.y), 0.001)
+		var ref_z: float = maxf(absf(aabb_mod.size.z), 0.001)
+		var fill_mod: float = maxf(base_ramp_fill_ratio, 0.001)
+		var sx_mod: float = maxf((_cell_size * fill_mod) / ref_x, 0.001)
+		var sz_mod: float = maxf((_cell_size * fill_mod) / ref_z, 0.001)
+		var sy_mod: float = maxf((rise / ref_y) * maxf(base_ramp_depth_scale, 0.001), 0.001)
+		if base_ramp_max_scale > 0.0:
+			sx_mod = minf(sx_mod, base_ramp_max_scale)
+			sy_mod = minf(sy_mod, base_ramp_max_scale)
+			sz_mod = minf(sz_mod, base_ramp_max_scale)
+
+		var right_mod: Vector3 = Vector3.UP.cross(uphill).normalized()
+		if right_mod.length_squared() < 1e-8:
+			right_mod = Vector3.RIGHT
+		var up_mod: Vector3 = Vector3.UP
+		var basis_mod: Basis = Basis(right_mod * sx_mod, up_mod * sy_mod, uphill * sz_mod)
+
+		var target_center_low: Vector3 = Vector3(
+			_ox + (float(cx) + 0.5) * _cell_size,
+			low_y + base_ramp_offset,
+			_oz + (float(cz) + 0.5) * _cell_size
+		)
+		var anchor_local_mod: Vector3 = Vector3(
+			aabb_mod.position.x + aabb_mod.size.x * 0.5,
+			aabb_mod.position.y,
+			aabb_mod.position.z + aabb_mod.size.z * 0.5
+		)
+		var origin_mod: Vector3 = target_center_low - (basis_mod * anchor_local_mod)
+		return Transform3D(basis_mod, origin_mod)
+
 	var right: Vector3 = Vector3.UP.cross(uphill).normalized()
 	if right.length_squared() < 1e-8:
 		right = Vector3.RIGHT
@@ -2999,7 +3060,7 @@ func _rebuild_base_wedge_visuals() -> Dictionary:
 		if clear_mmi != null and is_instance_valid(clear_mmi):
 			clear_mmi.multimesh = null
 
-	if not enable_base_visuals or not enable_base_wedges:
+	if not enable_base_visuals or not enable_base_wedges or base_ramp_module_has_side_walls:
 		return stats
 
 	var faces_by_slot: Array = [[], [], [], []]
