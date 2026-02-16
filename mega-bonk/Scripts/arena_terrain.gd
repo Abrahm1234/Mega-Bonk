@@ -161,7 +161,7 @@ class_name ArenaBlockyTerrain
 @export var wall_decor_max_scale: float = 3.0
 @export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
 @export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 0.20
-@export var enable_wall_wedge_decor: bool = true
+@export var enable_wall_wedge_decor: bool = false # disabled by default while using single ramp modules
 @export var wall_wedge_decor_meshes_ramp_left: Array[Mesh] = []
 @export var wall_wedge_decor_meshes_ramp_right: Array[Mesh] = []
 @export var wall_wedge_decor_meshes_overhang_left: Array[Mesh] = []
@@ -218,12 +218,9 @@ class_name ArenaBlockyTerrain
 @export var base_ramp_offset: float = 0.0
 @export var base_ramp_depth_scale: float = 1.0 # additional scale along local Y (ramp thickness/height multiplier)
 @export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
-@export var base_ramp_use_module_convention: bool = true # expects +Y=up, +Z=uphill, +X=right mesh authoring
 @export var base_ramp_module_has_side_walls: bool = true # when true, skip spawning base wall/wedge meshes on ramp side faces
 @export var base_ramp_up_dir_points_to_high_neighbor: bool = true # set false if generator stores direction toward low neighbor
-@export_enum("X+", "X-", "Z+", "Z-") var base_ramp_mesh_uphill_axis: int = 2
-@export var base_ramp_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
-@export var enable_base_wedges: bool = false
+@export var enable_base_wedges: bool = false # ramp-side wedge composition is disabled for module ramps
 @export var base_wedge_mesh_ramp_left: Mesh
 @export var base_wedge_mesh_ramp_right: Mesh
 @export var base_wedge_mesh_overhang_left: Mesh
@@ -272,7 +269,6 @@ var _wd_raycast_sanity_done: bool = false
 var _base_visuals_root_missing_warned: bool = false
 var _terrain_mesh_missing_warned: bool = false
 var _terrain_collision_missing_warned: bool = false
-var _base_ramp_axis_conflict_warned: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -1349,7 +1345,8 @@ func generate() -> void:
 			break
 	_tag_cells(n)
 	_tags_build_full_adjacency(n)
-	_tag_ramp_side_slots(n)
+	if enable_base_wedges or enable_wall_wedge_decor:
+		_tag_ramp_side_slots(n)
 
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
@@ -2789,7 +2786,11 @@ func _wall_face_is_ramp_side(face: WallFace) -> bool:
 	var meta: FaceMeta = _wall_face_meta[face.key] as FaceMeta
 	if meta == null:
 		return false
-	return meta.ramp_edge_kind >= 0
+	if meta.ramp_cell.x < 0 or meta.owner_edge_id < 0:
+		return false
+	if meta.ramp_dir == RAMP_NONE:
+		return false
+	return _ramp_side_from_dir_edge(meta.ramp_dir, meta.owner_edge_id) >= 0
 
 func _base_wall_place_outward(face: WallFace) -> Vector3:
 	var outward: Vector3 = face.normal
@@ -2835,12 +2836,6 @@ func _ramp_uphill_dir_world(dir: int) -> Vector3:
 			return Vector3.BACK
 		_:
 			return Vector3.FORWARD
-
-func _ramp_uphill_axis_index() -> int:
-	return 0 if base_ramp_mesh_uphill_axis <= 1 else 2
-
-func _ramp_uphill_axis_sign() -> float:
-	return 1.0 if (base_ramp_mesh_uphill_axis == 0 or base_ramp_mesh_uphill_axis == 2) else -1.0
 
 func _rebuild_base_ramp_visuals(n: int) -> int:
 	if _base_ramps_mmi == null:
@@ -2893,106 +2888,53 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	if dir_up == RAMP_NONE:
 		return Transform3D.IDENTITY
 
-	var nb: Vector2i = _neighbor_of(cx, cz, dir_up)
-	var nb_idx: int = _idx2(clampi(nb.x, 0, n - 1), clampi(nb.y, 0, n - 1), n)
-	var h_here: float = _heights[idx] if idx < _heights.size() else 0.0
-	var h_nb: float = _heights[nb_idx] if nb_idx < _heights.size() else h_here
-	var low_y: float = minf(h_here, h_nb)
-	var rise: float = absf(h_nb - h_here)
-	if rise < 0.0001:
-		rise = maxf(height_step, 0.0001)
-
-	var uphill: Vector3 = _ramp_uphill_dir_world(dir_up)
+	var u2: Vector3 = _ramp_uphill_dir_world(dir_up)
 	if not base_ramp_up_dir_points_to_high_neighbor:
-		uphill = -uphill
+		u2 = -u2
 
-	if base_ramp_use_module_convention:
-		var aabb_mod: AABB = mesh.get_aabb()
-		var ref_x: float = maxf(absf(aabb_mod.size.x), 0.001)
-		var ref_y: float = maxf(absf(aabb_mod.size.y), 0.001)
-		var ref_z: float = maxf(absf(aabb_mod.size.z), 0.001)
-		var fill_mod: float = maxf(base_ramp_fill_ratio, 0.001)
-		var sx_mod: float = maxf((_cell_size * fill_mod) / ref_x, 0.001)
-		var sz_mod: float = maxf((_cell_size * fill_mod) / ref_z, 0.001)
-		var sy_mod: float = maxf((rise / ref_y) * maxf(base_ramp_depth_scale, 0.001), 0.001)
-		if base_ramp_max_scale > 0.0:
-			sx_mod = minf(sx_mod, base_ramp_max_scale)
-			sy_mod = minf(sy_mod, base_ramp_max_scale)
-			sz_mod = minf(sz_mod, base_ramp_max_scale)
+	var corners: Vector4 = _cell_corners(cx, cz)
+	var low_y: float = min(min(corners.x, corners.y), min(corners.z, corners.w))
+	var high_y: float = max(max(corners.x, corners.y), max(corners.z, corners.w))
+	var rise: float = maxf(high_y - low_y, 0.0001)
+	var run: float = maxf(_cell_size, 0.0001)
 
-		var right_mod: Vector3 = Vector3.UP.cross(uphill).normalized()
-		if right_mod.length_squared() < 1e-8:
-			right_mod = Vector3.RIGHT
-		var up_mod: Vector3 = Vector3.UP
-		var basis_mod: Basis = Basis(right_mod * sx_mod, up_mod * sy_mod, uphill * sz_mod)
-
-		var target_center_low: Vector3 = Vector3(
-			_ox + (float(cx) + 0.5) * _cell_size,
-			low_y + base_ramp_offset,
-			_oz + (float(cz) + 0.5) * _cell_size
-		)
-		var anchor_local_mod: Vector3 = Vector3(
-			aabb_mod.position.x + aabb_mod.size.x * 0.5,
-			aabb_mod.position.y,
-			aabb_mod.position.z + aabb_mod.size.z * 0.5
-		)
-		var origin_mod: Vector3 = target_center_low - (basis_mod * anchor_local_mod)
-		return Transform3D(basis_mod, origin_mod)
-
-	var right: Vector3 = Vector3.UP.cross(uphill).normalized()
-	if right.length_squared() < 1e-8:
-		right = Vector3.RIGHT
-	var slope_ratio: float = rise / maxf(_cell_size, 0.0001)
-	var normal: Vector3 = (Vector3.UP - uphill * slope_ratio).normalized()
-	if normal.length_squared() < 1e-8:
-		normal = Vector3.UP
-	var tangent: Vector3 = right.cross(normal).normalized()
-	if tangent.dot(uphill) < 0.0:
-		tangent = -tangent
-
-	var axis_n: int = clampi(base_ramp_mesh_normal_axis, 0, 2)
-	var axis_u: int = _ramp_uphill_axis_index()
-	var axis_u_sign: float = _ramp_uphill_axis_sign()
-	if axis_u == axis_n:
-		if not _base_ramp_axis_conflict_warned:
-			_base_ramp_axis_conflict_warned = true
-			push_warning("ArenaBlockyTerrain: base_ramp_mesh_uphill_axis conflicts with base_ramp_mesh_normal_axis; auto-correcting uphill axis.")
-		axis_u = 2 if axis_n != 2 else 0
-	else:
-		_base_ramp_axis_conflict_warned = false
-	var axis_r: int = 3 - axis_n - axis_u
-
-	var cols: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
-	cols[axis_n] = normal
-	cols[axis_u] = tangent * axis_u_sign
-	cols[axis_r] = right
-	var rot: Basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
+	var r_axis: Vector3 = Vector3.UP.cross(u2).normalized()
+	if r_axis.length_squared() < 1e-8:
+		r_axis = Vector3.RIGHT
+	var t_u: Vector3 = (u2 * run + Vector3.UP * rise).normalized()
+	if t_u.length_squared() < 1e-8:
+		t_u = u2
+	var n_axis: Vector3 = r_axis.cross(t_u).normalized()
+	if n_axis.length_squared() < 1e-8:
+		n_axis = Vector3.UP
+	var basis_dir: Basis = Basis(r_axis, n_axis, t_u).orthonormalized()
 
 	var aabb: AABB = mesh.get_aabb()
-	var ref_r: float = maxf(absf(aabb.size[axis_r]), 0.001)
-	var ref_u: float = maxf(absf(aabb.size[axis_u]), 0.001)
-	var ref_n: float = maxf(absf(aabb.size[axis_n]), 0.001)
+	var ref_x: float = maxf(absf(aabb.size.x), 0.001)
+	var ref_y: float = maxf(absf(aabb.size.y), 0.001)
+	var ref_z: float = maxf(absf(aabb.size.z), 0.001)
 	var fill: float = maxf(base_ramp_fill_ratio, 0.001)
-	var sx: float = maxf((_cell_size * fill) / ref_r, 0.001)
-	var su: float = maxf((sqrt(_cell_size * _cell_size + rise * rise) * fill) / ref_u, 0.001)
-	var sn: float = maxf(base_ramp_depth_scale / ref_n, 0.001)
+	var sx: float = maxf((_cell_size * fill) / ref_x, 0.001)
+	var sy: float = maxf((rise * maxf(base_ramp_depth_scale, 0.001)) / ref_y, 0.001)
+	var sz: float = maxf((_cell_size * fill) / ref_z, 0.001)
 	if base_ramp_max_scale > 0.0:
 		sx = minf(sx, base_ramp_max_scale)
-		su = minf(su, base_ramp_max_scale)
-		sn = minf(sn, base_ramp_max_scale)
-	var scale_vec: Vector3 = Vector3.ONE
-	scale_vec[axis_r] = sx
-	scale_vec[axis_u] = su
-	scale_vec[axis_n] = sn
-	var basis: Basis = rot.scaled(scale_vec)
+		sy = minf(sy, base_ramp_max_scale)
+		sz = minf(sz, base_ramp_max_scale)
+	var basis: Basis = Basis(basis_dir.x * sx, basis_dir.y * sy, basis_dir.z * sz)
 
 	var center: Vector3 = Vector3(
 		_ox + (float(cx) + 0.5) * _cell_size,
-		low_y + rise * 0.5 + base_ramp_offset,
+		low_y,
 		_oz + (float(cz) + 0.5) * _cell_size
 	)
-	var center_local: Vector3 = aabb.position + aabb.size * 0.5
-	var origin: Vector3 = center - (basis * center_local)
+	var anchor_local: Vector3 = Vector3(
+		aabb.position.x + aabb.size.x * 0.5,
+		aabb.position.y,
+		aabb.position.z + aabb.size.z * 0.5
+	)
+	var origin: Vector3 = center - (basis * anchor_local)
+	origin += n_axis * base_ramp_offset
 	return Transform3D(basis, origin)
 
 func _base_wedge_mesh_for_slot(slot: int) -> Mesh:
@@ -3865,7 +3807,10 @@ func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int
 			meta.owner_edge_id = edge_id_a
 		else:
 			meta.owner_edge_id = edge_id_b
-		meta.ramp_edge_kind = _get_edge_slot(meta.owner_cell, meta.owner_edge_id, n)
+		if enable_base_wedges or enable_wall_wedge_decor:
+			meta.ramp_edge_kind = _get_edge_slot(meta.owner_cell, meta.owner_edge_id, n)
+		else:
+			meta.ramp_edge_kind = -1
 	else:
 		meta.ramp_dir = RAMP_NONE
 		meta.ramp_edge_kind = -1
