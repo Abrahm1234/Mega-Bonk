@@ -123,62 +123,62 @@ class_name ArenaBlockyTerrain
 @export_range(0.0, 0.5, 0.01) var seam_lock_soft: float = 0.06
 @export var debug_vertex_colors: bool = false
 @export var sun_height: float = 200.0
-@export var enable_wall_decor: bool = true
-@export var wall_decor_meshes: Array[Mesh] = []
-@export var wall_decor_offset: float = 0.03
-@export var wall_decor_fix_open_side: bool = true
-@export var wall_decor_debug_open_side: bool = false
-@export var wall_decor_open_side_epsilon: float = 0.05
-@export var wall_decor_open_side_use_raycast: bool = true
-@export_flags_3d_physics var wall_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
-@export_range(0.0, 1.0, 0.01) var wall_decor_max_abs_normal_y: float = 0.75
-@export var wall_decor_debug_log: bool = false
-@export var wall_decor_debug_verbose: bool = false
-@export var wall_decor_debug_max_logs: int = 300
-@export var wall_decor_debug_print_every: int = 50
-@export var wall_decor_debug_dump_under_surface: bool = true
-@export var wall_decor_debug_focus_fi: int = -1
-@export var wall_decor_debug_cov_details: bool = false
-@export var wall_decor_debug_invalid_samples: bool = false
+@export var enable_legacy_decor: bool = true
+@export var legacy_decor_meshes: Array[Mesh] = []
+@export var legacy_decor_offset: float = 0.03
+@export var legacy_decor_fix_open_side: bool = true
+@export var legacy_decor_debug_open_side: bool = false
+@export var legacy_decor_open_side_epsilon: float = 0.05
+@export var legacy_decor_open_side_use_raycast: bool = true
+@export_flags_3d_physics var legacy_decor_open_side_raycast_mask: int = 0xFFFF_FFFF
+@export_range(0.0, 1.0, 0.01) var legacy_decor_max_abs_normal_y: float = 0.75
+@export var legacy_decor_debug_log: bool = false
+@export var legacy_decor_debug_verbose: bool = false
+@export var legacy_decor_debug_max_logs: int = 300
+@export var legacy_decor_debug_print_every: int = 50
+@export var legacy_decor_debug_dump_under_surface: bool = true
+@export var legacy_decor_debug_focus_fi: int = -1
+@export var legacy_decor_debug_cov_details: bool = false
+@export var legacy_decor_debug_invalid_samples: bool = false
 @export var dbg_draw_rays: bool = false
 @export var dbg_draw_rays_clear_on_generate: bool = true
 @export var dbg_draw_rays_max: int = 3000
 @export var dbg_draw_rays_depth_test: bool = true
 @export var dbg_draw_rays_hit_markers: bool = true
-@export var wall_decor_surface_only: bool = false
-@export var wall_decor_surface_margin: float = 0.10
-@export var wall_decor_surface_probe_radius_cells: float = 0.55
-@export_range(0.0, 1.0, 0.05) var wall_decor_surface_probe_lateral_cells: float = 0.25
-@export var wall_decor_seed: int = 1337
-@export var wall_decor_min_height: float = 0.25
-@export var wall_decor_skip_trapezoids: bool = false
-@export var wall_decor_skip_occluder_caps: bool = true
-@export var wall_decor_occluder_epsilon: float = 0.05
-@export var wall_wedge_decor_skip_trapezoids: bool = false
-@export var wall_wedge_decor_skip_occluder_caps: bool = true
-@export var wall_wedge_decor_occluder_epsilon: float = 0.05
-@export var wall_decor_fit_to_face: bool = true
-@export var wall_decor_max_scale: float = 3.0
-@export var wall_decor_max_size: Vector2 = Vector2(0.0, 0.0)
-@export_range(0.01, 2.0, 0.01) var wall_decor_depth_scale: float = 20.0
-@export var enable_wall_wedge_decor: bool = true
-@export var wall_wedge_decor_meshes_ramp_left: Array[Mesh] = []
-@export var wall_wedge_decor_meshes_ramp_right: Array[Mesh] = []
-@export var wall_wedge_decor_meshes_overhang_left: Array[Mesh] = []
-@export var wall_wedge_decor_meshes_overhang_right: Array[Mesh] = []
-@export var wall_wedge_decor_seed: int = 1337
-@export var wall_wedge_decor_offset: float = 0.02
-@export var wall_wedge_decor_attach_far_side: bool = false
-@export var wall_wedge_decor_fit_to_face: bool = true
-@export var wall_wedge_decor_max_scale: float = 0.0 # 0 = unlimited (recommended if meshes are authored at unit size)
-@export var wall_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
-@export var wall_wedge_decor_min_world_y: float = -INF
-@export var wall_wedge_decor_depth_scale: float = 1.0
-@export var wall_wedge_decor_max_depth_cells: float = 0.0 # 0 = no clamp
-@export var wall_decor_flip_outward: bool = true
-@export var wall_decor_flip_facing: bool = false
-@export var wall_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
-@export var wall_decor_min_world_y: float = -INF
+@export var legacy_decor_surface_only: bool = false
+@export var legacy_decor_surface_margin: float = 0.10
+@export var legacy_decor_surface_probe_radius_cells: float = 0.55
+@export_range(0.0, 1.0, 0.05) var legacy_decor_surface_probe_lateral_cells: float = 0.25
+@export var legacy_decor_seed: int = 1337
+@export var legacy_decor_min_height: float = 0.25
+@export var legacy_decor_skip_trapezoids: bool = false
+@export var legacy_decor_skip_occluder_caps: bool = true
+@export var legacy_decor_occluder_epsilon: float = 0.05
+@export var legacy_wedge_decor_skip_trapezoids: bool = false
+@export var legacy_wedge_decor_skip_occluder_caps: bool = true
+@export var legacy_wedge_decor_occluder_epsilon: float = 0.05
+@export var legacy_decor_fit_to_face: bool = true
+@export var legacy_decor_max_scale: float = 3.0
+@export var legacy_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export_range(0.01, 2.0, 0.01) var legacy_decor_depth_scale: float = 20.0
+@export var enable_legacy_wedge_decor: bool = true
+@export var legacy_wedge_decor_meshes_ramp_left: Array[Mesh] = []
+@export var legacy_wedge_decor_meshes_ramp_right: Array[Mesh] = []
+@export var legacy_wedge_decor_meshes_overhang_left: Array[Mesh] = []
+@export var legacy_wedge_decor_meshes_overhang_right: Array[Mesh] = []
+@export var legacy_wedge_decor_seed: int = 1337
+@export var legacy_wedge_decor_offset: float = 0.02
+@export var legacy_wedge_decor_attach_far_side: bool = false
+@export var legacy_wedge_decor_fit_to_face: bool = true
+@export var legacy_wedge_decor_max_scale: float = 0.0 # 0 = unlimited (recommended if meshes are authored at unit size)
+@export var legacy_wedge_decor_max_size: Vector2 = Vector2(0.0, 0.0)
+@export var legacy_wedge_decor_min_world_y: float = -INF
+@export var legacy_wedge_decor_depth_scale: float = 1.0
+@export var legacy_wedge_decor_max_depth_cells: float = 0.0 # 0 = no clamp
+@export var legacy_decor_flip_outward: bool = true
+@export var legacy_decor_flip_facing: bool = false
+@export var legacy_decor_attach_far_side: bool = false # attach mesh's Z-min (false) or Z-max (true) to the wall surface
+@export var legacy_decor_min_world_y: float = -INF
 @export var enable_floor_decor: bool = true
 @export var floor_decor_meshes: Array[Mesh] = []
 @export var floor_decor_seed: int = 24601
@@ -234,15 +234,15 @@ var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
 
 func _wd(msg: String) -> void:
-	if not wall_decor_debug_log:
+	if not legacy_decor_debug_log:
 		return
-	if _wd_logs >= wall_decor_debug_max_logs:
+	if _wd_logs >= legacy_decor_debug_max_logs:
 		return
 	_wd_logs += 1
 	print("[WALL_DECOR] ", msg)
 
 func _wd_fi(fi: int, msg: String) -> void:
-	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
+	if legacy_decor_debug_focus_fi >= 0 and fi != legacy_decor_debug_focus_fi:
 		return
 	_wd(msg)
 
@@ -251,9 +251,9 @@ func _dbg_tunnel(msg: String) -> void:
 		print("[TUNNEL] ", msg)
 
 func _wd_dbg_sample(fi: int, label: String, p: Vector3, h: float) -> void:
-	if not wall_decor_debug_invalid_samples:
+	if not legacy_decor_debug_invalid_samples:
 		return
-	if wall_decor_debug_focus_fi >= 0 and fi != wall_decor_debug_focus_fi:
+	if legacy_decor_debug_focus_fi >= 0 and fi != legacy_decor_debug_focus_fi:
 		return
 
 	var n: int = max(2, cells_per_side)
@@ -324,7 +324,7 @@ class WallFace:
 		self.is_trapezoid = trapezoid
 		self.key = k
 
-var _wall_faces: Array[WallFace] = []
+var _legacy_faces: Array[WallFace] = []
 class FaceMeta extends RefCounted:
 	var cell_a: Vector2i = Vector2i(-1, -1)
 	var cell_b: Vector2i = Vector2i(-1, -1)
@@ -343,7 +343,7 @@ var _edge_flags: PackedInt32Array
 var _edge_nb: PackedInt32Array
 var _edge_slot: PackedInt32Array
 
-var _wall_decor_root: Node3D = null
+var _legacy_decor_root: Node3D = null
 var _shaft_faces: Array[WallFace] = []
 var _shaft_decor_root: Node3D = null
 var _shaft_face_key_next: int = 1
@@ -551,7 +551,7 @@ func _edge_is_overhang(ramp_c: Vector2i, edge_id: int, nb_c: Vector2i, n: int) -
 		return false
 	var ramp_ec: Vector2 = _edge_pair(_cell_corners(ramp_c.x, ramp_c.y), edge_id)
 	var nb_ec: Vector2 = _edge_pair(_cell_corners(nb_c.x, nb_c.y), _edge_opposite(edge_id))
-	var margin: float = maxf(0.01, wall_decor_surface_margin)
+	var margin: float = maxf(0.01, legacy_decor_surface_margin)
 	return (nb_ec.x > ramp_ec.x + margin) and (nb_ec.y > ramp_ec.y + margin)
 
 func _tag_ramp_side_slots(n: int) -> void:
@@ -585,7 +585,7 @@ func _tag_ramp_side_slots(n: int) -> void:
 							slot = WEDGE_SLOT_OVERHANG_RIGHT
 				_set_edge_slot(c, edge_id, slot, n)
 				side_edges_tagged += 1
-	if wall_decor_debug_verbose:
+	if legacy_decor_debug_verbose:
 		_wd("[WEDGE_TAG] ramp_side_edges expected=%d tagged=%d missing=%d" % [side_edges_expected, side_edges_tagged, maxi(0, side_edges_expected - side_edges_tagged)])
 
 func _tag_edge_pair(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
@@ -2305,7 +2305,7 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 # -----------------------------
 func _build_mesh_and_collision(n: int) -> void:
 	n = max(2, n)
-	_wall_faces.clear()
+	_legacy_faces.clear()
 	_floor_faces.clear()
 	var tunnel_ceil_y: float = _tunnel_ceil_resolved
 	if tunnel_ceil_y == 0.0:
@@ -2477,15 +2477,11 @@ func _build_mesh_and_collision(n: int) -> void:
 	_ensure_base_visuals_root()
 	_rebuild_base_floor_visuals()
 	_rebuild_base_wall_visuals()
-	if wall_decor_open_side_use_raycast:
-		call_deferred("_rebuild_wall_decor_after_physics")
-	else:
-		_rebuild_wall_decor()
 	_rebuild_floor_decor()
 
-func _rebuild_wall_decor_after_physics() -> void:
+func _rebuild_legacy_decor_after_physics() -> void:
 	await get_tree().physics_frame
-	_rebuild_wall_decor()
+	_rebuild_legacy_decor()
 
 func _ensure_base_visuals_root() -> void:
 	var terrain_body: Node = get_node_or_null("TerrainBody")
@@ -2541,10 +2537,10 @@ func _rebuild_base_wall_visuals() -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = base_wall_mesh
-	mm.instance_count = _wall_faces.size()
+	mm.instance_count = _legacy_faces.size()
 	var wall_aabb: AABB = base_wall_mesh.get_aabb()
-	for i in range(_wall_faces.size()):
-		var wf: WallFace = _wall_faces[i]
+	for i in range(_legacy_faces.size()):
+		var wf: WallFace = _legacy_faces[i]
 		var xf: Transform3D = _base_wall_transform_for_face(wf, wall_aabb, base_wall_offset, base_wall_depth_scale)
 		mm.set_instance_transform(i, xf)
 
@@ -2559,9 +2555,9 @@ func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: f
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = max(face.width / ref_w, 0.1)
 	var sy: float = max(face.height / ref_h, 0.1)
-	if wall_decor_max_scale > 0.0:
-		sx = min(sx, wall_decor_max_scale)
-		sy = min(sy, wall_decor_max_scale)
+	if legacy_decor_max_scale > 0.0:
+		sx = min(sx, legacy_decor_max_scale)
+		sy = min(sy, legacy_decor_max_scale)
 	var sz: float = maxf(0.001, depth_scale)
 
 	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
@@ -2570,14 +2566,14 @@ func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: f
 	var origin: Vector3 = target_world - (basis * anchor_local)
 	return Transform3D(basis, origin)
 
-func _ensure_wall_decor_root() -> void:
-	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
+func _ensure_legacy_decor_root() -> void:
+	if _legacy_decor_root != null and is_instance_valid(_legacy_decor_root):
 		return
-	_wall_decor_root = get_node_or_null("WallDecor") as Node3D
-	if _wall_decor_root == null:
-		_wall_decor_root = Node3D.new()
-		_wall_decor_root.name = "WallDecor"
-		add_child(_wall_decor_root)
+	_legacy_decor_root = get_node_or_null("LegacyDecor") as Node3D
+	if _legacy_decor_root == null:
+		_legacy_decor_root = Node3D.new()
+		_legacy_decor_root.name = "LegacyDecor"
+		add_child(_legacy_decor_root)
 
 func _ensure_floor_decor_root() -> void:
 	if _floor_decor_root != null and is_instance_valid(_floor_decor_root):
@@ -2614,7 +2610,7 @@ func _basis_from_face(face: WallFace) -> Basis:
 	else:
 		n = n.normalized()
 
-	if wall_decor_flip_outward:
+	if legacy_decor_flip_outward:
 		n = -n
 
 	var u: Vector3 = Vector3.UP.cross(n)
@@ -2700,7 +2696,7 @@ func _sample_top_surface_y_wide(
 	hint_dir: Vector3 = Vector3.ZERO,
 	use_min: bool = false
 ) -> float:
-	var r: float = _cell_size * wall_decor_surface_probe_lateral_cells
+	var r: float = _cell_size * legacy_decor_surface_probe_lateral_cells
 	var dirs: Array[Vector3] = [
 		Vector3(1, 0, 0), Vector3(-1, 0, 0),
 		Vector3(0, 0, 1), Vector3(0, 0, -1),
@@ -2742,8 +2738,8 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 		dir = dir.normalized()
 
 	var probe: float = maxf(
-		wall_decor_open_side_epsilon + 0.001,
-		_cell_size * wall_decor_surface_probe_radius_cells
+		legacy_decor_open_side_epsilon + 0.001,
+		_cell_size * legacy_decor_surface_probe_radius_cells
 	)
 
 	var p_f := Vector3(center.x + dir.x * probe, center.y, center.z + dir.z * probe)
@@ -2755,7 +2751,7 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 	var valid_f := (h_f > _NEG_INF * 0.5)
 	var valid_b := (h_b > _NEG_INF * 0.5)
 
-	var margin: float = wall_decor_surface_margin
+	var margin: float = legacy_decor_surface_margin
 	var cover_f: bool = valid_f and (h_f > top_y + margin)
 	var cover_b: bool = valid_b and (h_b > top_y + margin)
 
@@ -2767,9 +2763,9 @@ func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3
 		"probe": probe, "margin": margin
 	}
 
-func _wall_decor_open_side_effective_raycast_mask() -> int:
-	if wall_decor_open_side_raycast_mask != -1 and wall_decor_open_side_raycast_mask != 0xFFFF_FFFF:
-		return wall_decor_open_side_raycast_mask
+func _legacy_decor_open_side_effective_raycast_mask() -> int:
+	if legacy_decor_open_side_raycast_mask != -1 and legacy_decor_open_side_raycast_mask != 0xFFFF_FFFF:
+		return legacy_decor_open_side_raycast_mask
 
 	var terrain_body: Node = get_node_or_null("TerrainBody")
 	if terrain_body is CollisionObject3D:
@@ -2777,10 +2773,10 @@ func _wall_decor_open_side_effective_raycast_mask() -> int:
 		if terrain_collision.collision_layer != 0:
 			return terrain_collision.collision_layer
 
-	return wall_decor_open_side_raycast_mask
+	return legacy_decor_open_side_raycast_mask
 
 func _is_open_air_ray(from: Vector3, to: Vector3) -> bool:
-	var hit := _raycast_dbg(from, to, _wall_decor_open_side_effective_raycast_mask(), [], false)
+	var hit := _raycast_dbg(from, to, _legacy_decor_open_side_effective_raycast_mask(), [], false)
 	return hit.is_empty()
 
 func _is_open_air_ray_3probe(from: Vector3, to: Vector3, half_height: float) -> bool:
@@ -2971,11 +2967,11 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 		return Vector3.FORWARD
 	n = n.normalized()
 
-	var probe: float = maxf(0.25, _cell_size * wall_decor_surface_probe_radius_cells)
+	var probe: float = maxf(0.25, _cell_size * legacy_decor_surface_probe_radius_cells)
 	var center := face.center
 
 	# Optional raycast (will only be meaningful if physics has the colliders registered this frame)
-	if wall_decor_open_side_use_raycast:
+	if legacy_decor_open_side_use_raycast:
 		var eps := 0.05
 		var probe_h: float = maxf(height_step * 0.5, _cell_size * 0.25)
 		var open_f := _is_open_air_ray_3probe(center + n * eps, center + n * probe, probe_h)
@@ -2996,7 +2992,7 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 		return -n
 
 	# If essentially equal, prefer pointing away from arena center (stable tie-break)
-	if absf(h_plus - h_minus) < wall_decor_open_side_epsilon:
+	if absf(h_plus - h_minus) < legacy_decor_open_side_epsilon:
 		var side: float = float(max(2, cells_per_side)) * _cell_size
 		var map_center := Vector3(_ox + side * 0.5, center.y, _oz + side * 0.5)
 		var to_center := map_center - center
@@ -3042,8 +3038,8 @@ func _hash_wall_face(center: Vector3, n: Vector3) -> int:
 func _get_arena_center_approx() -> Vector3:
 	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
-func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	if not (enable_wall_decor or enable_wall_wedge_decor):
+func _capture_legacy_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	if not (enable_legacy_decor or enable_legacy_wedge_decor):
 		return
 
 	_wd_face_i += 1
@@ -3104,7 +3100,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var center := (aa + bb + cc + dd) * 0.25
 	var dir_h := Vector3(n.x, 0.0, n.z)
 	if dir_h.length_squared() < 1e-8:
-		if wall_decor_debug_verbose:
+		if legacy_decor_debug_verbose:
 			_wd("SKIP fi=%d DEGENERATE_DIR center=%s n=%s" % [fi, _fmt_v3(center), _fmt_v3(n)])
 		return
 	dir_h = dir_h.normalized()
@@ -3116,26 +3112,26 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var h_side: float = _NEG_INF
 	var p_side: Vector3 = Vector3.ZERO
 
-	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+	if legacy_decor_debug_verbose and (fi % maxi(1, legacy_decor_debug_print_every) == 0):
 		_wd("CAP fi=%d center=%s n=%s top=%.3f bot=%.3f h_f=%.3f h_b=%.3f below_both=%s" % [fi, _fmt_v3(center), _fmt_v3(n), top_y, bot_y, float(cov["h_f"]), float(cov["h_b"]), str(bool(cov["covered"]))])
 
 	# ---- NEW: keep only wall-ish faces for decor, and orient toward open air ----
 	# Skip near-horizontal quads that can accidentally get captured as "walls".
-	if abs(n.y) > wall_decor_max_abs_normal_y:
-		if wall_decor_debug_verbose:
+	if abs(n.y) > legacy_decor_max_abs_normal_y:
+		if legacy_decor_debug_verbose:
 			_wd("SKIP fi=%d NEAR_HORIZONTAL n=%s" % [fi, _fmt_v3(n)])
 		return
 
 	var open_sy_f: float = INF
 	var open_sy_b: float = INF
-	if wall_decor_fix_open_side:
+	if legacy_decor_fix_open_side:
 		# Open-side direction for decor placement (robust for large cell sizes).
 		var dir := Vector3(n.x, 0.0, n.z)
 		if dir.length_squared() > 1e-8:
 			dir = dir.normalized()
 
 			# IMPORTANT: probe must cross into the neighboring column.
-			var probe := maxf(wall_decor_open_side_epsilon + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+			var probe := maxf(legacy_decor_open_side_epsilon + 0.001, _cell_size * legacy_decor_surface_probe_radius_cells)
 			var chosen := "TIE"
 			var cover_f: bool = bool(cov["cover_f"])
 			var cover_b: bool = bool(cov["cover_b"])
@@ -3147,20 +3143,20 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			elif cover_b and not cover_f:
 				n = dir
 				chosen = "FWD"
-			elif wall_decor_open_side_use_raycast:
-				var eps: float = wall_decor_open_side_epsilon
+			elif legacy_decor_open_side_use_raycast:
+				var eps: float = legacy_decor_open_side_epsilon
 				var f_from := center + dir * eps
 				var b_from := center - dir * eps
 				var probe_h: float = maxf(height_step * 0.5, _cell_size * 0.25)
 				var open_f := _is_open_air_ray_3probe(f_from, f_from + dir * probe, probe_h)
 				var open_b := _is_open_air_ray_3probe(b_from, b_from - dir * probe, probe_h)
-				if wall_decor_debug_open_side:
+				if legacy_decor_debug_open_side:
 					var extra := ""
-					if wall_decor_debug_verbose:
+					if legacy_decor_debug_verbose:
 						var to_f := f_from + dir * probe
 						var to_b := b_from - dir * probe
 						extra = " from_f=%s to_f=%s from_b=%s to_b=%s" % [_fmt_v3(f_from), _fmt_v3(to_f), _fmt_v3(b_from), _fmt_v3(to_b)]
-					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _wall_decor_open_side_effective_raycast_mask(), extra])
+					_wd("OPEN_RAY fi=%d dir=%s probe=%.3f open_f=%s open_b=%s mask=%d%s" % [fi, _fmt_v3(dir), probe, str(open_f), str(open_b), _legacy_decor_open_side_effective_raycast_mask(), extra])
 
 				if open_f and not open_b:
 					n = dir
@@ -3176,7 +3172,7 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					open_sy_b = h_b
 					n = dir if h_f < h_b else -dir
 					chosen = "FWD" if h_f < h_b else "BACK"
-					if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+					if legacy_decor_debug_verbose and (fi % maxi(1, legacy_decor_debug_print_every) == 0):
 						_wd("OPEN_RAY_FALLBACK fi=%d h_f=%.3f h_b=%.3f chosen=%s" % [fi, h_f, h_b, chosen])
 			else:
 				var sy_f := _sample_top_surface_y_wide(center.x + dir.x * probe, center.z + dir.z * probe, dir, true)
@@ -3197,12 +3193,12 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 					n = dir if away else -dir
 					chosen = "FWD" if away else "BACK"
 
-				if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
+				if legacy_decor_debug_verbose and (fi % maxi(1, legacy_decor_debug_print_every) == 0):
 					_wd("OPEN fi=%d dir=%s probe=%.3f h_f=%.3f h_b=%.3f chosen=%s" % [fi, _fmt_v3(dir), probe, sy_f, sy_b, chosen])
 	# ---- END NEW ----
 
-	if wall_decor_surface_only:
-		p_side = center + n * (wall_decor_open_side_epsilon + 0.001)
+	if legacy_decor_surface_only:
+		p_side = center + n * (legacy_decor_open_side_epsilon + 0.001)
 		h_side = _wd_surface_only_ceiling_y_at(p_side)
 
 		var p_center: Vector3 = center
@@ -3215,23 +3211,23 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 			_wd_dbg_sample(fi, "SURF_CENTER_INVALID", p_center, h_center)
 
 		var h_ceiling: float = maxf(h_side, h_center)
-		below_surface = h_ceiling > top_y + wall_decor_surface_margin
+		below_surface = h_ceiling > top_y + legacy_decor_surface_margin
 
-		if wall_decor_debug_cov_details:
-			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%s h_center=%s h_ceiling=%s margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, str(h_side), str(h_center), str(h_ceiling), wall_decor_surface_margin, str(below_surface), str(p_side), str(n)])
+		if legacy_decor_debug_cov_details:
+			_wd_fi(fi, "SURF_ONLY fi=%d top=%.3f h_side=%s h_center=%s h_ceiling=%s margin=%.3f below=%s p_side=%s n=%s" % [fi, top_y, str(h_side), str(h_center), str(h_ceiling), legacy_decor_surface_margin, str(below_surface), str(p_side), str(n)])
 
 	if below_surface:
-		if wall_decor_debug_dump_under_surface:
+		if legacy_decor_debug_dump_under_surface:
 			var h_center_dbg: float = _wd_surface_only_ceiling_y_at(center)
 			_wd("SKIP fi=%d SURF_ONLY_CEILING top=%.3f h_side=%.3f h_center=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f p_side=%s center=%s n=%s" % [fi, top_y, h_side, h_center_dbg, float(cov["h_f"]), float(cov["h_b"]), float(cov["probe"]), float(cov["margin"]), _fmt_v3(p_side), _fmt_v3(center), _fmt_v3(n)])
 		return
 
-	if wall_decor_debug_verbose and (fi % maxi(1, wall_decor_debug_print_every) == 0):
-		_wd("OUT fi=%d outward_final=%s offset=%.3f" % [fi, _fmt_v3(n), wall_decor_offset])
+	if legacy_decor_debug_verbose and (fi % maxi(1, legacy_decor_debug_print_every) == 0):
+		_wd("OUT fi=%d outward_final=%s offset=%.3f" % [fi, _fmt_v3(n), legacy_decor_offset])
 
-	if wall_decor_debug_log:
-		var should_log := fi % maxi(wall_decor_debug_print_every, 1) == 0
-		if wall_decor_debug_dump_under_surface and below_surface:
+	if legacy_decor_debug_log:
+		var should_log := fi % maxi(legacy_decor_debug_print_every, 1) == 0
+		if legacy_decor_debug_dump_under_surface and below_surface:
 			should_log = true
 		if should_log:
 			var msg := "center=%s normal=%s y=[%.3f..%.3f] h_f=%.3f h_b=%.3f sy_f=%.3f sy_b=%.3f" % [
@@ -3252,24 +3248,24 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	var h1 := edge1.length()
 	var is_trap := absf(h0 - h1) > 0.01
 
-	if maxf(h0, h1) < wall_decor_min_height:
+	if maxf(h0, h1) < legacy_decor_min_height:
 		return
 
 	var width := (bb - aa).length()
 	var height := maxf(h0, h1)
 	var key: int = _hash_wall_face(center, n)
 
-	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
+	_legacy_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
 func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
-	if _wall_faces.is_empty():
+	if _legacy_faces.is_empty():
 		return
 	if not _in_bounds(cell_a.x, cell_a.y, n):
 		return
 	if not _in_bounds(cell_b.x, cell_b.y, n):
 		return
 
-	var wf: WallFace = _wall_faces[_wall_faces.size() - 1]
+	var wf: WallFace = _legacy_faces[_legacy_faces.size() - 1]
 	var meta := FaceMeta.new()
 	meta.cell_a = cell_a
 	meta.cell_b = cell_b
@@ -3413,45 +3409,45 @@ func _decor_global_aabb(pad: float = 2.0) -> AABB:
 func _wd_slot_meshes(slot: int) -> Array[Mesh]:
 	match slot:
 		WEDGE_SLOT_RAMP_LEFT:
-			return wall_wedge_decor_meshes_ramp_left
+			return legacy_wedge_decor_meshes_ramp_left
 		WEDGE_SLOT_RAMP_RIGHT:
-			return wall_wedge_decor_meshes_ramp_right
+			return legacy_wedge_decor_meshes_ramp_right
 		WEDGE_SLOT_OVERHANG_LEFT:
-			return wall_wedge_decor_meshes_overhang_left
+			return legacy_wedge_decor_meshes_overhang_left
 		WEDGE_SLOT_OVERHANG_RIGHT:
-			return wall_wedge_decor_meshes_overhang_right
+			return legacy_wedge_decor_meshes_overhang_right
 		_:
 			return []
 
-func _rebuild_wall_decor() -> void:
-	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
+func _rebuild_legacy_decor() -> void:
+	var has_rect_decor: bool = enable_legacy_decor and not legacy_decor_meshes.is_empty()
 	var has_wedge_decor: bool = false
-	if enable_wall_wedge_decor:
+	if enable_legacy_wedge_decor:
 		for wslot: int in range(WEDGE_SLOT_COUNT):
 			if not _wd_slot_meshes(wslot).is_empty():
 				has_wedge_decor = true
 				break
 	if not has_rect_decor and not has_wedge_decor:
-		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
-			for child: Node in _wall_decor_root.get_children():
+		if _legacy_decor_root != null and is_instance_valid(_legacy_decor_root):
+			for child: Node in _legacy_decor_root.get_children():
 				child.queue_free()
 		return
 
-	_ensure_wall_decor_root()
+	_ensure_legacy_decor_root()
 
 
-	if wall_decor_debug_cov_details and not _wd_raycast_sanity_done:
+	if legacy_decor_debug_cov_details and not _wd_raycast_sanity_done:
 		_wd_raycast_sanity_done = true
 
 		var a := Vector3(0.0, 10000.0, 0.0)
 		var b := Vector3(0.0, -10000.0, 0.0)
-		var hit := _raycast_dbg(a, b, _wall_decor_open_side_effective_raycast_mask(), [], false)
-		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_wall_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
+		var hit := _raycast_dbg(a, b, _legacy_decor_open_side_effective_raycast_mask(), [], false)
+		_wd("[WALL_DECOR] RAY_SANITY mask=%d hit=%s pos=%s collider=%s" % [_legacy_decor_open_side_effective_raycast_mask(), str(not hit.is_empty()), str(hit.get("position", Vector3.ZERO)), str(hit.get("collider", null))])
 
-	for child: Node in _wall_decor_root.get_children():
+	for child: Node in _legacy_decor_root.get_children():
 		child.queue_free()
 
-	var rect_variant_count: int = wall_decor_meshes.size()
+	var rect_variant_count: int = legacy_decor_meshes.size()
 	var decor_aabb := _decor_global_aabb(4.0)
 
 	var rect_counts: Array[int] = []
@@ -3489,7 +3485,7 @@ func _rebuild_wall_decor() -> void:
 	var dbg_rect_skip_surface_count: int = 0
 	var dbg_rect_skip_surface_place: int = 0
 	var trap_count: int = 0
-	for face in _wall_faces:
+	for face in _legacy_faces:
 		if face.is_trapezoid:
 			trap_count += 1
 			var parts := _split_trapezoid_wall_face_for_decor(face)
@@ -3497,54 +3493,54 @@ func _rebuild_wall_decor() -> void:
 			var wedge: WallFace = parts[1]
 
 			# Wall decor routing: never place full trapezoids in hangover space.
-			if wall_decor_skip_trapezoids:
+			if legacy_decor_skip_trapezoids:
 				pass
 			elif rect != null:
 				# When not skipping trapezoids, allow thinner under-ramp rect parts so
 				# wall decor can still appear beneath ramps.
-				var rect_min_h: float = maxf(0.05, wall_decor_min_height * 0.25)
+				var rect_min_h: float = maxf(0.05, legacy_decor_min_height * 0.25)
 				if rect.height >= rect_min_h:
 					rect_faces.append(rect)
 
 			# Wedge decor routing:
 			if wedge == null or wedge.height <= 0.0005:
 				dbg_wedge_skip_null_or_short += 1
-			elif wall_wedge_decor_skip_trapezoids:
+			elif legacy_wedge_decor_skip_trapezoids:
 				dbg_wedge_skip_trap += 1
 			else:
 				wedge_faces.append(wedge)
 		else:
 			rect_faces.append(face)
 	print(
-		"wall_faces:", _wall_faces.size(),
+		"wall_faces:", _legacy_faces.size(),
 		" trapezoids:", trap_count,
 		" rect_faces:", rect_faces.size(),
 		" wedge_faces:", wedge_faces.size(),
-		" wall_skip_trap:", wall_decor_skip_trapezoids,
-		" wedge_skip_trap:", wall_wedge_decor_skip_trapezoids
+		" wall_skip_trap:", legacy_decor_skip_trapezoids,
+		" wedge_skip_trap:", legacy_wedge_decor_skip_trapezoids
 	)
-	if wall_decor_surface_only:
+	if legacy_decor_surface_only:
 		_wd("[WD] surface_only active (rect skip counters populated in count/place passes)")
 
 	if has_rect_decor:
 		for f: WallFace in rect_faces:
-			if wall_decor_skip_occluder_caps:
-				if _wall_face_min_world_y(f) <= tunnel_occluder_y + wall_decor_occluder_epsilon:
+			if legacy_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(f) <= tunnel_occluder_y + legacy_decor_occluder_epsilon:
 					continue
-			if _wall_face_min_world_y(f) < wall_decor_min_world_y:
+			if _wall_face_min_world_y(f) < legacy_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and f.width > wall_decor_max_size.x:
+			if legacy_decor_max_size.x > 0.0 and f.width > legacy_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and f.height > wall_decor_max_size.y:
+			if legacy_decor_max_size.y > 0.0 and f.height > legacy_decor_max_size.y:
 				continue
-			if wall_decor_surface_only:
+			if legacy_decor_surface_only:
 				var max_y_count: float = _wall_face_max_world_y(f)
-				if max_y_count > outer_floor_height + wall_decor_surface_margin:
+				if max_y_count > outer_floor_height + legacy_decor_surface_margin:
 					var cov_count := _wall_face_covered_both_sides(f.center, max_y_count, f.normal)
 					if bool(cov_count["covered"]):
 						dbg_rect_skip_surface_count += 1
 						continue
-			var idx: int = (f.key + wall_decor_seed) % rect_variant_count
+			var idx: int = (f.key + legacy_decor_seed) % rect_variant_count
 			rect_counts[idx] += 1
 
 	if has_wedge_decor:
@@ -3557,22 +3553,22 @@ func _rebuild_wall_decor() -> void:
 				if m_count == null or m_count.ramp_edge_kind < 0:
 					dbg_wedge_missing_slot_count += 1
 			var place_outward_count: Vector3 = _wall_place_outward(wf)
-			if wall_wedge_decor_skip_occluder_caps:
-				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+			if legacy_wedge_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + legacy_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_count += 1
 					continue # COUNT_PASS: SKIP_OCCLUDER_CAP
-			if wall_decor_surface_only:
+			if legacy_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf)
 				var outward := place_outward_count
 
-				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var eps := maxf(legacy_decor_open_side_epsilon, 0.001)
 				var p_side := wf.center + outward * (eps + 0.001)
 
 				var h_side := _wd_surface_only_ceiling_y_at(p_side)
 				var h_center := _wd_surface_only_ceiling_y_at(wf.center)
 				var h_ceiling := maxf(h_side, h_center)
 
-				if h_ceiling > top_y + wall_decor_surface_margin:
+				if h_ceiling > top_y + legacy_decor_surface_margin:
 					dbg_wedge_skip_surface_count += 1
 					continue # COUNT_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf):
@@ -3586,7 +3582,7 @@ func _rebuild_wall_decor() -> void:
 			var slot_meshes_c: Array[Mesh] = _wd_slot_meshes(slot_c)
 			if slot_meshes_c.is_empty():
 				continue
-			var widx: int = absi(wf.key + wall_wedge_decor_seed) % slot_meshes_c.size()
+			var widx: int = absi(wf.key + legacy_wedge_decor_seed) % slot_meshes_c.size()
 			wedge_counts_by_slot[slot_c][widx] += 1
 
 	var rect_mmi_by_variant: Array[MultiMeshInstance3D] = []
@@ -3602,16 +3598,16 @@ func _rebuild_wall_decor() -> void:
 
 		var mm: MultiMesh = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = wall_decor_meshes[v]
+		mm.mesh = legacy_decor_meshes[v]
 		mm.instance_count = rect_counts[v]
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		mmi.custom_aabb = decor_aabb
 
-		_wall_decor_root.add_child(mmi)
+		_legacy_decor_root.add_child(mmi)
 		rect_mmi_by_variant[v] = mmi
-		rect_aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
+		rect_aabb_by_variant[v] = legacy_decor_meshes[v].get_aabb()
 
 	var wedge_mmi_by_slot: Array = []
 	var wedge_aabb_by_slot: Array = []
@@ -3643,7 +3639,7 @@ func _rebuild_wall_decor() -> void:
 			wmmi.multimesh = wmm
 			wmmi.custom_aabb = decor_aabb
 
-			_wall_decor_root.add_child(wmmi)
+			_legacy_decor_root.add_child(wmmi)
 			wedge_mmi_by_slot[sidx2][wv] = wmmi
 			wedge_aabb_by_slot[sidx2][wv] = wmesh.get_aabb()
 
@@ -3678,32 +3674,32 @@ func _rebuild_wall_decor() -> void:
 		var placement_fi: int = 0
 		for f2: WallFace in rect_faces:
 			placement_fi += 1
-			if wall_decor_skip_occluder_caps:
-				if _wall_face_min_world_y(f2) <= tunnel_occluder_y + wall_decor_occluder_epsilon:
+			if legacy_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(f2) <= tunnel_occluder_y + legacy_decor_occluder_epsilon:
 					continue
-			if _wall_face_min_world_y(f2) < wall_decor_min_world_y:
+			if _wall_face_min_world_y(f2) < legacy_decor_min_world_y:
 				continue
-			if wall_decor_max_size.x > 0.0 and f2.width > wall_decor_max_size.x:
+			if legacy_decor_max_size.x > 0.0 and f2.width > legacy_decor_max_size.x:
 				continue
-			if wall_decor_max_size.y > 0.0 and f2.height > wall_decor_max_size.y:
+			if legacy_decor_max_size.y > 0.0 and f2.height > legacy_decor_max_size.y:
 				continue
-			var vsel: int = (f2.key + wall_decor_seed) % rect_variant_count
+			var vsel: int = (f2.key + legacy_decor_seed) % rect_variant_count
 			var mmi2: MultiMeshInstance3D = rect_mmi_by_variant[vsel]
 			if mmi2 == null:
 				continue
 
 			var aabb: AABB = rect_aabb_by_variant[vsel]
-			var xf: Transform3D = _decor_transform_for_face(f2, aabb, wall_decor_offset)
+			var xf: Transform3D = _decor_transform_for_face(f2, aabb, legacy_decor_offset)
 			var outward := _wall_place_outward(f2)
 			var top_y: float = maxf(maxf(f2.a.y, f2.b.y), maxf(f2.c.y, f2.d.y))
 			var cov_p := _wall_face_covered_both_sides(f2.center, top_y, outward)
 			var under_now: bool = bool(cov_p["covered"])
 
 			# --- extra under-map diagnostics ---
-			if wall_decor_debug_dump_under_surface and wall_decor_debug_cov_details:
+			if legacy_decor_debug_dump_under_surface and legacy_decor_debug_cov_details:
 				# local surface directly above this wall face (independent of outward choice)
 				var h_here := _sample_top_surface_y_wide(f2.center.x, f2.center.z, Vector3.ZERO, true)
-				var under_local := (h_here > top_y + wall_decor_surface_margin)
+				var under_local := (h_here > top_y + legacy_decor_surface_margin)
 
 				if under_local and not under_now:
 					var n_dir := f2.normal
@@ -3725,7 +3721,7 @@ func _rebuild_wall_decor() -> void:
 					)
 			# --- end diagnostics ---
 
-			if wall_decor_surface_only and top_y > outer_floor_height + wall_decor_surface_margin and under_now:
+			if legacy_decor_surface_only and top_y > outer_floor_height + legacy_decor_surface_margin and under_now:
 				dbg_rect_skip_surface_place += 1
 				_wd("SKIP PLACED_UNDER fi=%d top=%.3f h_f=%.3f h_b=%.3f probe=%.3f margin=%.3f center=%s n=%s" % [placement_fi, top_y, float(cov_p["h_f"]), float(cov_p["h_b"]), float(cov_p["probe"]), float(cov_p["margin"]), _fmt_v3(f2.center), _fmt_v3(f2.normal)])
 				continue
@@ -3745,22 +3741,22 @@ func _rebuild_wall_decor() -> void:
 				if m_place == null or m_place.ramp_edge_kind < 0:
 					dbg_wedge_missing_slot_place += 1
 			var place_outward: Vector3 = _wall_place_outward(wf2)
-			if wall_wedge_decor_skip_occluder_caps:
-				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
+			if legacy_wedge_decor_skip_occluder_caps:
+				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + legacy_wedge_decor_occluder_epsilon:
 					dbg_wedge_skip_occluder_place += 1
 					continue # PLACE_PASS: SKIP_OCCLUDER_CAP
-			if wall_decor_surface_only:
+			if legacy_decor_surface_only:
 				var top_y := _wall_face_max_world_y(wf2)
 				var outward := place_outward
 
-				var eps := maxf(wall_decor_open_side_epsilon, 0.001)
+				var eps := maxf(legacy_decor_open_side_epsilon, 0.001)
 				var p_side := wf2.center + outward * (eps + 0.001)
 
 				var h_side := _wd_surface_only_ceiling_y_at(p_side)
 				var h_center := _wd_surface_only_ceiling_y_at(wf2.center)
 				var h_ceiling := maxf(h_side, h_center)
 
-				if h_ceiling > top_y + wall_decor_surface_margin:
+				if h_ceiling > top_y + legacy_decor_surface_margin:
 					dbg_wedge_skip_surface_place += 1
 					continue # PLACE_PASS: SKIP_SURFACE_ONLY
 			if not _allow_wedge_decor_face(wf2):
@@ -3775,7 +3771,7 @@ func _rebuild_wall_decor() -> void:
 			if slot_meshes_p.is_empty():
 				dbg_wedge_skip_variant_place += 1
 				continue
-			var wsel: int = absi(wf2.key + wall_wedge_decor_seed) % slot_meshes_p.size()
+			var wsel: int = absi(wf2.key + legacy_wedge_decor_seed) % slot_meshes_p.size()
 			var wmmi2: MultiMeshInstance3D = wedge_mmi_by_slot[slot_p][wsel]
 			if wmmi2 == null:
 				dbg_wedge_skip_variant_place += 1
@@ -3783,7 +3779,7 @@ func _rebuild_wall_decor() -> void:
 
 			var waabb: AABB = wedge_aabb_by_slot[slot_p][wsel]
 
-			if wall_decor_debug_verbose and (wall_decor_debug_focus_fi < 0 or wall_decor_debug_focus_fi == wedge_place_fi):
+			if legacy_decor_debug_verbose and (legacy_decor_debug_focus_fi < 0 or legacy_decor_debug_focus_fi == wedge_place_fi):
 				var ramp_dir_dbg: int = int(cls_p.get("ramp_dir", RAMP_NONE))
 				var edge_dbg: int = int(cls_p.get("edge_id", -1))
 				_wd("[WEDGE] fi=%d key=%d trap=%s center=%s outward=%s ramp_dir=%d edge=%d slot=%d" % [wedge_place_fi, wf2.key, str(wf2.is_trapezoid), _fmt_v3(wf2.center), _fmt_v3(place_outward), ramp_dir_dbg, edge_dbg, slot_p])
@@ -3791,7 +3787,7 @@ func _rebuild_wall_decor() -> void:
 			if wf2.center.y < outer_floor_height - under_floor_margin:
 				dbg_wedge_skip_under_surface_place += 1
 				continue
-			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, place_outward, wall_wedge_decor_offset)
+			var wxf: Transform3D = _decor_transform_for_wedge_face(wf2, waabb, place_outward, legacy_wedge_decor_offset)
 
 			var wwi: int = int(wedge_write_i_by_slot[slot_p][wsel])
 			wmmi2.multimesh.set_instance_transform(wwi, wxf)
@@ -3874,8 +3870,8 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
-	var eps: float = maxf(wall_decor_open_side_epsilon, 0.001)
-	var probe: float = maxf(eps + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+	var eps: float = maxf(legacy_decor_open_side_epsilon, 0.001)
+	var probe: float = maxf(eps + 0.001, _cell_size * legacy_decor_surface_probe_radius_cells)
 	var step: float = minf(probe, _cell_size * 0.49)
 	step = maxf(step, eps + 0.001)
 
@@ -4042,8 +4038,8 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 		var hint: Vector3 = -outward
 		var h_ceiling_near: float = _wd_surface_only_ceiling_y_at(p_side_near, hint)
 		var h_ceiling_far: float = _wd_surface_only_ceiling_y_at(p_side_far, hint)
-		var cover_near: bool = h_ceiling_near > top_y + wall_decor_surface_margin
-		var cover_far: bool = h_ceiling_far > top_y + wall_decor_surface_margin
+		var cover_near: bool = h_ceiling_near > top_y + legacy_decor_surface_margin
+		var cover_far: bool = h_ceiling_far > top_y + legacy_decor_surface_margin
 		seam_overhang = cover_near or cover_far
 
 	if seam_overhang:
@@ -4053,11 +4049,11 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 
 func _allow_wedge_decor_face(face: WallFace) -> bool:
 	# Note: wedge decor filtering must rely on wedge-specific settings only.
-	if _wall_face_min_world_y(face) < wall_wedge_decor_min_world_y:
+	if _wall_face_min_world_y(face) < legacy_wedge_decor_min_world_y:
 		return false
-	if wall_wedge_decor_max_size.x > 0.0 and face.width > wall_wedge_decor_max_size.x:
+	if legacy_wedge_decor_max_size.x > 0.0 and face.width > legacy_wedge_decor_max_size.x:
 		return false
-	if wall_wedge_decor_max_size.y > 0.0 and face.height > wall_wedge_decor_max_size.y:
+	if legacy_wedge_decor_max_size.y > 0.0 and face.height > legacy_wedge_decor_max_size.y:
 		return false
 	return true
 
@@ -4067,7 +4063,7 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 	if outward.length_squared() < 1e-8:
 		outward = Vector3.FORWARD
 	outward = outward.normalized()
-	if wall_decor_fix_open_side:
+	if legacy_decor_fix_open_side:
 		var top_y: float = maxf(maxf(face.a.y, face.b.y), maxf(face.c.y, face.d.y))
 		var cov := _wall_face_covered_both_sides(face.center, top_y, outward)
 		var cover_f: bool = bool(cov["cover_f"])
@@ -4080,11 +4076,11 @@ func _wall_place_outward(face: WallFace) -> Vector3:
 			outward = _pick_open_side_outward(face)
 	return outward
 
-func _rebuild_shaft_wall_decor() -> void:
+func _rebuild_shaft_legacy_decor() -> void:
 	_shaft_decor_faces = 0
 	_shaft_decor_instances = 0
 
-	var has_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty() and tunnel_shaft_decor_density > 0.0
+	var has_decor: bool = enable_legacy_decor and not legacy_decor_meshes.is_empty() and tunnel_shaft_decor_density > 0.0
 	if not has_decor:
 		if _shaft_decor_root != null and is_instance_valid(_shaft_decor_root):
 			for child: Node in _shaft_decor_root.get_children():
@@ -4101,7 +4097,7 @@ func _rebuild_shaft_wall_decor() -> void:
 	if _shaft_faces.is_empty():
 		return
 
-	var variant_count: int = wall_decor_meshes.size()
+	var variant_count: int = legacy_decor_meshes.size()
 	var counts: Array[int] = []
 	counts.resize(variant_count)
 	for i: int in range(variant_count):
@@ -4126,7 +4122,7 @@ func _rebuild_shaft_wall_decor() -> void:
 			continue
 
 		_shaft_decor_faces += 1
-		var idx: int = (f.key + wall_decor_seed) % variant_count
+		var idx: int = (f.key + legacy_decor_seed) % variant_count
 		counts[idx] += 1
 
 	var mmi_by_variant: Array[MultiMeshInstance3D] = []
@@ -4144,7 +4140,7 @@ func _rebuild_shaft_wall_decor() -> void:
 
 		var mm: MultiMesh = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = wall_decor_meshes[v]
+		mm.mesh = legacy_decor_meshes[v]
 		mm.instance_count = counts[v]
 
 		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
@@ -4153,7 +4149,7 @@ func _rebuild_shaft_wall_decor() -> void:
 
 		_shaft_decor_root.add_child(mmi)
 		mmi_by_variant[v] = mmi
-		aabb_by_variant[v] = wall_decor_meshes[v].get_aabb()
+		aabb_by_variant[v] = legacy_decor_meshes[v].get_aabb()
 
 	var write_i: Array[int] = []
 	write_i.resize(variant_count)
@@ -4172,13 +4168,13 @@ func _rebuild_shaft_wall_decor() -> void:
 		if ((y_idx2 + side_idx2) % step) != 0:
 			continue
 
-		var idx2: int = (f2.key + wall_decor_seed) % variant_count
+		var idx2: int = (f2.key + legacy_decor_seed) % variant_count
 		var mmi2 := mmi_by_variant[idx2]
 		if mmi2 == null:
 			continue
 
 		var aabb: AABB = aabb_by_variant[idx2]
-		var xf: Transform3D = _decor_transform_for_face_with_outward(f2, aabb, wall_decor_offset, f2.normal)
+		var xf: Transform3D = _decor_transform_for_face_with_outward(f2, aabb, legacy_decor_offset, f2.normal)
 
 		var mm2: MultiMesh = mmi2.multimesh
 		var wi: int = write_i[idx2]
@@ -4195,13 +4191,13 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 
 	var place_dir := outward
 	var fwd_dir := place_dir
-	if wall_decor_flip_facing:
+	if legacy_decor_flip_facing:
 		fwd_dir = -fwd_dir
 
 	var rot: Basis = _basis_from_outward(fwd_dir)
 
-	var attach_far: bool = wall_decor_attach_far_side
-	if wall_decor_flip_facing:
+	var attach_far: bool = legacy_decor_attach_far_side
+	if legacy_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
 
@@ -4209,13 +4205,13 @@ func _decor_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = 1.0
 	var sy: float = 1.0
-	if wall_decor_fit_to_face:
+	if legacy_decor_fit_to_face:
 		sx = max(face.width / ref_w, 0.1)
 		sy = max(face.height / ref_h, 0.1)
-		if wall_decor_max_scale > 0.0:
-			sx = min(sx, wall_decor_max_scale)
-			sy = min(sy, wall_decor_max_scale)
-	var sz: float = wall_decor_depth_scale
+		if legacy_decor_max_scale > 0.0:
+			sx = min(sx, legacy_decor_max_scale)
+			sy = min(sy, legacy_decor_max_scale)
+	var sz: float = legacy_decor_depth_scale
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
@@ -4255,16 +4251,16 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = 1.0
 	var sy: float = 1.0
-	if wall_wedge_decor_fit_to_face:
+	if legacy_wedge_decor_fit_to_face:
 		sx = max(face.width / ref_w, 0.1)
 		sy = max(face.height / ref_h, 0.1)
-		if wall_wedge_decor_max_scale > 0.0:
-			sx = min(sx, wall_wedge_decor_max_scale)
-			sy = min(sy, wall_wedge_decor_max_scale)
+		if legacy_wedge_decor_max_scale > 0.0:
+			sx = min(sx, legacy_wedge_decor_max_scale)
+			sy = min(sy, legacy_wedge_decor_max_scale)
 
-	var sz: float = wall_wedge_decor_depth_scale
-	if wall_wedge_decor_max_depth_cells > 0.0:
-		var max_world: float = _cell_size * wall_wedge_decor_max_depth_cells
+	var sz: float = legacy_wedge_decor_depth_scale
+	if legacy_wedge_decor_max_depth_cells > 0.0:
+		var max_world: float = _cell_size * legacy_wedge_decor_max_depth_cells
 		var ref_z: float = maxf(aabb.size.z, 0.001)
 		var max_scale: float = max_world / ref_z
 		sz = minf(sz, max_scale)
@@ -4276,7 +4272,7 @@ func _decor_transform_for_wedge_face(face: WallFace, aabb: AABB, place_outward: 
 	var center_y: float = aabb.position.y + aabb.size.y * 0.5
 	var z_min: float = aabb.position.z
 	var z_max: float = aabb.position.z + aabb.size.z
-	var attach_far: bool = wall_wedge_decor_attach_far_side
+	var attach_far: bool = legacy_wedge_decor_attach_far_side
 	var attach_z: float = z_max if attach_far else z_min
 	var anchor_local := Vector3(center_x, center_y, attach_z)
 
@@ -4297,13 +4293,13 @@ func _decor_transform_for_face_with_outward(face: WallFace, aabb: AABB, outward_
 	place_dir = place_dir.normalized()
 
 	var fwd_dir := place_dir
-	if wall_decor_flip_facing:
+	if legacy_decor_flip_facing:
 		fwd_dir = -fwd_dir
 
 	var rot: Basis = _basis_from_outward(fwd_dir)
 
-	var attach_far: bool = wall_decor_attach_far_side
-	if wall_decor_flip_facing:
+	var attach_far: bool = legacy_decor_attach_far_side
+	if legacy_decor_flip_facing:
 		rot = Basis(Vector3.UP, PI) * rot
 		attach_far = not attach_far
 
@@ -4311,13 +4307,13 @@ func _decor_transform_for_face_with_outward(face: WallFace, aabb: AABB, outward_
 	var ref_h: float = max(aabb.size.y, 0.001)
 	var sx: float = 1.0
 	var sy: float = 1.0
-	if wall_decor_fit_to_face:
+	if legacy_decor_fit_to_face:
 		sx = max(face.width / ref_w, 0.1)
 		sy = max(face.height / ref_h, 0.1)
-		if wall_decor_max_scale > 0.0:
-			sx = min(sx, wall_decor_max_scale)
-			sy = min(sy, wall_decor_max_scale)
-	var sz: float = wall_decor_depth_scale
+		if legacy_decor_max_scale > 0.0:
+			sx = min(sx, legacy_decor_max_scale)
+			sy = min(sy, legacy_decor_max_scale)
+	var sz: float = legacy_decor_depth_scale
 
 	var decor_basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
 
@@ -4997,7 +4993,7 @@ func _build_tunnel_mesh(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	_tunnel_mesh_instance.mesh = mesh
 	_tunnel_collision_shape.shape = mesh.create_trimesh_shape()
-	_rebuild_shaft_wall_decor()
+	_rebuild_shaft_legacy_decor()
 
 func _sync_sun() -> void:
 	var sun := get_node_or_null("SUN") as DirectionalLight3D
@@ -5104,7 +5100,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 		c = d
 		d = tmp
 	if capture_decor:
-		_capture_wall_face(a, b, c, d)
+		_capture_legacy_face(a, b, c, d)
 		var n_cells: int = max(2, cells_per_side)
 		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
 			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_E, n_cells)
@@ -5165,7 +5161,7 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 		c = d
 		d = tmp
 	if capture_decor:
-		_capture_wall_face(a, b, c, d)
+		_capture_legacy_face(a, b, c, d)
 		var n_cells: int = max(2, cells_per_side)
 		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
 			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_S, n_cells)
