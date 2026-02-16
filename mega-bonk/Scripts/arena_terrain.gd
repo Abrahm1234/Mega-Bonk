@@ -220,6 +220,8 @@ class_name ArenaBlockyTerrain
 @export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
 @export var base_ramp_module_has_side_walls: bool = true # when true, skip spawning base wall/wedge meshes on ramp side faces
 @export var base_ramp_up_dir_points_to_high_neighbor: bool = true # set false if generator stores direction toward low neighbor
+@export var base_ramp_auto_validate_up_dir: bool = true
+@export var base_ramp_log_up_dir_validation: bool = true
 @export var enable_base_wedges: bool = false # ramp-side wedge composition is disabled for module ramps
 @export var base_wedge_mesh_ramp_left: Mesh
 @export var base_wedge_mesh_ramp_right: Mesh
@@ -262,6 +264,7 @@ var _tunnel_ceil_resolved: float = 0.0
 var _tunnel_base_floor_y: float = 0.0
 var _tunnel_base_ceil_y: float = 0.0
 var _tunnel_entrance_cells: Array[Vector2i] = []
+var _ramp_dir_points_to_high_resolved: bool = true
 
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
@@ -657,6 +660,66 @@ func _opposite_dir(dir: int) -> int:
 			return RAMP_SOUTH
 		_:
 			return dir
+
+func _cell_avg_height(x: int, z: int, n: int) -> float:
+	if not _in_bounds(x, z, n):
+		return 0.0
+	var i: int = _idx2(x, z, n)
+	if i < 0 or i >= _heights.size():
+		return 0.0
+	return _heights[i]
+
+func _dbg_validate_ramp_dir(cell_x: int, cell_y: int, n: int) -> bool:
+	var i: int = _idx2(cell_x, cell_y, n)
+	if i < 0 or i >= _ramp_up_dir.size():
+		return false
+	var dir: int = _ramp_up_dir[i]
+	if dir == RAMP_NONE:
+		return false
+	var nx: int = cell_x + (1 if dir == RAMP_EAST else (-1 if dir == RAMP_WEST else 0))
+	var ny: int = cell_y + (1 if dir == RAMP_SOUTH else (-1 if dir == RAMP_NORTH else 0))
+	if not _in_bounds(nx, ny, n):
+		return false
+	var a: float = _cell_avg_height(cell_x, cell_y, n)
+	var b: float = _cell_avg_height(nx, ny, n)
+	if b < a:
+		if base_ramp_log_up_dir_validation:
+			push_warning("Ramp dir appears downhill at (%d,%d): flipping may be required" % [cell_x, cell_y])
+		return true
+	return false
+
+func _resolve_ramp_dir_semantics(n: int) -> void:
+	_ramp_dir_points_to_high_resolved = base_ramp_up_dir_points_to_high_neighbor
+	if not base_ramp_auto_validate_up_dir:
+		return
+	var uphill_hits: int = 0
+	var downhill_hits: int = 0
+	for i: int in range(mini(_ramp_up_dir.size(), n * n)):
+		var dir: int = _ramp_up_dir[i]
+		if dir == RAMP_NONE:
+			continue
+		var x: int = i % n
+		var z: int = i / n
+		var nb: Vector2i = _neighbor_of(x, z, dir)
+		if not _in_bounds(nb.x, nb.y, n):
+			continue
+		var a: float = _cell_avg_height(x, z, n)
+		var b: float = _cell_avg_height(nb.x, nb.y, n)
+		if b > a:
+			uphill_hits += 1
+		elif b < a:
+			downhill_hits += 1
+			_dbg_validate_ramp_dir(x, z, n)
+	if uphill_hits == 0 and downhill_hits == 0:
+		return
+	_ramp_dir_points_to_high_resolved = downhill_hits <= uphill_hits
+	if base_ramp_log_up_dir_validation and _ramp_dir_points_to_high_resolved != base_ramp_up_dir_points_to_high_neighbor:
+		push_warning("Ramp dir semantics auto-detected as %s (uphill=%d downhill=%d); overriding base_ramp_up_dir_points_to_high_neighbor=%s" % [
+			"points to HIGH" if _ramp_dir_points_to_high_resolved else "points to LOW",
+			uphill_hits,
+			downhill_hits,
+			str(base_ramp_up_dir_points_to_high_neighbor)
+		])
 
 func _low_exit_ok(n: int, lx: int, lz: int, dir_up: int) -> bool:
 	var low_idx: int = lz * n + lx
@@ -1343,6 +1406,7 @@ func generate() -> void:
 		if guard >= ramp_regen_guard:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
+	_resolve_ramp_dir_semantics(n)
 	_tag_cells(n)
 	_tags_build_full_adjacency(n)
 	if enable_base_wedges or enable_wall_wedge_decor:
@@ -2307,9 +2371,10 @@ func _cell_corners(x: int, z: int) -> Vector4:
 	if not enable_ramps:
 		return Vector4(low_h, low_h, low_h, low_h)
 
-	var dir_up: int = _ramp_up_dir[idx]
-	if dir_up == RAMP_NONE:
+	var dir_up_raw: int = _ramp_up_dir[idx]
+	if dir_up_raw == RAMP_NONE:
 		return Vector4(low_h, low_h, low_h, low_h)
+	var dir_up: int = dir_up_raw if _ramp_dir_points_to_high_resolved else _opposite_dir(dir_up_raw)
 
 	var nb: Vector2i = _neighbor_of(x, z, dir_up)
 	if nb.x < 0 or nb.x >= n or nb.y < 0 or nb.y >= n:
@@ -2888,9 +2953,8 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	if dir_up == RAMP_NONE:
 		return Transform3D.IDENTITY
 
-	var u2: Vector3 = _ramp_uphill_dir_world(dir_up)
-	if not base_ramp_up_dir_points_to_high_neighbor:
-		u2 = -u2
+	var dir_up_resolved: int = dir_up if _ramp_dir_points_to_high_resolved else _opposite_dir(dir_up)
+	var u2: Vector3 = _ramp_uphill_dir_world(dir_up_resolved)
 
 	var corners: Vector4 = _cell_corners(cx, cz)
 	var low_y: float = min(min(corners.x, corners.y), min(corners.z, corners.w))
