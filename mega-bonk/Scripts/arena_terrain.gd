@@ -213,6 +213,7 @@ class_name ArenaBlockyTerrain
 @export var base_wall_max_scale: float = 0.0 # 0 = unlimited
 @export var base_wall_attach_far_side: bool = false
 @export var base_wall_flip_outward: bool = false
+@export var base_ramp_fill_ratio: float = 1.0
 @export var base_ramp_offset: float = 0.0
 @export var base_ramp_depth_scale: float = 1.0
 @export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
@@ -253,6 +254,7 @@ var _wd_raycast_sanity_done: bool = false
 var _base_visuals_root_missing_warned: bool = false
 var _terrain_mesh_missing_warned: bool = false
 var _terrain_collision_missing_warned: bool = false
+var _base_ramp_axis_conflict_warned: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -2753,8 +2755,16 @@ func _rebuild_base_ramp_visuals(n: int) -> int:
 	for i: int in range(n * n):
 		if i >= _ramp_up_dir.size():
 			continue
-		if _ramp_up_dir[i] != RAMP_NONE:
-			ramp_cells.append(i)
+		if _ramp_up_dir[i] == RAMP_NONE:
+			continue
+		var cx: int = i % n
+		var cz: int = i / n
+		if base_visuals_min_world_y > -INF:
+			var corners: Vector4 = _cell_corners(cx, cz)
+			var center_y: float = (corners.x + corners.y + corners.z + corners.w) * 0.25
+			if center_y < base_visuals_min_world_y:
+				continue
+		ramp_cells.append(i)
 
 	if ramp_cells.is_empty():
 		_base_ramps_mmi.multimesh = null
@@ -2807,7 +2817,12 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	var axis_u: int = _ramp_uphill_axis_index()
 	var axis_u_sign: float = _ramp_uphill_axis_sign()
 	if axis_u == axis_n:
+		if not _base_ramp_axis_conflict_warned:
+			_base_ramp_axis_conflict_warned = true
+			push_warning("ArenaBlockyTerrain: base_ramp_mesh_uphill_axis conflicts with base_ramp_mesh_normal_axis; auto-correcting uphill axis.")
 		axis_u = 2 if axis_n != 2 else 0
+	else:
+		_base_ramp_axis_conflict_warned = false
 	var axis_r: int = 3 - axis_n - axis_u
 
 	var cols: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
@@ -2820,8 +2835,9 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	var ref_r: float = maxf(absf(aabb.size[axis_r]), 0.001)
 	var ref_u: float = maxf(absf(aabb.size[axis_u]), 0.001)
 	var ref_n: float = maxf(absf(aabb.size[axis_n]), 0.001)
-	var sx: float = maxf(_cell_size / ref_r, 0.001)
-	var su: float = maxf(sqrt(_cell_size * _cell_size + rise * rise) / ref_u, 0.001)
+	var fill: float = maxf(base_ramp_fill_ratio, 0.001)
+	var sx: float = maxf((_cell_size * fill) / ref_r, 0.001)
+	var su: float = maxf((sqrt(_cell_size * _cell_size + rise * rise) * fill) / ref_u, 0.001)
 	var sn: float = maxf(base_ramp_depth_scale / ref_n, 0.001)
 	if base_ramp_max_scale > 0.0:
 		sx = minf(sx, base_ramp_max_scale)
