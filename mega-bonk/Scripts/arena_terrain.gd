@@ -219,6 +219,18 @@ class_name ArenaBlockyTerrain
 @export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
 @export_enum("X+", "X-", "Z+", "Z-") var base_ramp_mesh_uphill_axis: int = 2
 @export var base_ramp_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
+@export var enable_base_wedges: bool = false
+@export var base_wedge_mesh_ramp_left: Mesh
+@export var base_wedge_mesh_ramp_right: Mesh
+@export var base_wedge_mesh_overhang_left: Mesh
+@export var base_wedge_mesh_overhang_right: Mesh
+@export var base_wedge_material: Material
+@export var base_wedge_offset: float = 0.0
+@export var base_wedge_fit_to_face: bool = true
+@export var base_wedge_depth_scale: float = 1.0
+@export var base_wedge_max_scale: float = 0.0
+@export var base_wedge_attach_far_side: bool = false
+@export var base_wedge_min_world_y: float = -INF
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -227,6 +239,8 @@ class_name ArenaBlockyTerrain
 @onready var _base_floor_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseFloor") as MultiMeshInstance3D
 @onready var _base_walls_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWalls") as MultiMeshInstance3D
 @onready var _base_ramps_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseRamps") as MultiMeshInstance3D
+@onready var _base_wedges_root: Node3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWedges") as Node3D
+var _base_wedge_mmi_by_slot: Array[MultiMeshInstance3D] = []
 
 var _cell_size: float
 var _ox: float
@@ -2514,12 +2528,23 @@ func _build_mesh_and_collision(n: int) -> void:
 	var floor_instances: int = _rebuild_base_floor_visuals()
 	var wall_instances: int = _rebuild_base_wall_visuals()
 	var ramp_instances: int = _rebuild_base_ramp_visuals(n)
+	var wedge_stats: Dictionary = _rebuild_base_wedge_visuals()
 	if wall_decor_debug_verbose:
 		var ramp_cells: int = 0
 		for ridx: int in range(mini(_ramp_up_dir.size(), n * n)):
 			if _ramp_up_dir[ridx] != RAMP_NONE:
 				ramp_cells += 1
-		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d ramp_cells=%d ramp_instances=%d show_baked=%s" % [floor_instances, wall_instances, ramp_cells, ramp_instances, str(show_baked_debug_mesh)])
+		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d ramp_cells=%d ramp_instances=%d wedge_instances=%d wedge_missing_meta=%d wedge_missing_slot=%d wedge_missing_mesh=%d show_baked=%s" % [
+			floor_instances,
+			wall_instances,
+			ramp_cells,
+			ramp_instances,
+			int(wedge_stats.get("instances", 0)),
+			int(wedge_stats.get("missing_meta", 0)),
+			int(wedge_stats.get("missing_slot", 0)),
+			int(wedge_stats.get("missing_mesh", 0)),
+			str(show_baked_debug_mesh)
+		])
 	if wall_decor_open_side_use_raycast:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
@@ -2574,6 +2599,31 @@ func _ensure_base_visuals_root() -> void:
 		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
 			_base_ramps_mmi.owner = get_tree().edited_scene_root
 
+	if _base_wedges_root == null or not is_instance_valid(_base_wedges_root):
+		_base_wedges_root = _base_visuals_root.get_node_or_null("BaseWedges") as Node3D
+	if _base_wedges_root == null:
+		_base_wedges_root = Node3D.new()
+		_base_wedges_root.name = "BaseWedges"
+		_base_visuals_root.add_child(_base_wedges_root)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_wedges_root.owner = get_tree().edited_scene_root
+
+	if _base_wedge_mmi_by_slot.size() != WEDGE_SLOT_COUNT:
+		_base_wedge_mmi_by_slot.resize(WEDGE_SLOT_COUNT)
+	var slot_names: Array[String] = ["RampLeft", "RampRight", "OverhangLeft", "OverhangRight"]
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		var node_name: String = "BaseWedge" + slot_names[slot]
+		var mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot]
+		if mmi == null or not is_instance_valid(mmi):
+			mmi = _base_wedges_root.get_node_or_null(node_name) as MultiMeshInstance3D
+		if mmi == null:
+			mmi = MultiMeshInstance3D.new()
+			mmi.name = node_name
+			_base_wedges_root.add_child(mmi)
+			if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+				mmi.owner = get_tree().edited_scene_root
+		_base_wedge_mmi_by_slot[slot] = mmi
+
 
 func _want_base_floor_faces() -> bool:
 	return enable_base_visuals and base_floor_mesh != null
@@ -2584,13 +2634,21 @@ func _want_base_wall_faces() -> bool:
 func _want_base_ramp_visuals() -> bool:
 	return enable_base_visuals and base_ramp_mesh != null
 
+func _want_base_wedge_faces() -> bool:
+	if not enable_base_visuals or not enable_base_wedges:
+		return false
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		if _base_wedge_mesh_for_slot(slot) != null:
+			return true
+	return false
+
 func _want_floor_face_capture() -> bool:
 	var want_base: bool = _want_base_floor_faces()
 	var want_decor: bool = enable_floor_decor and not floor_decor_meshes.is_empty()
 	return want_base or want_decor
 
 func _want_wall_face_capture() -> bool:
-	var want_base: bool = _want_base_wall_faces()
+	var want_base: bool = _want_base_wall_faces() or _want_base_wedge_faces()
 	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
 	return want_base or want_decor
 
@@ -2857,6 +2915,115 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	var center_local: Vector3 = aabb.position + aabb.size * 0.5
 	var origin: Vector3 = center - (basis * center_local)
 	return Transform3D(basis, origin)
+
+func _base_wedge_mesh_for_slot(slot: int) -> Mesh:
+	match slot:
+		WEDGE_SLOT_RAMP_LEFT:
+			return base_wedge_mesh_ramp_left
+		WEDGE_SLOT_RAMP_RIGHT:
+			return base_wedge_mesh_ramp_right
+		WEDGE_SLOT_OVERHANG_LEFT:
+			return base_wedge_mesh_overhang_left
+		WEDGE_SLOT_OVERHANG_RIGHT:
+			return base_wedge_mesh_overhang_right
+		_:
+			return null
+
+func _base_wedge_transform_for_face(face: WallFace, aabb: AABB, outward: Vector3) -> Transform3D:
+	var z_dir: Vector3 = outward
+	z_dir.y = 0.0
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
+		if z_dir.length_squared() < 1e-8:
+			z_dir = Vector3.FORWARD
+	z_dir = z_dir.normalized()
+	var x_dir: Vector3 = Vector3.UP.cross(z_dir)
+	if x_dir.length_squared() < 1e-8:
+		x_dir = Vector3.RIGHT
+	x_dir = x_dir.normalized()
+	var y_dir: Vector3 = z_dir.cross(x_dir).normalized()
+	x_dir = y_dir.cross(z_dir).normalized()
+	var rot: Basis = Basis(x_dir, y_dir, z_dir).orthonormalized()
+
+	var ref_w: float = maxf(aabb.size.x, 0.001)
+	var ref_h: float = maxf(aabb.size.y, 0.001)
+	var sx: float = 1.0
+	var sy: float = 1.0
+	if base_wedge_fit_to_face:
+		sx = maxf(face.width / ref_w, 0.1)
+		sy = maxf(face.height / ref_h, 0.1)
+		if base_wedge_max_scale > 0.0:
+			sx = minf(sx, base_wedge_max_scale)
+			sy = minf(sy, base_wedge_max_scale)
+	var sz: float = maxf(base_wedge_depth_scale, 0.001)
+	if base_wedge_max_scale > 0.0:
+		sz = minf(sz, base_wedge_max_scale)
+
+	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	var attach_z: float = aabb.position.z + aabb.size.z if base_wedge_attach_far_side else aabb.position.z
+	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, attach_z)
+	var target_world: Vector3 = face.center + z_dir * base_wedge_offset
+	var origin: Vector3 = target_world - (basis * anchor_local)
+	return Transform3D(basis, origin)
+
+func _rebuild_base_wedge_visuals() -> Dictionary:
+	var stats: Dictionary = {
+		"instances": 0,
+		"missing_meta": 0,
+		"missing_slot": 0,
+		"missing_mesh": 0
+	}
+	if _base_wedge_mmi_by_slot.size() != WEDGE_SLOT_COUNT:
+		return stats
+
+	for slot_clear: int in range(WEDGE_SLOT_COUNT):
+		var clear_mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot_clear]
+		if clear_mmi != null and is_instance_valid(clear_mmi):
+			clear_mmi.multimesh = null
+
+	if not enable_base_visuals or not enable_base_wedges:
+		return stats
+
+	var faces_by_slot: Array = [[], [], [], []]
+	for wf: WallFace in _wall_faces:
+		if _wall_face_min_world_y(wf) < base_wedge_min_world_y:
+			continue
+		if not _wall_face_meta.has(wf.key):
+			stats["missing_meta"] = int(stats["missing_meta"]) + 1
+			continue
+		var meta: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if meta == null or meta.ramp_edge_kind < 0 or meta.ramp_edge_kind >= WEDGE_SLOT_COUNT:
+			stats["missing_slot"] = int(stats["missing_slot"]) + 1
+			continue
+		faces_by_slot[meta.ramp_edge_kind].append(wf)
+
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		var mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot]
+		if mmi == null or not is_instance_valid(mmi):
+			continue
+		var mesh: Mesh = _base_wedge_mesh_for_slot(slot)
+		var faces: Array = faces_by_slot[slot]
+		if mesh == null:
+			if not faces.is_empty():
+				stats["missing_mesh"] = int(stats["missing_mesh"]) + faces.size()
+			mmi.multimesh = null
+			continue
+		if faces.is_empty():
+			mmi.multimesh = null
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = faces.size()
+		mmi.multimesh = mm
+		mmi.material_override = base_wedge_material
+		var aabb: AABB = mesh.get_aabb()
+		for i: int in range(faces.size()):
+			var face: WallFace = faces[i]
+			var outward: Vector3 = _base_wall_place_outward(face)
+			mm.set_instance_transform(i, _base_wedge_transform_for_face(face, aabb, outward))
+		stats["instances"] = int(stats["instances"]) + faces.size()
+	return stats
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
@@ -3340,7 +3507,7 @@ func _get_arena_center_approx() -> Vector3:
 	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
 func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	var want_base: bool = _want_base_wall_faces()
+	var want_base: bool = _want_base_wall_faces() or _want_base_wedge_faces()
 	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
 	if not want_base and not want_decor:
 		return
