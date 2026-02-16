@@ -2750,7 +2750,6 @@ func _rebuild_base_ramp_visuals(n: int) -> int:
 		return 0
 
 	var ramp_cells: Array[int] = []
-	ramp_cells.reserve(n * n)
 	for i: int in range(n * n):
 		if i >= _ramp_up_dir.size():
 			continue
@@ -2790,7 +2789,7 @@ func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
 	var low_y: float = minf(h_here, h_nb)
 	var rise: float = absf(h_nb - h_here)
 	if rise < 0.0001:
-		rise = maxf(_height_step, 0.0001)
+		rise = maxf(height_step, 0.0001)
 
 	var uphill: Vector3 = _ramp_uphill_dir_world(dir_up)
 	var right: Vector3 = Vector3.UP.cross(uphill).normalized()
