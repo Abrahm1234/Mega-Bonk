@@ -195,10 +195,14 @@ class_name ArenaBlockyTerrain
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
 @export var show_baked_debug_mesh: bool = false
+@export var enable_base_visuals: bool = true
+@export var base_visuals_min_world_y: float = -INF
 @export var base_floor_mesh: Mesh
 @export var base_wall_mesh: Mesh
+@export var base_ramp_mesh: Mesh
 @export var base_floor_material: Material
 @export var base_wall_material: Material
+@export var base_ramp_material: Material
 @export_range(0.1, 2.0, 0.01) var base_floor_fill_ratio: float = 1.0
 @export var base_floor_offset: float = 0.0
 @export var base_floor_depth_scale: float = 1.0 # scale multiplier along mesh thickness axis
@@ -209,6 +213,11 @@ class_name ArenaBlockyTerrain
 @export var base_wall_max_scale: float = 0.0 # 0 = unlimited
 @export var base_wall_attach_far_side: bool = false
 @export var base_wall_flip_outward: bool = false
+@export var base_ramp_offset: float = 0.0
+@export var base_ramp_depth_scale: float = 1.0
+@export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
+@export_enum("X+", "X-", "Z+", "Z-") var base_ramp_mesh_uphill_axis: int = 2
+@export var base_ramp_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -216,6 +225,7 @@ class_name ArenaBlockyTerrain
 @onready var _base_visuals_root: Node3D = get_node_or_null("TerrainBody/BaseVisuals") as Node3D
 @onready var _base_floor_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseFloor") as MultiMeshInstance3D
 @onready var _base_walls_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWalls") as MultiMeshInstance3D
+@onready var _base_ramps_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseRamps") as MultiMeshInstance3D
 
 var _cell_size: float
 var _ox: float
@@ -2499,12 +2509,15 @@ func _build_mesh_and_collision(n: int) -> void:
 		_terrain_mesh_missing_warned = true
 		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainMesh is missing; baked debug mesh cannot be displayed.")
 	_ensure_base_visuals_root()
-	_rebuild_base_floor_visuals()
-	_rebuild_base_wall_visuals()
+	var floor_instances: int = _rebuild_base_floor_visuals()
+	var wall_instances: int = _rebuild_base_wall_visuals()
+	var ramp_instances: int = _rebuild_base_ramp_visuals(n)
 	if wall_decor_debug_verbose:
-		var floor_instances: int = _floor_faces.size() if base_floor_mesh != null else 0
-		var wall_instances: int = _wall_faces.size() if base_wall_mesh != null else 0
-		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d show_baked=%s" % [floor_instances, wall_instances, str(show_baked_debug_mesh)])
+		var ramp_cells: int = 0
+		for ridx: int in range(mini(_ramp_up_dir.size(), n * n)):
+			if _ramp_up_dir[ridx] != RAMP_NONE:
+				ramp_cells += 1
+		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d ramp_cells=%d ramp_instances=%d show_baked=%s" % [floor_instances, wall_instances, ramp_cells, ramp_instances, str(show_baked_debug_mesh)])
 	if wall_decor_open_side_use_raycast:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
@@ -2550,12 +2563,41 @@ func _ensure_base_visuals_root() -> void:
 		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
 			_base_walls_mmi.owner = get_tree().edited_scene_root
 
-func _rebuild_base_floor_visuals() -> void:
+	if _base_ramps_mmi == null or not is_instance_valid(_base_ramps_mmi):
+		_base_ramps_mmi = _base_visuals_root.get_node_or_null("BaseRamps") as MultiMeshInstance3D
+	if _base_ramps_mmi == null:
+		_base_ramps_mmi = MultiMeshInstance3D.new()
+		_base_ramps_mmi.name = "BaseRamps"
+		_base_visuals_root.add_child(_base_ramps_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_ramps_mmi.owner = get_tree().edited_scene_root
+
+
+func _want_base_floor_faces() -> bool:
+	return enable_base_visuals and base_floor_mesh != null
+
+func _want_base_wall_faces() -> bool:
+	return enable_base_visuals and base_wall_mesh != null
+
+func _want_base_ramp_visuals() -> bool:
+	return enable_base_visuals and base_ramp_mesh != null
+
+func _want_floor_face_capture() -> bool:
+	var want_base: bool = _want_base_floor_faces()
+	var want_decor: bool = enable_floor_decor and not floor_decor_meshes.is_empty()
+	return want_base or want_decor
+
+func _want_wall_face_capture() -> bool:
+	var want_base: bool = _want_base_wall_faces()
+	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
+	return want_base or want_decor
+
+func _rebuild_base_floor_visuals() -> int:
 	if _base_floor_mmi == null:
-		return
-	if base_floor_mesh == null:
+		return 0
+	if not enable_base_visuals or base_floor_mesh == null:
 		_base_floor_mmi.multimesh = null
-		return
+		return 0
 
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -2568,6 +2610,7 @@ func _rebuild_base_floor_visuals() -> void:
 
 	_base_floor_mmi.multimesh = mm
 	_base_floor_mmi.material_override = base_floor_material
+	return _floor_faces.size()
 
 func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	if mesh == null:
@@ -2624,12 +2667,12 @@ func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
 	var origin: Vector3 = target_world - (basis * center_local)
 	return Transform3D(basis, origin)
 
-func _rebuild_base_wall_visuals() -> void:
+func _rebuild_base_wall_visuals() -> int:
 	if _base_walls_mmi == null:
-		return
-	if base_wall_mesh == null:
+		return 0
+	if not enable_base_visuals or base_wall_mesh == null:
 		_base_walls_mmi.multimesh = null
-		return
+		return 0
 
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -2643,6 +2686,7 @@ func _rebuild_base_wall_visuals() -> void:
 
 	_base_walls_mmi.multimesh = mm
 	_base_walls_mmi.material_override = base_wall_material
+	return _wall_faces.size()
 
 func _base_wall_place_outward(face: WallFace) -> Vector3:
 	var outward: Vector3 = face.normal
@@ -2674,6 +2718,129 @@ func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: f
 	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, attach_z)
 	var target_world: Vector3 = face.center + outward * outward_offset
 	var origin: Vector3 = target_world - (basis * anchor_local)
+	return Transform3D(basis, origin)
+
+func _ramp_uphill_dir_world(dir: int) -> Vector3:
+	match dir:
+		RAMP_EAST:
+			return Vector3.RIGHT
+		RAMP_WEST:
+			return Vector3.LEFT
+		RAMP_SOUTH:
+			return Vector3.FORWARD
+		RAMP_NORTH:
+			return Vector3.BACK
+		_:
+			return Vector3.FORWARD
+
+func _ramp_uphill_axis_index() -> int:
+	return 0 if base_ramp_mesh_uphill_axis <= 1 else 2
+
+func _ramp_uphill_axis_sign() -> float:
+	return 1.0 if (base_ramp_mesh_uphill_axis == 0 or base_ramp_mesh_uphill_axis == 2) else -1.0
+
+func _rebuild_base_ramp_visuals(n: int) -> int:
+	if _base_ramps_mmi == null:
+		return 0
+	if not enable_base_visuals:
+		_base_ramps_mmi.multimesh = null
+		return 0
+	if base_ramp_mesh == null:
+		_base_ramps_mmi.multimesh = null
+		return 0
+
+	var ramp_cells: Array[int] = []
+	ramp_cells.reserve(n * n)
+	for i: int in range(n * n):
+		if i >= _ramp_up_dir.size():
+			continue
+		if _ramp_up_dir[i] != RAMP_NONE:
+			ramp_cells.append(i)
+
+	if ramp_cells.is_empty():
+		_base_ramps_mmi.multimesh = null
+		return 0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_ramp_mesh
+	mm.instance_count = ramp_cells.size()
+	_base_ramps_mmi.multimesh = mm
+	_base_ramps_mmi.material_override = base_ramp_material
+
+	for k: int in range(ramp_cells.size()):
+		var idx: int = ramp_cells[k]
+		mm.set_instance_transform(k, _base_ramp_transform_for_cell(idx, n, base_ramp_mesh))
+	return ramp_cells.size()
+
+func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
+	if mesh == null or idx < 0:
+		return Transform3D.IDENTITY
+
+	var cx: int = idx % n
+	var cz: int = idx / n
+	var dir_up: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
+	if dir_up == RAMP_NONE:
+		return Transform3D.IDENTITY
+
+	var nb: Vector2i = _neighbor_of(cx, cz, dir_up)
+	var nb_idx: int = _idx2(clampi(nb.x, 0, n - 1), clampi(nb.y, 0, n - 1), n)
+	var h_here: float = _heights[idx] if idx < _heights.size() else 0.0
+	var h_nb: float = _heights[nb_idx] if nb_idx < _heights.size() else h_here
+	var low_y: float = minf(h_here, h_nb)
+	var rise: float = absf(h_nb - h_here)
+	if rise < 0.0001:
+		rise = maxf(_height_step, 0.0001)
+
+	var uphill: Vector3 = _ramp_uphill_dir_world(dir_up)
+	var right: Vector3 = Vector3.UP.cross(uphill).normalized()
+	if right.length_squared() < 1e-8:
+		right = Vector3.RIGHT
+	var slope_ratio: float = rise / maxf(_cell_size, 0.0001)
+	var normal: Vector3 = (Vector3.UP - uphill * slope_ratio).normalized()
+	if normal.length_squared() < 1e-8:
+		normal = Vector3.UP
+	var tangent: Vector3 = right.cross(normal).normalized()
+	if tangent.dot(uphill) < 0.0:
+		tangent = -tangent
+
+	var axis_n: int = clampi(base_ramp_mesh_normal_axis, 0, 2)
+	var axis_u: int = _ramp_uphill_axis_index()
+	var axis_u_sign: float = _ramp_uphill_axis_sign()
+	if axis_u == axis_n:
+		axis_u = 2 if axis_n != 2 else 0
+	var axis_r: int = 3 - axis_n - axis_u
+
+	var cols: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	cols[axis_n] = normal
+	cols[axis_u] = tangent * axis_u_sign
+	cols[axis_r] = right
+	var rot: Basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
+
+	var aabb: AABB = mesh.get_aabb()
+	var ref_r: float = maxf(absf(aabb.size[axis_r]), 0.001)
+	var ref_u: float = maxf(absf(aabb.size[axis_u]), 0.001)
+	var ref_n: float = maxf(absf(aabb.size[axis_n]), 0.001)
+	var sx: float = maxf(_cell_size / ref_r, 0.001)
+	var su: float = maxf(sqrt(_cell_size * _cell_size + rise * rise) / ref_u, 0.001)
+	var sn: float = maxf(base_ramp_depth_scale / ref_n, 0.001)
+	if base_ramp_max_scale > 0.0:
+		sx = minf(sx, base_ramp_max_scale)
+		su = minf(su, base_ramp_max_scale)
+		sn = minf(sn, base_ramp_max_scale)
+	var scale_vec: Vector3 = Vector3.ONE
+	scale_vec[axis_r] = sx
+	scale_vec[axis_u] = su
+	scale_vec[axis_n] = sn
+	var basis: Basis = rot.scaled(scale_vec)
+
+	var center: Vector3 = Vector3(
+		_ox + (float(cx) + 0.5) * _cell_size,
+		low_y + rise * 0.5 + base_ramp_offset,
+		_oz + (float(cz) + 0.5) * _cell_size
+	)
+	var center_local: Vector3 = aabb.position + aabb.size * 0.5
+	var origin: Vector3 = center - (basis * center_local)
 	return Transform3D(basis, origin)
 
 func _ensure_wall_decor_root() -> void:
@@ -3114,6 +3281,11 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	return n if h_plus < h_minus else -n
 
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
+	var want_base: bool = _want_base_floor_faces()
+	var want_decor: bool = enable_floor_decor and not floor_decor_meshes.is_empty()
+	if not want_base and not want_decor:
+		return
+
 	var n: Vector3 = (b - a).cross(d - a)
 	if n.length() < 0.000001:
 		return
@@ -3122,7 +3294,11 @@ func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: in
 		n = -n
 
 	var center: Vector3 = (a + b + c + d) * 0.25
-	if center.y < floor_decor_min_world_y:
+	if want_base and center.y < base_visuals_min_world_y:
+		want_base = false
+	if want_decor and center.y < floor_decor_min_world_y:
+		want_decor = false
+	if not want_base and not want_decor:
 		return
 
 	var width: float = (b - a).length()
@@ -3149,7 +3325,15 @@ func _get_arena_center_approx() -> Vector3:
 	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
 func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	if not (enable_wall_decor or enable_wall_wedge_decor):
+	var want_base: bool = _want_base_wall_faces()
+	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
+	if not want_base and not want_decor:
+		return
+
+	var center_y: float = (a.y + b.y + c.y + d.y) * 0.25
+	if want_base and center_y < base_visuals_min_world_y:
+		want_base = false
+	if not want_base and not want_decor:
 		return
 
 	_wd_face_i += 1
@@ -4735,6 +4919,8 @@ func _rebuild_floor_decor() -> void:
 		buckets[i] = []
 
 	for face in _floor_faces:
+		if face.center.y < floor_decor_min_world_y:
+			continue
 		var pick: int = int(abs(face.key ^ floor_decor_seed)) % floor_decor_meshes.size()
 		buckets[pick].append(face)
 
@@ -5361,7 +5547,7 @@ func _add_cell_top_grid(
 	var idx: int = cell_z * max(2, cells_per_side) + cell_x
 	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
 	var is_ramp: bool = ramp_dir != RAMP_NONE
-	if enable_floor_decor and not floor_decor_meshes.is_empty():
+	if _want_floor_face_capture():
 		var f_a := Vector3(x0, h00, z0)
 		var f_b := Vector3(x1, h10, z0)
 		var f_c := Vector3(x1, h11, z1)
