@@ -2922,7 +2922,7 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_x: bool, capture_decor: bool = true) -> void:
+	normal_pos_x: bool) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2950,8 +2950,6 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 		tmp = c
 		c = d
 		d = tmp
-	if capture_decor:
-
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
@@ -2979,7 +2977,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 
 func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_z: bool, capture_decor: bool = true) -> void:
+	normal_pos_z: bool) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -3007,8 +3005,6 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 		tmp = c
 		c = d
 		d = tmp
-	if capture_decor:
-
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
 			_add_quad_grid(st, a, b, c, d,
