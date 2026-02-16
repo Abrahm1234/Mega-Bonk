@@ -194,10 +194,54 @@ class_name ArenaBlockyTerrain
 @export var floor_decor_flip_facing: bool = true
 @export_range(0.90, 1.10, 0.005) var floor_decor_fill_ratio: float = 1.0
 @export var floor_decor_local_margin: float = 0.0
+@export var show_baked_debug_mesh: bool = false
+@export var enable_base_visuals: bool = true
+@export var base_visuals_min_world_y: float = -INF
+@export var base_floor_mesh: Mesh
+@export var base_wall_mesh: Mesh
+@export var base_ramp_mesh: Mesh
+@export var base_floor_material: Material
+@export var base_wall_material: Material
+@export var base_ramp_material: Material
+@export_range(0.1, 2.0, 0.01) var base_floor_fill_ratio: float = 1.0
+@export var base_floor_offset: float = 0.0
+@export var base_floor_depth_scale: float = 1.0 # scale multiplier along mesh thickness axis
+@export var base_floor_max_scale: float = 0.0 # 0 = unlimited
+@export_range(0.0, 1.0, 0.01) var base_floor_flat_min_dot: float = 0.95 # skip sloped faces (e.g. ramps) from base-floor pass
+@export var base_floor_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
+@export var base_wall_offset: float = 0.0
+@export var base_wall_depth_scale: float = 1.0 # scale multiplier along local Z (mesh thickness axis)
+@export var base_wall_max_scale: float = 0.0 # 0 = unlimited
+@export var base_wall_attach_far_side: bool = false
+@export var base_wall_flip_outward: bool = false
+@export var base_ramp_fill_ratio: float = 1.0
+@export var base_ramp_offset: float = 0.0
+@export var base_ramp_depth_scale: float = 1.0
+@export var base_ramp_max_scale: float = 0.0 # 0 = unlimited
+@export_enum("X+", "X-", "Z+", "Z-") var base_ramp_mesh_uphill_axis: int = 2
+@export var base_ramp_mesh_normal_axis: int = 1 # 0=X, 1=Y, 2=Z
+@export var enable_base_wedges: bool = false
+@export var base_wedge_mesh_ramp_left: Mesh
+@export var base_wedge_mesh_ramp_right: Mesh
+@export var base_wedge_mesh_overhang_left: Mesh
+@export var base_wedge_mesh_overhang_right: Mesh
+@export var base_wedge_material: Material
+@export var base_wedge_offset: float = 0.0
+@export var base_wedge_fit_to_face: bool = true
+@export var base_wedge_depth_scale: float = 1.0
+@export var base_wedge_max_scale: float = 0.0
+@export var base_wedge_attach_far_side: bool = false
+@export var base_wedge_min_world_y: float = -INF
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
 @onready var _dbg_rays_node: Node3D = get_node_or_null("DebugRays") as Node3D
+@onready var _base_visuals_root: Node3D = get_node_or_null("TerrainBody/BaseVisuals") as Node3D
+@onready var _base_floor_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseFloor") as MultiMeshInstance3D
+@onready var _base_walls_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWalls") as MultiMeshInstance3D
+@onready var _base_ramps_mmi: MultiMeshInstance3D = get_node_or_null("TerrainBody/BaseVisuals/BaseRamps") as MultiMeshInstance3D
+@onready var _base_wedges_root: Node3D = get_node_or_null("TerrainBody/BaseVisuals/BaseWedges") as Node3D
+var _base_wedge_mmi_by_slot: Array[MultiMeshInstance3D] = []
 
 var _cell_size: float
 var _ox: float
@@ -222,6 +266,10 @@ var _tunnel_entrance_cells: Array[Vector2i] = []
 var _wd_logs: int = 0
 var _wd_face_i: int = 0
 var _wd_raycast_sanity_done: bool = false
+var _base_visuals_root_missing_warned: bool = false
+var _terrain_mesh_missing_warned: bool = false
+var _terrain_collision_missing_warned: bool = false
+var _base_ramp_axis_conflict_warned: bool = false
 
 func _wd(msg: String) -> void:
 	if not wall_decor_debug_log:
@@ -276,6 +324,10 @@ const WEDGE_SLOT_RAMP_RIGHT: int = 1
 const WEDGE_SLOT_OVERHANG_LEFT: int = 2
 const WEDGE_SLOT_OVERHANG_RIGHT: int = 3
 const WEDGE_SLOT_COUNT: int = 4
+const EDGE_E: int = 0
+const EDGE_W: int = 1
+const EDGE_N: int = 2
+const EDGE_S: int = 3
 const TUNNEL_DIR_NONE := 255
 const SURF_TOP := 0.0
 const SURF_WALL := 0.55
@@ -311,6 +363,24 @@ class WallFace:
 		self.key = k
 
 var _wall_faces: Array[WallFace] = []
+class FaceMeta extends RefCounted:
+	var cell_a: Vector2i = Vector2i(-1, -1)
+	var cell_b: Vector2i = Vector2i(-1, -1)
+	var owner_cell: Vector2i = Vector2i(-1, -1)
+	var owner_edge_id: int = -1
+	var owner_kind: int = 0
+	var ramp_cell: Vector2i = Vector2i(-1, -1)
+	var ramp_dir: int = RAMP_NONE
+	var ramp_edge_kind: int = -1
+
+var _wall_face_meta: Dictionary = {}
+var _floor_face_meta: Dictionary = {}
+var _cell_kind: PackedByteArray
+var _cell_floor_y: PackedFloat32Array
+var _edge_flags: PackedInt32Array
+var _edge_nb: PackedInt32Array
+var _edge_slot: PackedInt32Array
+
 var _wall_decor_root: Node3D = null
 var _shaft_faces: Array[WallFace] = []
 var _shaft_decor_root: Node3D = null
@@ -368,6 +438,213 @@ func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
 			return Vector2i(x, z - 1)
 		_:
 			return Vector2i(x, z)
+
+func _edge_index(cx: int, cz: int, edge_id: int, n: int) -> int:
+	return (_idx2(cx, cz, n) * 4) + edge_id
+
+func _pack_cell(c: Vector2i) -> int:
+	return (c.x << 16) | (c.y & 0xFFFF)
+
+func _unpack_cell(v: int) -> Vector2i:
+	var x: int = v >> 16
+	var z: int = v & 0xFFFF
+	if z & 0x8000:
+		z -= 0x10000
+	return Vector2i(x, z)
+
+func _edge_opposite(edge_id: int) -> int:
+	match edge_id:
+		EDGE_E:
+			return EDGE_W
+		EDGE_W:
+			return EDGE_E
+		EDGE_N:
+			return EDGE_S
+		EDGE_S:
+			return EDGE_N
+		_:
+			return -1
+
+func _cell_from_world_xz(p: Vector3, n: int) -> Vector2i:
+	var cx: int = int(floor((p.x - _ox) / _cell_size))
+	var cz: int = int(floor((p.z - _oz) / _cell_size))
+	return Vector2i(clamp(cx, 0, n - 1), clamp(cz, 0, n - 1))
+
+func _tags_init(n: int) -> void:
+	_cell_kind = PackedByteArray()
+	_cell_floor_y = PackedFloat32Array()
+	_edge_flags = PackedInt32Array()
+	_edge_nb = PackedInt32Array()
+	_edge_slot = PackedInt32Array()
+
+	_cell_kind.resize(n * n)
+	_cell_floor_y.resize(n * n)
+	_edge_flags.resize(n * n * 4)
+	_edge_nb.resize(n * n * 4)
+	_edge_slot.resize(n * n * 4)
+
+	for i in range(n * n):
+		_cell_kind[i] = 0
+		_cell_floor_y[i] = 0.0
+	for e in range(n * n * 4):
+		_edge_flags[e] = 0
+		_edge_nb[e] = -1
+		_edge_slot[e] = -1
+
+	_wall_face_meta.clear()
+	_floor_face_meta.clear()
+
+func _tag_cells(n: int) -> void:
+	if _cell_kind.size() != n * n or _cell_floor_y.size() != n * n:
+		return
+	for cz in range(n):
+		for cx in range(n):
+			var i: int = _idx2(cx, cz, n)
+			_cell_floor_y[i] = _heights[i]
+			_cell_kind[i] = 1 if _ramp_up_dir[i] != RAMP_NONE else 0
+
+func _set_edge_nb(cell_a: Vector2i, edge_id_a: int, cell_b: Vector2i, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if _edge_nb.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if _in_bounds(cell_b.x, cell_b.y, n):
+		_edge_nb[ia] = _pack_cell(cell_b)
+	else:
+		_edge_nb[ia] = -1
+
+func _get_edge_nb(cell_a: Vector2i, edge_id_a: int, n: int) -> Vector2i:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return Vector2i(-1, -1)
+	if _edge_nb.size() != n * n * 4:
+		return Vector2i(-1, -1)
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if ia < 0 or ia >= _edge_nb.size():
+		return Vector2i(-1, -1)
+	var packed: int = _edge_nb[ia]
+	if packed < 0:
+		return Vector2i(-1, -1)
+	var nb: Vector2i = _unpack_cell(packed)
+	if not _in_bounds(nb.x, nb.y, n):
+		return Vector2i(-1, -1)
+	return nb
+
+func _set_edge_slot(cell_a: Vector2i, edge_id_a: int, slot: int, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if _edge_slot.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	_edge_slot[ia] = slot
+
+func _get_edge_slot(cell_a: Vector2i, edge_id_a: int, n: int) -> int:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return -1
+	if _edge_slot.size() != n * n * 4:
+		return -1
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	if ia < 0 or ia >= _edge_slot.size():
+		return -1
+	return int(_edge_slot[ia])
+
+func _tags_build_full_adjacency(n: int) -> void:
+	for z in range(n):
+		for x in range(n):
+			var c := Vector2i(x, z)
+			_set_edge_nb(c, EDGE_E, Vector2i(x + 1, z), n)
+			_set_edge_nb(c, EDGE_W, Vector2i(x - 1, z), n)
+			_set_edge_nb(c, EDGE_S, Vector2i(x, z + 1), n)
+			_set_edge_nb(c, EDGE_N, Vector2i(x, z - 1), n)
+
+func _ramp_side_from_dir_edge(ramp_dir: int, edge_id: int) -> int:
+	# -1: not side edge, 0: left side, 1: right side
+	match ramp_dir:
+		RAMP_EAST:
+			if edge_id == EDGE_N:
+				return 0
+			if edge_id == EDGE_S:
+				return 1
+		RAMP_WEST:
+			if edge_id == EDGE_S:
+				return 0
+			if edge_id == EDGE_N:
+				return 1
+		RAMP_SOUTH:
+			if edge_id == EDGE_E:
+				return 0
+			if edge_id == EDGE_W:
+				return 1
+		RAMP_NORTH:
+			if edge_id == EDGE_W:
+				return 0
+			if edge_id == EDGE_E:
+				return 1
+	return -1
+
+func _edge_is_overhang(ramp_c: Vector2i, edge_id: int, nb_c: Vector2i, n: int) -> bool:
+	if not _in_bounds(ramp_c.x, ramp_c.y, n):
+		return false
+	if not _in_bounds(nb_c.x, nb_c.y, n):
+		return false
+	var ramp_ec: Vector2 = _edge_pair(_cell_corners(ramp_c.x, ramp_c.y), edge_id)
+	var nb_ec: Vector2 = _edge_pair(_cell_corners(nb_c.x, nb_c.y), _edge_opposite(edge_id))
+	var margin: float = maxf(0.01, wall_decor_surface_margin)
+	var ramp_avg: float = (ramp_ec.x + ramp_ec.y) * 0.5
+	var nb_avg: float = (nb_ec.x + nb_ec.y) * 0.5
+	var avg_overhang: bool = nb_avg > ramp_avg + margin
+	var high_overhang: bool = maxf(nb_ec.x, nb_ec.y) > maxf(ramp_ec.x, ramp_ec.y) + margin * 0.5
+	return avg_overhang or high_overhang
+
+func _tag_ramp_side_slots(n: int) -> void:
+	var side_edges_expected: int = 0
+	var side_edges_tagged: int = 0
+	for z in range(n):
+		for x in range(n):
+			var c := Vector2i(x, z)
+			var i: int = _idx2(x, z, n)
+			if _cell_kind.size() != n * n or _cell_kind[i] != 1:
+				continue
+			var ramp_dir: int = _ramp_up_dir[i]
+			for edge_id in [EDGE_N, EDGE_S, EDGE_E, EDGE_W]:
+				var side: int = _ramp_side_from_dir_edge(ramp_dir, edge_id)
+				if side < 0:
+					continue
+				side_edges_expected += 1
+				var nb: Vector2i = _get_edge_nb(c, edge_id, n)
+				var slot: int = WEDGE_SLOT_RAMP_LEFT
+				if side == 0:
+					slot = WEDGE_SLOT_RAMP_LEFT
+				else:
+					slot = WEDGE_SLOT_RAMP_RIGHT
+
+				if nb.x >= 0 and nb.y >= 0:
+					var overhang: bool = _edge_is_overhang(c, edge_id, nb, n)
+					if overhang:
+						if side == 0:
+							slot = WEDGE_SLOT_OVERHANG_LEFT
+						else:
+							slot = WEDGE_SLOT_OVERHANG_RIGHT
+				_set_edge_slot(c, edge_id, slot, n)
+				side_edges_tagged += 1
+	if wall_decor_debug_verbose:
+		_wd("[WEDGE_TAG] ramp_side_edges expected=%d tagged=%d missing=%d" % [side_edges_expected, side_edges_tagged, maxi(0, side_edges_expected - side_edges_tagged)])
+
+func _tag_edge_pair(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if not _in_bounds(cell_b.x, cell_b.y, n):
+		return
+	if _edge_nb.size() != n * n * 4:
+		return
+	var ia: int = _edge_index(cell_a.x, cell_a.y, edge_id_a, n)
+	_edge_nb[ia] = _pack_cell(cell_b)
+
+	var edge_id_b: int = _edge_opposite(edge_id_a)
+	if edge_id_b < 0:
+		return
+	var ib: int = _edge_index(cell_b.x, cell_b.y, edge_id_b, n)
+	_edge_nb[ib] = _pack_cell(cell_a)
 
 func _opposite_dir(dir: int) -> int:
 	match dir:
@@ -961,39 +1238,41 @@ func _raycast_dbg(from: Vector3, to: Vector3, mask: int, exclude: Array = [], co
 	return hit
 
 func _ready() -> void:
-	if mesh_instance == null or collision_shape == null:
-		push_error("ArenaBlockyTerrain: Expected nodes 'TerrainBody/TerrainMesh' and 'TerrainBody/TerrainCollision'.")
-		return
+	if mesh_instance == null:
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainMesh is missing; baked debug mesh will stay hidden.")
+	if collision_shape == null:
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainCollision is missing; baked collision will not be generated.")
 
-	if use_rock_shader:
-		var sm := ShaderMaterial.new()
-		sm.shader = load("res://shaders/blocky_rock.gdshader")
-		sm.set_shader_parameter("noise_top", noise_top_tex)
-		sm.set_shader_parameter("noise_wall", noise_wall_tex)
-		sm.set_shader_parameter("noise_ramp", noise_ramp_tex)
-		sm.set_shader_parameter("disp_strength_top", disp_strength_top)
-		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
-		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
-		sm.set_shader_parameter("disp_scale_top", disp_scale_top)
-		sm.set_shader_parameter("disp_scale_wall", disp_scale_wall)
-		sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
-		sm.set_shader_parameter("albedo_top", albedo_top_tex)
-		sm.set_shader_parameter("albedo_wall", albedo_wall_tex)
-		sm.set_shader_parameter("albedo_ramp", albedo_ramp_tex)
-		sm.set_shader_parameter("normal_top", normal_top_tex)
-		sm.set_shader_parameter("normal_wall", normal_wall_tex)
-		sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
-		sm.set_shader_parameter("normal_strength", normal_strength)
-		sm.set_shader_parameter("seam_lock_width", seam_lock_width)
-		sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
-		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
-		mesh_instance.material_override = sm
-	else:
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		mat.vertex_color_use_as_albedo = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mesh_instance.material_override = mat
+	if mesh_instance != null:
+		if use_rock_shader:
+			var sm := ShaderMaterial.new()
+			sm.shader = load("res://shaders/blocky_rock.gdshader")
+			sm.set_shader_parameter("noise_top", noise_top_tex)
+			sm.set_shader_parameter("noise_wall", noise_wall_tex)
+			sm.set_shader_parameter("noise_ramp", noise_ramp_tex)
+			sm.set_shader_parameter("disp_strength_top", disp_strength_top)
+			sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
+			sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
+			sm.set_shader_parameter("disp_scale_top", disp_scale_top)
+			sm.set_shader_parameter("disp_scale_wall", disp_scale_wall)
+			sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
+			sm.set_shader_parameter("albedo_top", albedo_top_tex)
+			sm.set_shader_parameter("albedo_wall", albedo_wall_tex)
+			sm.set_shader_parameter("albedo_ramp", albedo_ramp_tex)
+			sm.set_shader_parameter("normal_top", normal_top_tex)
+			sm.set_shader_parameter("normal_wall", normal_wall_tex)
+			sm.set_shader_parameter("normal_ramp", normal_ramp_tex)
+			sm.set_shader_parameter("normal_strength", normal_strength)
+			sm.set_shader_parameter("seam_lock_width", seam_lock_width)
+			sm.set_shader_parameter("seam_lock_soft", seam_lock_soft)
+			sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
+			mesh_instance.material_override = sm
+		else:
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			mat.vertex_color_use_as_albedo = true
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
 
@@ -1007,6 +1286,7 @@ func _ready() -> void:
 
 	_ensure_debug_rays_node()
 	_sync_debug_rays_settings()
+	_ensure_base_visuals_root()
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -1045,6 +1325,7 @@ func generate() -> void:
 	# Center the arena around (0,0) in XZ
 	_ox = -world_size_m * 0.5
 	_oz = -world_size_m * 0.5
+	_tags_init(n)
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -1063,6 +1344,9 @@ func generate() -> void:
 		if guard >= ramp_regen_guard:
 			push_warning("Ramp regen guard reached; terrain may still contain rare edge cases.")
 			break
+	_tag_cells(n)
+	_tags_build_full_adjacency(n)
+	_tag_ramp_side_slots(n)
 
 	_resolve_tunnel_layer(n)
 	_generate_tunnels_layout(n, rng)
@@ -2187,7 +2471,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_b: float = (b_w.x + b_w.y) * 0.5
 						var normal_pos_x: bool = mean_a > mean_b
 						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x
+							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, wall_subdiv, normal_pos_x,
+							true, Vector2i(x, z), Vector2i(x + 1, z)
 						)
 						dbg_wall_added += 1
 			if z + 1 < n:
@@ -2210,7 +2495,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_c: float = (c_n.x + c_n.y) * 0.5
 						var normal_pos_z: bool = mean_a > mean_c
 						_add_wall_z_between(
-							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z
+							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, wall_subdiv, normal_pos_z,
+							true, Vector2i(x, z), Vector2i(x, z + 1)
 						)
 						dbg_wall_added += 1
 	# Container walls (keeps everything “inside a box”)
@@ -2224,9 +2510,46 @@ func _build_mesh_and_collision(n: int) -> void:
 
 	st.generate_normals()
 	st.generate_tangents()
-	var mesh: ArrayMesh = st.commit()
-	mesh_instance.mesh = mesh
-	collision_shape.shape = mesh.create_trimesh_shape()
+	var baked_mesh: ArrayMesh = st.commit()
+	if collision_shape != null and is_instance_valid(collision_shape):
+		collision_shape.shape = baked_mesh.create_trimesh_shape()
+		_terrain_collision_missing_warned = false
+	elif not _terrain_collision_missing_warned:
+		_terrain_collision_missing_warned = true
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainCollision is missing; collision was not updated.")
+
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		if show_baked_debug_mesh:
+			mesh_instance.mesh = baked_mesh
+			mesh_instance.visible = true
+		else:
+			mesh_instance.mesh = null
+			mesh_instance.visible = false
+		_terrain_mesh_missing_warned = false
+	elif not _terrain_mesh_missing_warned:
+		_terrain_mesh_missing_warned = true
+		push_warning("ArenaBlockyTerrain: TerrainBody/TerrainMesh is missing; baked debug mesh cannot be displayed.")
+	_ensure_base_visuals_root()
+	var floor_instances: int = _rebuild_base_floor_visuals()
+	var wall_instances: int = _rebuild_base_wall_visuals()
+	var ramp_instances: int = _rebuild_base_ramp_visuals(n)
+	var wedge_stats: Dictionary = _rebuild_base_wedge_visuals()
+	if wall_decor_debug_verbose:
+		var ramp_cells: int = 0
+		for ridx: int in range(mini(_ramp_up_dir.size(), n * n)):
+			if _ramp_up_dir[ridx] != RAMP_NONE:
+				ramp_cells += 1
+		_wd("[BASE_VIS] rebuilt floor_instances=%d wall_instances=%d ramp_cells=%d ramp_instances=%d wedge_instances=%d wedge_missing_meta=%d wedge_missing_slot=%d wedge_missing_mesh=%d show_baked=%s" % [
+			floor_instances,
+			wall_instances,
+			ramp_cells,
+			ramp_instances,
+			int(wedge_stats.get("instances", 0)),
+			int(wedge_stats.get("missing_meta", 0)),
+			int(wedge_stats.get("missing_slot", 0)),
+			int(wedge_stats.get("missing_mesh", 0)),
+			str(show_baked_debug_mesh)
+		])
 	if wall_decor_open_side_use_raycast:
 		call_deferred("_rebuild_wall_decor_after_physics")
 	else:
@@ -2236,6 +2559,489 @@ func _build_mesh_and_collision(n: int) -> void:
 func _rebuild_wall_decor_after_physics() -> void:
 	await get_tree().physics_frame
 	_rebuild_wall_decor()
+
+func _ensure_base_visuals_root() -> void:
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body == null:
+		if not _base_visuals_root_missing_warned:
+			_base_visuals_root_missing_warned = true
+			push_warning("ArenaBlockyTerrain: TerrainBody node is missing; base visuals cannot be created.")
+		return
+	_base_visuals_root_missing_warned = false
+	if _base_visuals_root == null or not is_instance_valid(_base_visuals_root):
+		_base_visuals_root = terrain_body.get_node_or_null("BaseVisuals") as Node3D
+	if _base_visuals_root == null:
+		_base_visuals_root = Node3D.new()
+		_base_visuals_root.name = "BaseVisuals"
+		terrain_body.add_child(_base_visuals_root)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_visuals_root.owner = get_tree().edited_scene_root
+
+	if _base_floor_mmi == null or not is_instance_valid(_base_floor_mmi):
+		_base_floor_mmi = _base_visuals_root.get_node_or_null("BaseFloor") as MultiMeshInstance3D
+	if _base_floor_mmi == null:
+		_base_floor_mmi = MultiMeshInstance3D.new()
+		_base_floor_mmi.name = "BaseFloor"
+		_base_visuals_root.add_child(_base_floor_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_floor_mmi.owner = get_tree().edited_scene_root
+
+	if _base_walls_mmi == null or not is_instance_valid(_base_walls_mmi):
+		_base_walls_mmi = _base_visuals_root.get_node_or_null("BaseWalls") as MultiMeshInstance3D
+	if _base_walls_mmi == null:
+		_base_walls_mmi = MultiMeshInstance3D.new()
+		_base_walls_mmi.name = "BaseWalls"
+		_base_visuals_root.add_child(_base_walls_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_walls_mmi.owner = get_tree().edited_scene_root
+
+	if _base_ramps_mmi == null or not is_instance_valid(_base_ramps_mmi):
+		_base_ramps_mmi = _base_visuals_root.get_node_or_null("BaseRamps") as MultiMeshInstance3D
+	if _base_ramps_mmi == null:
+		_base_ramps_mmi = MultiMeshInstance3D.new()
+		_base_ramps_mmi.name = "BaseRamps"
+		_base_visuals_root.add_child(_base_ramps_mmi)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_ramps_mmi.owner = get_tree().edited_scene_root
+
+	if _base_wedges_root == null or not is_instance_valid(_base_wedges_root):
+		_base_wedges_root = _base_visuals_root.get_node_or_null("BaseWedges") as Node3D
+	if _base_wedges_root == null:
+		_base_wedges_root = Node3D.new()
+		_base_wedges_root.name = "BaseWedges"
+		_base_visuals_root.add_child(_base_wedges_root)
+		if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+			_base_wedges_root.owner = get_tree().edited_scene_root
+
+	if _base_wedge_mmi_by_slot.size() != WEDGE_SLOT_COUNT:
+		_base_wedge_mmi_by_slot.resize(WEDGE_SLOT_COUNT)
+	var slot_names: Array[String] = ["RampLeft", "RampRight", "OverhangLeft", "OverhangRight"]
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		var node_name: String = "BaseWedge" + slot_names[slot]
+		var mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot]
+		if mmi == null or not is_instance_valid(mmi):
+			mmi = _base_wedges_root.get_node_or_null(node_name) as MultiMeshInstance3D
+		if mmi == null:
+			mmi = MultiMeshInstance3D.new()
+			mmi.name = node_name
+			_base_wedges_root.add_child(mmi)
+			if Engine.is_editor_hint() and get_tree().edited_scene_root != null:
+				mmi.owner = get_tree().edited_scene_root
+		_base_wedge_mmi_by_slot[slot] = mmi
+
+
+func _want_base_floor_faces() -> bool:
+	return enable_base_visuals and base_floor_mesh != null
+
+func _want_base_wall_faces() -> bool:
+	return enable_base_visuals and base_wall_mesh != null
+
+func _want_base_ramp_visuals() -> bool:
+	return enable_base_visuals and base_ramp_mesh != null
+
+func _want_base_wedge_faces() -> bool:
+	if not enable_base_visuals or not enable_base_wedges:
+		return false
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		if _base_wedge_mesh_for_slot(slot) != null:
+			return true
+	return false
+
+func _want_floor_face_capture() -> bool:
+	var want_base: bool = _want_base_floor_faces()
+	var want_decor: bool = enable_floor_decor and not floor_decor_meshes.is_empty()
+	return want_base or want_decor
+
+func _want_wall_face_capture() -> bool:
+	var want_base: bool = _want_base_wall_faces() or _want_base_wedge_faces()
+	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
+	return want_base or want_decor
+
+func _rebuild_base_floor_visuals() -> int:
+	if _base_floor_mmi == null:
+		return 0
+	if not enable_base_visuals or base_floor_mesh == null:
+		_base_floor_mmi.multimesh = null
+		return 0
+
+	var flat_faces: Array[FloorFace] = []
+	var flat_min_dot: float = clampf(base_floor_flat_min_dot, 0.0, 1.0)
+	for ff: FloorFace in _floor_faces:
+		if ff == null:
+			continue
+		if ff.normal.normalized().dot(Vector3.UP) < flat_min_dot:
+			continue
+		flat_faces.append(ff)
+
+	if flat_faces.is_empty():
+		_base_floor_mmi.multimesh = null
+		return 0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_floor_mesh
+	mm.instance_count = flat_faces.size()
+	for i in range(flat_faces.size()):
+		var ff: FloorFace = flat_faces[i]
+		var xf: Transform3D = _base_floor_transform_for_face(ff, base_floor_mesh)
+		mm.set_instance_transform(i, xf)
+
+	_base_floor_mmi.multimesh = mm
+	_base_floor_mmi.material_override = base_floor_material
+	return flat_faces.size()
+
+func _base_floor_transform_for_face(face: FloorFace, mesh: Mesh) -> Transform3D:
+	if mesh == null:
+		return Transform3D.IDENTITY
+
+	var aabb: AABB = mesh.get_aabb()
+	var edge_u: Vector3 = face.b - face.a
+	var edge_v: Vector3 = face.d - face.a
+	var n_axis: Vector3 = edge_u.cross(edge_v).normalized()
+	if n_axis.length_squared() < 1e-8:
+		n_axis = Vector3.UP
+	if n_axis.y < 0.0:
+		n_axis = -n_axis
+
+	# Compute stable tangents by projecting world axes into the face plane.
+	var u_axis: Vector3 = Vector3.RIGHT - n_axis * n_axis.dot(Vector3.RIGHT)
+	if u_axis.length_squared() < 1e-8:
+		u_axis = Vector3.FORWARD - n_axis * n_axis.dot(Vector3.FORWARD)
+	u_axis = u_axis.normalized()
+	var v_axis: Vector3 = n_axis.cross(u_axis).normalized()
+	u_axis = v_axis.cross(n_axis).normalized()
+
+	var axis_n: int = clampi(base_floor_mesh_normal_axis, 0, 2)
+	var plane_axes: PackedInt32Array = _dominant_plane_axes(axis_n)
+	var axis0: int = plane_axes[0]
+	var axis1: int = plane_axes[1]
+
+	var cols: Array = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	cols[axis_n] = n_axis
+	cols[axis0] = u_axis
+	cols[axis1] = v_axis
+	var rot: Basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
+
+	var ref0: float = maxf(absf(aabb.size[axis0]), 0.001)
+	var ref1: float = maxf(absf(aabb.size[axis1]), 0.001)
+
+	var s0: float = maxf((face.width * base_floor_fill_ratio) / ref0, 0.001)
+	var s1: float = maxf((face.depth * base_floor_fill_ratio) / ref1, 0.001)
+	var sn: float = maxf(base_floor_depth_scale, 0.001)
+
+	if base_floor_max_scale > 0.0:
+		s0 = minf(s0, base_floor_max_scale)
+		s1 = minf(s1, base_floor_max_scale)
+		sn = minf(sn, base_floor_max_scale)
+
+	var scale_vec := Vector3.ONE
+	scale_vec[axis0] = s0
+	scale_vec[axis1] = s1
+	scale_vec[axis_n] = sn
+	var basis: Basis = rot.scaled(scale_vec)
+
+	var center_local: Vector3 = aabb.position + aabb.size * 0.5
+	var target_world: Vector3 = face.center + n_axis * base_floor_offset
+	var origin: Vector3 = target_world - (basis * center_local)
+	return Transform3D(basis, origin)
+
+func _rebuild_base_wall_visuals() -> int:
+	if _base_walls_mmi == null:
+		return 0
+	if not enable_base_visuals or base_wall_mesh == null:
+		_base_walls_mmi.multimesh = null
+		return 0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_wall_mesh
+	mm.instance_count = _wall_faces.size()
+	var wall_aabb: AABB = base_wall_mesh.get_aabb()
+	for i in range(_wall_faces.size()):
+		var wf: WallFace = _wall_faces[i]
+		var xf: Transform3D = _base_wall_transform_for_face(wf, wall_aabb, base_wall_offset, base_wall_depth_scale)
+		mm.set_instance_transform(i, xf)
+
+	_base_walls_mmi.multimesh = mm
+	_base_walls_mmi.material_override = base_wall_material
+	return _wall_faces.size()
+
+func _base_wall_place_outward(face: WallFace) -> Vector3:
+	var outward: Vector3 = face.normal
+	outward.y = 0.0
+	if outward.length_squared() < 1e-8:
+		outward = Vector3.FORWARD
+	outward = outward.normalized()
+	if base_wall_flip_outward:
+		outward = -outward
+	return outward
+
+func _base_wall_transform_for_face(face: WallFace, aabb: AABB, outward_offset: float, depth_scale: float) -> Transform3D:
+	var outward: Vector3 = _base_wall_place_outward(face)
+	var rot: Basis = _basis_from_outward(outward)
+
+	var ref_w: float = max(aabb.size.x, 0.001)
+	var ref_h: float = max(aabb.size.y, 0.001)
+	var sx: float = max(face.width / ref_w, 0.1)
+	var sy: float = max(face.height / ref_h, 0.1)
+	if base_wall_max_scale > 0.0:
+		sx = min(sx, base_wall_max_scale)
+		sy = min(sy, base_wall_max_scale)
+	var sz: float = maxf(0.001, depth_scale)
+	if base_wall_max_scale > 0.0:
+		sz = minf(sz, base_wall_max_scale)
+
+	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	var attach_z: float = aabb.position.z + aabb.size.z if base_wall_attach_far_side else aabb.position.z
+	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, attach_z)
+	var target_world: Vector3 = face.center + outward * outward_offset
+	var origin: Vector3 = target_world - (basis * anchor_local)
+	return Transform3D(basis, origin)
+
+func _ramp_uphill_dir_world(dir: int) -> Vector3:
+	match dir:
+		RAMP_EAST:
+			return Vector3.RIGHT
+		RAMP_WEST:
+			return Vector3.LEFT
+		RAMP_SOUTH:
+			return Vector3.FORWARD
+		RAMP_NORTH:
+			return Vector3.BACK
+		_:
+			return Vector3.FORWARD
+
+func _ramp_uphill_axis_index() -> int:
+	return 0 if base_ramp_mesh_uphill_axis <= 1 else 2
+
+func _ramp_uphill_axis_sign() -> float:
+	return 1.0 if (base_ramp_mesh_uphill_axis == 0 or base_ramp_mesh_uphill_axis == 2) else -1.0
+
+func _rebuild_base_ramp_visuals(n: int) -> int:
+	if _base_ramps_mmi == null:
+		return 0
+	if not enable_base_visuals:
+		_base_ramps_mmi.multimesh = null
+		return 0
+	if base_ramp_mesh == null:
+		_base_ramps_mmi.multimesh = null
+		return 0
+
+	var ramp_cells: Array[int] = []
+	for i: int in range(n * n):
+		if i >= _ramp_up_dir.size():
+			continue
+		if _ramp_up_dir[i] == RAMP_NONE:
+			continue
+		var cx: int = i % n
+		var cz: int = i / n
+		if base_visuals_min_world_y > -INF:
+			var corners: Vector4 = _cell_corners(cx, cz)
+			var center_y: float = (corners.x + corners.y + corners.z + corners.w) * 0.25
+			if center_y < base_visuals_min_world_y:
+				continue
+		ramp_cells.append(i)
+
+	if ramp_cells.is_empty():
+		_base_ramps_mmi.multimesh = null
+		return 0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = base_ramp_mesh
+	mm.instance_count = ramp_cells.size()
+	_base_ramps_mmi.multimesh = mm
+	_base_ramps_mmi.material_override = base_ramp_material
+
+	for k: int in range(ramp_cells.size()):
+		var idx: int = ramp_cells[k]
+		mm.set_instance_transform(k, _base_ramp_transform_for_cell(idx, n, base_ramp_mesh))
+	return ramp_cells.size()
+
+func _base_ramp_transform_for_cell(idx: int, n: int, mesh: Mesh) -> Transform3D:
+	if mesh == null or idx < 0:
+		return Transform3D.IDENTITY
+
+	var cx: int = idx % n
+	var cz: int = idx / n
+	var dir_up: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
+	if dir_up == RAMP_NONE:
+		return Transform3D.IDENTITY
+
+	var nb: Vector2i = _neighbor_of(cx, cz, dir_up)
+	var nb_idx: int = _idx2(clampi(nb.x, 0, n - 1), clampi(nb.y, 0, n - 1), n)
+	var h_here: float = _heights[idx] if idx < _heights.size() else 0.0
+	var h_nb: float = _heights[nb_idx] if nb_idx < _heights.size() else h_here
+	var low_y: float = minf(h_here, h_nb)
+	var rise: float = absf(h_nb - h_here)
+	if rise < 0.0001:
+		rise = maxf(height_step, 0.0001)
+
+	var uphill: Vector3 = _ramp_uphill_dir_world(dir_up)
+	var right: Vector3 = Vector3.UP.cross(uphill).normalized()
+	if right.length_squared() < 1e-8:
+		right = Vector3.RIGHT
+	var slope_ratio: float = rise / maxf(_cell_size, 0.0001)
+	var normal: Vector3 = (Vector3.UP - uphill * slope_ratio).normalized()
+	if normal.length_squared() < 1e-8:
+		normal = Vector3.UP
+	var tangent: Vector3 = right.cross(normal).normalized()
+	if tangent.dot(uphill) < 0.0:
+		tangent = -tangent
+
+	var axis_n: int = clampi(base_ramp_mesh_normal_axis, 0, 2)
+	var axis_u: int = _ramp_uphill_axis_index()
+	var axis_u_sign: float = _ramp_uphill_axis_sign()
+	if axis_u == axis_n:
+		if not _base_ramp_axis_conflict_warned:
+			_base_ramp_axis_conflict_warned = true
+			push_warning("ArenaBlockyTerrain: base_ramp_mesh_uphill_axis conflicts with base_ramp_mesh_normal_axis; auto-correcting uphill axis.")
+		axis_u = 2 if axis_n != 2 else 0
+	else:
+		_base_ramp_axis_conflict_warned = false
+	var axis_r: int = 3 - axis_n - axis_u
+
+	var cols: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	cols[axis_n] = normal
+	cols[axis_u] = tangent * axis_u_sign
+	cols[axis_r] = right
+	var rot: Basis = Basis(cols[0], cols[1], cols[2]).orthonormalized()
+
+	var aabb: AABB = mesh.get_aabb()
+	var ref_r: float = maxf(absf(aabb.size[axis_r]), 0.001)
+	var ref_u: float = maxf(absf(aabb.size[axis_u]), 0.001)
+	var ref_n: float = maxf(absf(aabb.size[axis_n]), 0.001)
+	var fill: float = maxf(base_ramp_fill_ratio, 0.001)
+	var sx: float = maxf((_cell_size * fill) / ref_r, 0.001)
+	var su: float = maxf((sqrt(_cell_size * _cell_size + rise * rise) * fill) / ref_u, 0.001)
+	var sn: float = maxf(base_ramp_depth_scale / ref_n, 0.001)
+	if base_ramp_max_scale > 0.0:
+		sx = minf(sx, base_ramp_max_scale)
+		su = minf(su, base_ramp_max_scale)
+		sn = minf(sn, base_ramp_max_scale)
+	var scale_vec: Vector3 = Vector3.ONE
+	scale_vec[axis_r] = sx
+	scale_vec[axis_u] = su
+	scale_vec[axis_n] = sn
+	var basis: Basis = rot.scaled(scale_vec)
+
+	var center: Vector3 = Vector3(
+		_ox + (float(cx) + 0.5) * _cell_size,
+		low_y + rise * 0.5 + base_ramp_offset,
+		_oz + (float(cz) + 0.5) * _cell_size
+	)
+	var center_local: Vector3 = aabb.position + aabb.size * 0.5
+	var origin: Vector3 = center - (basis * center_local)
+	return Transform3D(basis, origin)
+
+func _base_wedge_mesh_for_slot(slot: int) -> Mesh:
+	match slot:
+		WEDGE_SLOT_RAMP_LEFT:
+			return base_wedge_mesh_ramp_left
+		WEDGE_SLOT_RAMP_RIGHT:
+			return base_wedge_mesh_ramp_right
+		WEDGE_SLOT_OVERHANG_LEFT:
+			return base_wedge_mesh_overhang_left
+		WEDGE_SLOT_OVERHANG_RIGHT:
+			return base_wedge_mesh_overhang_right
+		_:
+			return null
+
+func _base_wedge_transform_for_face(face: WallFace, aabb: AABB, outward: Vector3) -> Transform3D:
+	var z_dir: Vector3 = outward
+	z_dir.y = 0.0
+	if z_dir.length_squared() < 1e-8:
+		z_dir = Vector3(face.normal.x, 0.0, face.normal.z)
+		if z_dir.length_squared() < 1e-8:
+			z_dir = Vector3.FORWARD
+	z_dir = z_dir.normalized()
+	var x_dir: Vector3 = Vector3.UP.cross(z_dir)
+	if x_dir.length_squared() < 1e-8:
+		x_dir = Vector3.RIGHT
+	x_dir = x_dir.normalized()
+	var y_dir: Vector3 = z_dir.cross(x_dir).normalized()
+	x_dir = y_dir.cross(z_dir).normalized()
+	var rot: Basis = Basis(x_dir, y_dir, z_dir).orthonormalized()
+
+	var ref_w: float = maxf(aabb.size.x, 0.001)
+	var ref_h: float = maxf(aabb.size.y, 0.001)
+	var sx: float = 1.0
+	var sy: float = 1.0
+	if base_wedge_fit_to_face:
+		sx = maxf(face.width / ref_w, 0.1)
+		sy = maxf(face.height / ref_h, 0.1)
+		if base_wedge_max_scale > 0.0:
+			sx = minf(sx, base_wedge_max_scale)
+			sy = minf(sy, base_wedge_max_scale)
+	var sz: float = maxf(base_wedge_depth_scale, 0.001)
+	if base_wedge_max_scale > 0.0:
+		sz = minf(sz, base_wedge_max_scale)
+
+	var basis := Basis(rot.x * sx, rot.y * sy, rot.z * sz)
+	var attach_z: float = aabb.position.z + aabb.size.z if base_wedge_attach_far_side else aabb.position.z
+	var anchor_local := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, attach_z)
+	var target_world: Vector3 = face.center + z_dir * base_wedge_offset
+	var origin: Vector3 = target_world - (basis * anchor_local)
+	return Transform3D(basis, origin)
+
+func _rebuild_base_wedge_visuals() -> Dictionary:
+	var stats: Dictionary = {
+		"instances": 0,
+		"missing_meta": 0,
+		"missing_slot": 0,
+		"missing_mesh": 0
+	}
+	if _base_wedge_mmi_by_slot.size() != WEDGE_SLOT_COUNT:
+		return stats
+
+	for slot_clear: int in range(WEDGE_SLOT_COUNT):
+		var clear_mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot_clear]
+		if clear_mmi != null and is_instance_valid(clear_mmi):
+			clear_mmi.multimesh = null
+
+	if not enable_base_visuals or not enable_base_wedges:
+		return stats
+
+	var faces_by_slot: Array = [[], [], [], []]
+	for wf: WallFace in _wall_faces:
+		if _wall_face_min_world_y(wf) < base_wedge_min_world_y:
+			continue
+		if not _wall_face_meta.has(wf.key):
+			stats["missing_meta"] = int(stats["missing_meta"]) + 1
+			continue
+		var meta: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if meta == null or meta.ramp_edge_kind < 0 or meta.ramp_edge_kind >= WEDGE_SLOT_COUNT:
+			stats["missing_slot"] = int(stats["missing_slot"]) + 1
+			continue
+		faces_by_slot[meta.ramp_edge_kind].append(wf)
+
+	for slot: int in range(WEDGE_SLOT_COUNT):
+		var mmi: MultiMeshInstance3D = _base_wedge_mmi_by_slot[slot]
+		if mmi == null or not is_instance_valid(mmi):
+			continue
+		var mesh: Mesh = _base_wedge_mesh_for_slot(slot)
+		var faces: Array = faces_by_slot[slot]
+		if mesh == null:
+			if not faces.is_empty():
+				stats["missing_mesh"] = int(stats["missing_mesh"]) + faces.size()
+			mmi.multimesh = null
+			continue
+		if faces.is_empty():
+			mmi.multimesh = null
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = faces.size()
+		mmi.multimesh = mm
+		mmi.material_override = base_wedge_material
+		var aabb: AABB = mesh.get_aabb()
+		for i: int in range(faces.size()):
+			var face: WallFace = faces[i]
+			var outward: Vector3 = _base_wall_place_outward(face)
+			mm.set_instance_transform(i, _base_wedge_transform_for_face(face, aabb, outward))
+		stats["instances"] = int(stats["instances"]) + faces.size()
+	return stats
 
 func _ensure_wall_decor_root() -> void:
 	if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
@@ -2394,9 +3200,10 @@ func _sample_top_surface_y_wide(
 
 	return agg
 
-func _wd_surface_only_ceiling_y_at(p: Vector3) -> float:
+func _wd_surface_only_ceiling_y_at(p: Vector3, hint_dir: Vector3 = Vector3.ZERO) -> float:
 	# Use max aggregation so any nearby top surface counts as overhead terrain.
-	return _sample_top_surface_y_wide(p.x, p.z, Vector3.ZERO, false)
+	# hint_dir helps ramp seam sampling choose the correct side near triangles/half-cells.
+	return _sample_top_surface_y_wide(p.x, p.z, hint_dir, false)
 
 
 func _wall_face_covered_both_sides(center: Vector3, top_y: float, dir_h: Vector3) -> Dictionary:
@@ -2674,6 +3481,11 @@ func _pick_open_side_outward(face: WallFace) -> Vector3:
 	return n if h_plus < h_minus else -n
 
 func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: int) -> void:
+	var want_base: bool = _want_base_floor_faces()
+	var want_decor: bool = enable_floor_decor and not floor_decor_meshes.is_empty()
+	if not want_base and not want_decor:
+		return
+
 	var n: Vector3 = (b - a).cross(d - a)
 	if n.length() < 0.000001:
 		return
@@ -2682,7 +3494,11 @@ func _capture_floor_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3, key: in
 		n = -n
 
 	var center: Vector3 = (a + b + c + d) * 0.25
-	if center.y < floor_decor_min_world_y:
+	if want_base and center.y < base_visuals_min_world_y:
+		want_base = false
+	if want_decor and center.y < floor_decor_min_world_y:
+		want_decor = false
+	if not want_base and not want_decor:
 		return
 
 	var width: float = (b - a).length()
@@ -2709,7 +3525,15 @@ func _get_arena_center_approx() -> Vector3:
 	return global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
 
 func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	if not (enable_wall_decor or enable_wall_wedge_decor):
+	var want_base: bool = _want_base_wall_faces() or _want_base_wedge_faces()
+	var want_decor: bool = enable_wall_decor or enable_wall_wedge_decor
+	if not want_base and not want_decor:
+		return
+
+	var center_y: float = (a.y + b.y + c.y + d.y) * 0.25
+	if want_base and center_y < base_visuals_min_world_y:
+		want_base = false
+	if not want_base and not want_decor:
 		return
 
 	_wd_face_i += 1
@@ -2927,6 +3751,67 @@ func _capture_wall_face(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 
 	_wall_faces.append(WallFace.new(aa, bb, cc, dd, center, n, width, height, is_trap, key))
 
+func _tag_last_wall_face_meta(cell_a: Vector2i, cell_b: Vector2i, edge_id_a: int, n: int) -> void:
+	if _wall_faces.is_empty():
+		return
+	if not _in_bounds(cell_a.x, cell_a.y, n):
+		return
+	if not _in_bounds(cell_b.x, cell_b.y, n):
+		return
+
+	var wf: WallFace = _wall_faces[_wall_faces.size() - 1]
+	var meta := FaceMeta.new()
+	meta.cell_a = cell_a
+	meta.cell_b = cell_b
+	meta.owner_cell = cell_a
+	meta.owner_edge_id = edge_id_a
+	meta.owner_kind = 0
+
+	var ai: int = _idx2(cell_a.x, cell_a.y, n)
+	var bi: int = _idx2(cell_b.x, cell_b.y, n)
+	var a_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[ai] == 1
+	var b_is_ramp: bool = _cell_kind.size() == n * n and _cell_kind[bi] == 1
+	var edge_id_b: int = _edge_opposite(edge_id_a)
+	var a_side: int = -1
+	var b_side: int = -1
+	if a_is_ramp:
+		a_side = _ramp_side_from_dir_edge(_ramp_up_dir[ai], edge_id_a)
+	if b_is_ramp and edge_id_b >= 0:
+		b_side = _ramp_side_from_dir_edge(_ramp_up_dir[bi], edge_id_b)
+
+	if a_is_ramp and not b_is_ramp:
+		meta.ramp_cell = cell_a
+	elif b_is_ramp and not a_is_ramp:
+		meta.ramp_cell = cell_b
+	elif a_side >= 0 and b_side < 0:
+		meta.ramp_cell = cell_a
+	elif b_side >= 0 and a_side < 0:
+		meta.ramp_cell = cell_b
+	elif a_side >= 0 and b_side >= 0:
+		# Both sides treat this as a ramp side-edge. Pick lower edge owner.
+		var a_edge: Vector2 = _edge_pair(_cell_corners(cell_a.x, cell_a.y), edge_id_a)
+		var b_edge: Vector2 = _edge_pair(_cell_corners(cell_b.x, cell_b.y), edge_id_b)
+		var a_avg: float = 0.5 * (a_edge.x + a_edge.y)
+		var b_avg: float = 0.5 * (b_edge.x + b_edge.y)
+		meta.ramp_cell = cell_a if a_avg <= b_avg else cell_b
+	else:
+		meta.ramp_cell = Vector2i(-1, -1)
+
+	if meta.ramp_cell.x >= 0:
+		meta.ramp_dir = _ramp_up_dir[_idx2(meta.ramp_cell.x, meta.ramp_cell.y, n)]
+		meta.owner_cell = meta.ramp_cell
+		if meta.ramp_cell == cell_a:
+			meta.owner_edge_id = edge_id_a
+		else:
+			meta.owner_edge_id = edge_id_b
+		meta.ramp_edge_kind = _get_edge_slot(meta.owner_cell, meta.owner_edge_id, n)
+	else:
+		meta.ramp_dir = RAMP_NONE
+		meta.ramp_edge_kind = -1
+
+	_wall_face_meta[wf.key] = meta
+	_tag_edge_pair(cell_a, cell_b, edge_id_a, n)
+
 func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	if not face.is_trapezoid:
 		return [face, null]
@@ -2996,6 +3881,12 @@ func _split_trapezoid_wall_face_for_decor(face: WallFace) -> Array:
 	var wedge_face := WallFace.new(wa, wb, wc, wd, wcenter, wn, wwidth, wheight, face.is_trapezoid, wkey)
 	wedge_face.normal = face.normal
 
+	if _wall_face_meta.has(face.key):
+		var src_meta: FaceMeta = _wall_face_meta[face.key] as FaceMeta
+		if src_meta != null:
+			_wall_face_meta[rect_face.key] = src_meta
+			_wall_face_meta[wedge_face.key] = src_meta
+
 	return [rect_face, wedge_face]
 
 func _decor_global_aabb(pad: float = 2.0) -> AABB:
@@ -3009,16 +3900,27 @@ func _decor_global_aabb(pad: float = 2.0) -> AABB:
 		Vector3(side + pad * 2.0, (y1 - y0) + pad * 2.0, side + pad * 2.0)
 	)
 
+func _wd_slot_meshes(slot: int) -> Array[Mesh]:
+	match slot:
+		WEDGE_SLOT_RAMP_LEFT:
+			return wall_wedge_decor_meshes_ramp_left
+		WEDGE_SLOT_RAMP_RIGHT:
+			return wall_wedge_decor_meshes_ramp_right
+		WEDGE_SLOT_OVERHANG_LEFT:
+			return wall_wedge_decor_meshes_overhang_left
+		WEDGE_SLOT_OVERHANG_RIGHT:
+			return wall_wedge_decor_meshes_overhang_right
+		_:
+			return []
+
 func _rebuild_wall_decor() -> void:
 	var has_rect_decor: bool = enable_wall_decor and not wall_decor_meshes.is_empty()
-	var wedge_meshes_ramp_left: Array[Mesh] = wall_wedge_decor_meshes_ramp_left
-	var wedge_meshes_ramp_right: Array[Mesh] = wall_wedge_decor_meshes_ramp_right
-	var wedge_meshes_overhang_left: Array[Mesh] = wall_wedge_decor_meshes_overhang_left
-	var wedge_meshes_overhang_right: Array[Mesh] = wall_wedge_decor_meshes_overhang_right
-
-
-	var wedge_variant_count: int = maxi(maxi(wedge_meshes_ramp_left.size(), wedge_meshes_ramp_right.size()), maxi(wedge_meshes_overhang_left.size(), wedge_meshes_overhang_right.size()))
-	var has_wedge_decor: bool = enable_wall_wedge_decor and wedge_variant_count > 0
+	var has_wedge_decor: bool = false
+	if enable_wall_wedge_decor:
+		for wslot: int in range(WEDGE_SLOT_COUNT):
+			if not _wd_slot_meshes(wslot).is_empty():
+				has_wedge_decor = true
+				break
 	if not has_rect_decor and not has_wedge_decor:
 		if _wall_decor_root != null and is_instance_valid(_wall_decor_root):
 			for child: Node in _wall_decor_root.get_children():
@@ -3047,20 +3949,14 @@ func _rebuild_wall_decor() -> void:
 	for i: int in range(rect_variant_count):
 		rect_counts[i] = 0
 
-	var wedge_slot_meshes: Array = [
-		wedge_meshes_ramp_left,
-		wedge_meshes_ramp_right,
-		wedge_meshes_overhang_left,
-		wedge_meshes_overhang_right
-	]
-
 	var wedge_counts_by_slot: Array = []
 	wedge_counts_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx: int in range(WEDGE_SLOT_COUNT):
-		wedge_counts_by_slot[sidx] = []
-		wedge_counts_by_slot[sidx].resize(wedge_variant_count)
-		for i2: int in range(wedge_variant_count):
-			wedge_counts_by_slot[sidx][i2] = 0
+		var slot_counts: Array[int] = []
+		slot_counts.resize(_wd_slot_meshes(sidx).size())
+		for i2: int in range(slot_counts.size()):
+			slot_counts[i2] = 0
+		wedge_counts_by_slot[sidx] = slot_counts
 
 	var rect_faces: Array[WallFace] = []
 	var wedge_faces: Array[WallFace] = []
@@ -3076,6 +3972,10 @@ func _rebuild_wall_decor() -> void:
 	var dbg_wedge_skip_allow_place: int = 0
 	var dbg_wedge_skip_under_surface_place: int = 0
 	var dbg_wedge_skip_variant_place: int = 0
+	var dbg_wedge_missing_meta_count: int = 0
+	var dbg_wedge_missing_slot_count: int = 0
+	var dbg_wedge_missing_meta_place: int = 0
+	var dbg_wedge_missing_slot_place: int = 0
 	var dbg_rect_skip_surface_count: int = 0
 	var dbg_rect_skip_surface_place: int = 0
 	var trap_count: int = 0
@@ -3140,6 +4040,12 @@ func _rebuild_wall_decor() -> void:
 	if has_wedge_decor:
 		for wf: WallFace in wedge_faces:
 			dbg_wedge_total += 1
+			if not _wall_face_meta.has(wf.key):
+				dbg_wedge_missing_meta_count += 1
+			else:
+				var m_count: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+				if m_count == null or m_count.ramp_edge_kind < 0:
+					dbg_wedge_missing_slot_count += 1
 			var place_outward_count: Vector3 = _wall_place_outward(wf)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
@@ -3165,8 +4071,9 @@ func _rebuild_wall_decor() -> void:
 			var cls_c: Dictionary = _wedge_slot_classify(wf, place_outward_count, max(2, cells_per_side))
 			var slot_c: int = int(cls_c.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_c < 0 or slot_c >= WEDGE_SLOT_COUNT:
-				slot_c = WEDGE_SLOT_RAMP_LEFT
-			var slot_meshes_c: Array[Mesh] = wedge_slot_meshes[slot_c]
+				dbg_wedge_skip_variant_place += 1
+				continue
+			var slot_meshes_c: Array[Mesh] = _wd_slot_meshes(slot_c)
 			if slot_meshes_c.is_empty():
 				continue
 			var widx: int = absi(wf.key + wall_wedge_decor_seed) % slot_meshes_c.size()
@@ -3201,24 +4108,20 @@ func _rebuild_wall_decor() -> void:
 	wedge_mmi_by_slot.resize(WEDGE_SLOT_COUNT)
 	wedge_aabb_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx2: int in range(WEDGE_SLOT_COUNT):
+		var slot_meshes_alloc: Array[Mesh] = _wd_slot_meshes(sidx2)
 		wedge_mmi_by_slot[sidx2] = []
 		wedge_aabb_by_slot[sidx2] = []
-		wedge_mmi_by_slot[sidx2].resize(wedge_variant_count)
-		wedge_aabb_by_slot[sidx2].resize(wedge_variant_count)
-
-	for wv: int in range(wedge_variant_count):
-		for sidx3: int in range(WEDGE_SLOT_COUNT):
-			var slot_count: int = int(wedge_counts_by_slot[sidx3][wv])
+		wedge_mmi_by_slot[sidx2].resize(slot_meshes_alloc.size())
+		wedge_aabb_by_slot[sidx2].resize(slot_meshes_alloc.size())
+		for wv: int in range(slot_meshes_alloc.size()):
+			var slot_count: int = int(wedge_counts_by_slot[sidx2][wv])
 			if slot_count <= 0:
-				wedge_mmi_by_slot[sidx3][wv] = null
+				wedge_mmi_by_slot[sidx2][wv] = null
 				continue
 
-			if wv >= wedge_slot_meshes[sidx3].size():
-				wedge_mmi_by_slot[sidx3][wv] = null
-				continue
-			var wmesh: Mesh = wedge_slot_meshes[sidx3][wv]
+			var wmesh: Mesh = slot_meshes_alloc[wv]
 			if wmesh == null:
-				wedge_mmi_by_slot[sidx3][wv] = null
+				wedge_mmi_by_slot[sidx2][wv] = null
 				continue
 
 			var wmm: MultiMesh = MultiMesh.new()
@@ -3231,8 +4134,8 @@ func _rebuild_wall_decor() -> void:
 			wmmi.custom_aabb = decor_aabb
 
 			_wall_decor_root.add_child(wmmi)
-			wedge_mmi_by_slot[sidx3][wv] = wmmi
-			wedge_aabb_by_slot[sidx3][wv] = wmesh.get_aabb()
+			wedge_mmi_by_slot[sidx2][wv] = wmmi
+			wedge_aabb_by_slot[sidx2][wv] = wmesh.get_aabb()
 
 	var rect_write_i: Array[int] = []
 	rect_write_i.resize(rect_variant_count)
@@ -3242,10 +4145,11 @@ func _rebuild_wall_decor() -> void:
 	var wedge_write_i_by_slot: Array = []
 	wedge_write_i_by_slot.resize(WEDGE_SLOT_COUNT)
 	for sidx4: int in range(WEDGE_SLOT_COUNT):
-		wedge_write_i_by_slot[sidx4] = []
-		wedge_write_i_by_slot[sidx4].resize(wedge_variant_count)
-		for wv2: int in range(wedge_variant_count):
-			wedge_write_i_by_slot[sidx4][wv2] = 0
+		var slot_write_i: Array[int] = []
+		slot_write_i.resize(_wd_slot_meshes(sidx4).size())
+		for wv2: int in range(slot_write_i.size()):
+			slot_write_i[wv2] = 0
+		wedge_write_i_by_slot[sidx4] = slot_write_i
 
 	var total_rect_instances: int = 0
 	for count in rect_counts:
@@ -3255,8 +4159,8 @@ func _rebuild_wall_decor() -> void:
 
 	var total_wedge_instances: int = 0
 	for sidx5: int in range(WEDGE_SLOT_COUNT):
-		for wvi: int in range(wedge_variant_count):
-			total_wedge_instances += int(wedge_counts_by_slot[sidx5][wvi])
+		for slot_count in wedge_counts_by_slot[sidx5]:
+			total_wedge_instances += int(slot_count)
 	if has_wedge_decor and total_wedge_instances <= 0:
 		push_warning("Wall decor: 0 wedge instances after filtering. Check max size.")
 
@@ -3324,6 +4228,12 @@ func _rebuild_wall_decor() -> void:
 		var wedge_place_fi: int = 0
 		for wf2: WallFace in wedge_faces:
 			wedge_place_fi += 1
+			if not _wall_face_meta.has(wf2.key):
+				dbg_wedge_missing_meta_place += 1
+			else:
+				var m_place: FaceMeta = _wall_face_meta[wf2.key] as FaceMeta
+				if m_place == null or m_place.ramp_edge_kind < 0:
+					dbg_wedge_missing_slot_place += 1
 			var place_outward: Vector3 = _wall_place_outward(wf2)
 			if wall_wedge_decor_skip_occluder_caps:
 				if _wall_face_min_world_y(wf2) <= tunnel_occluder_y + wall_wedge_decor_occluder_epsilon:
@@ -3349,8 +4259,9 @@ func _rebuild_wall_decor() -> void:
 			var cls_p: Dictionary = _wedge_slot_classify(wf2, place_outward, max(2, cells_per_side))
 			var slot_p: int = int(cls_p.get("slot", WEDGE_SLOT_RAMP_LEFT))
 			if slot_p < 0 or slot_p >= WEDGE_SLOT_COUNT:
-				slot_p = WEDGE_SLOT_RAMP_LEFT
-			var slot_meshes_p: Array[Mesh] = wedge_slot_meshes[slot_p]
+				dbg_wedge_skip_variant_place += 1
+				continue
+			var slot_meshes_p: Array[Mesh] = _wd_slot_meshes(slot_p)
 			if slot_meshes_p.is_empty():
 				dbg_wedge_skip_variant_place += 1
 				continue
@@ -3387,11 +4298,11 @@ func _rebuild_wall_decor() -> void:
 
 	if has_wedge_decor:
 		for sidx6: int in range(WEDGE_SLOT_COUNT):
-			for wv3: int in range(wedge_variant_count):
+			for wv3: int in range(_wd_slot_meshes(sidx6).size()):
 				var wedge_mmi: MultiMeshInstance3D = wedge_mmi_by_slot[sidx6][wv3]
 				if wedge_mmi != null:
 					wedge_mmi.multimesh.visible_instance_count = int(wedge_write_i_by_slot[sidx6][wv3])
-		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d) place(occluder=%d,surface=%d,allow=%d,under=%d,variant=%d)" % [
+		print("wedge_dbg total=%d kept=%d skip_trap=%d skip_null_or_short=%d count(occluder=%d,surface=%d,allow=%d,missing_meta=%d,missing_slot=%d) place(occluder=%d,surface=%d,allow=%d,under=%d,variant=%d,missing_meta=%d,missing_slot=%d)" % [
 			dbg_wedge_total,
 			dbg_wedge_kept,
 			dbg_wedge_skip_trap,
@@ -3399,11 +4310,15 @@ func _rebuild_wall_decor() -> void:
 			dbg_wedge_skip_occluder_count,
 			dbg_wedge_skip_surface_count,
 			dbg_wedge_skip_allow_count,
+			dbg_wedge_missing_meta_count,
+			dbg_wedge_missing_slot_count,
 			dbg_wedge_skip_occluder_place,
 			dbg_wedge_skip_surface_place,
 			dbg_wedge_skip_allow_place,
 			dbg_wedge_skip_under_surface_place,
-			dbg_wedge_skip_variant_place
+			dbg_wedge_skip_variant_place,
+			dbg_wedge_missing_meta_place,
+			dbg_wedge_missing_slot_place
 		])
 
 func _world_to_cell_xz(p: Vector3, n: int) -> Vector2i:
@@ -3423,6 +4338,24 @@ func _cell_is_ramp(cx: int, cz: int, n: int) -> bool:
 func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dictionary:
 	# Returns: { slot, ramp_dir, edge_id }
 	# slot is one of WEDGE_SLOT_* constants.
+	if _wall_face_meta.has(wf.key):
+		var m0: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if m0 != null and m0.ramp_edge_kind >= 0:
+			return {
+				"slot": m0.ramp_edge_kind,
+				"ramp_dir": m0.ramp_dir,
+				"edge_id": m0.owner_edge_id,
+				"edge_kind": 0
+			}
+		if m0 != null:
+			# Metadata exists but is unresolved: keep strict to expose tagging gaps.
+			return {
+				"slot": -1,
+				"ramp_dir": m0.ramp_dir,
+				"edge_id": m0.owner_edge_id,
+				"edge_kind": 0
+			}
+
 	var outward: Vector3 = place_outward
 	outward.y = 0.0
 	if outward.length_squared() < 1e-8:
@@ -3431,44 +4364,99 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 			outward = Vector3.FORWARD
 	outward = outward.normalized()
 
-	var probe: float = _cell_size * 0.25
-	var c_a: Vector2i = _world_to_cell_xz(wf.center - outward * probe, n)
-	var c_b: Vector2i = _world_to_cell_xz(wf.center + outward * probe, n)
+	var eps: float = maxf(wall_decor_open_side_epsilon, 0.001)
+	var probe: float = maxf(eps + 0.001, _cell_size * wall_decor_surface_probe_radius_cells)
+	var step: float = minf(probe, _cell_size * 0.49)
+	step = maxf(step, eps + 0.001)
 
-	var a_is_ramp: bool = _cell_is_ramp(c_a.x, c_a.y, n)
-	var b_is_ramp: bool = _cell_is_ramp(c_b.x, c_b.y, n)
+	var c_a: Vector2i = _world_to_cell_xz(wf.center - outward * step, n)
+	var c_b: Vector2i = _world_to_cell_xz(wf.center + outward * step, n)
 
 	# Pick which side is the ramp cell.
 	var ramp_cell: Vector2i = c_a
 	var nb_cell: Vector2i = c_b
-	if b_is_ramp and not a_is_ramp:
-		ramp_cell = c_b
-		nb_cell = c_a
-	elif a_is_ramp and not b_is_ramp:
-		pass
-	else:
-		# Degenerate (no ramp or both ramps): stable fallback based on face winding.
-		var avg_left: float = 0.5 * (wf.a.y + wf.d.y)
-		var avg_right: float = 0.5 * (wf.b.y + wf.c.y)
-		var fallback_is_right: bool = avg_right > avg_left
-		var fallback_slot: int = WEDGE_SLOT_RAMP_RIGHT if fallback_is_right else WEDGE_SLOT_RAMP_LEFT
-		return {"slot": fallback_slot, "ramp_dir": RAMP_NONE, "edge_id": -1, "edge_kind": 0}
+	var have_ramp_cell: bool = false
+	if _wall_face_meta.has(wf.key):
+		var m: FaceMeta = _wall_face_meta[wf.key] as FaceMeta
+		if m != null and m.ramp_cell.x >= 0 and _in_bounds(m.ramp_cell.x, m.ramp_cell.y, n):
+			ramp_cell = m.ramp_cell
+			if m.cell_a == ramp_cell and _in_bounds(m.cell_b.x, m.cell_b.y, n):
+				nb_cell = m.cell_b
+			elif _in_bounds(m.cell_a.x, m.cell_a.y, n):
+				nb_cell = m.cell_a
+			have_ramp_cell = true
 
-	var ridx: int = _idx2(ramp_cell.x, ramp_cell.y, n)
-	var ramp_dir: int = _ramp_up_dir[ridx]
+	if not have_ramp_cell:
+		var a_is_ramp: bool = _cell_is_ramp(c_a.x, c_a.y, n)
+		var b_is_ramp: bool = _cell_is_ramp(c_b.x, c_b.y, n)
+		if b_is_ramp and not a_is_ramp:
+			ramp_cell = c_b
+			nb_cell = c_a
+			have_ramp_cell = true
+		elif a_is_ramp and not b_is_ramp:
+			have_ramp_cell = true
+		elif a_is_ramp and b_is_ramp:
+			have_ramp_cell = true
+		else:
+			# Both side probes missed. Scan center cell + 4-neighbors for an adjacent ramp cell.
+			var cc: Vector2i = _world_to_cell_xz(wf.center, n)
+			var search_cells: Array[Vector2i] = [
+				cc,
+				Vector2i(cc.x + 1, cc.y),
+				Vector2i(cc.x - 1, cc.y),
+				Vector2i(cc.x, cc.y - 1),
+				Vector2i(cc.x, cc.y + 1)
+			]
+			var best_dist2: float = INF
+			for sc in search_cells:
+				if not _cell_is_ramp(sc.x, sc.y, n):
+					continue
+				var sx: float = _ox + (float(sc.x) + 0.5) * _cell_size
+				var sz: float = _oz + (float(sc.y) + 0.5) * _cell_size
+				var d2: float = Vector2(wf.center.x - sx, wf.center.z - sz).length_squared()
+				if d2 < best_dist2:
+					best_dist2 = d2
+					ramp_cell = sc
+					have_ramp_cell = true
+
+	var ramp_dir: int = RAMP_NONE
+	if have_ramp_cell:
+		var ridx: int = _idx2(ramp_cell.x, ramp_cell.y, n)
+		ramp_dir = _ramp_up_dir[ridx]
 
 	# Determine which edge of the ramp cell this face is on from neighbor delta.
-	var dx: int = nb_cell.x - ramp_cell.x
-	var dz: int = nb_cell.y - ramp_cell.y
 	var edge_id: int = -1
-	if dx == 1 and dz == 0:
-		edge_id = 0 # E
-	elif dx == -1 and dz == 0:
-		edge_id = 1 # W
-	elif dz == -1 and dx == 0:
-		edge_id = 2 # N
-	elif dz == 1 and dx == 0:
-		edge_id = 3 # S
+	if have_ramp_cell:
+		var dx: int = nb_cell.x - ramp_cell.x
+		var dz: int = nb_cell.y - ramp_cell.y
+		if dx == 1 and dz == 0:
+			edge_id = 0 # E
+		elif dx == -1 and dz == 0:
+			edge_id = 1 # W
+		elif dz == -1 and dx == 0:
+			edge_id = 2 # N
+		elif dz == 1 and dx == 0:
+			edge_id = 3 # S
+
+		if edge_id < 0:
+			var rcx: float = _ox + (float(ramp_cell.x) + 0.5) * _cell_size
+			var rcz: float = _oz + (float(ramp_cell.y) + 0.5) * _cell_size
+			var rel_x: float = wf.center.x - rcx
+			var rel_z: float = wf.center.z - rcz
+			if absf(rel_x) >= absf(rel_z):
+				edge_id = 0 if rel_x >= 0.0 else 1
+			else:
+				edge_id = 3 if rel_z >= 0.0 else 2
+
+			match edge_id:
+				0:
+					nb_cell = Vector2i(ramp_cell.x + 1, ramp_cell.y)
+				1:
+					nb_cell = Vector2i(ramp_cell.x - 1, ramp_cell.y)
+				2:
+					nb_cell = Vector2i(ramp_cell.x, ramp_cell.y - 1)
+				3:
+					nb_cell = Vector2i(ramp_cell.x, ramp_cell.y + 1)
 
 	# Map ramp-dir to its left/right side edges.
 	var left_edge: int = -1
@@ -3491,7 +4479,7 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 			right_edge = 3
 
 	var side_is_right: bool = (edge_id == right_edge)
-	if edge_id < 0:
+	if edge_id < 0 or ramp_dir == RAMP_NONE:
 		var avg_left2: float = 0.5 * (wf.a.y + wf.d.y)
 		var avg_right2: float = 0.5 * (wf.b.y + wf.c.y)
 		side_is_right = avg_right2 > avg_left2
@@ -3523,11 +4511,30 @@ func _wedge_slot_classify(wf: WallFace, place_outward: Vector3, n: int) -> Dicti
 
 	# Overhang routing should be determined by whether the *open-air side* is under a ceiling.
 	var seam_overhang: bool = false
-	if wf.is_trapezoid and edge_id >= 0:
-		var p_side := wf.center + outward * (wall_decor_open_side_epsilon + 0.001)
+	if wf.is_trapezoid:
+		# Sample near the wedge tip (highest point), not centroid, to avoid seam misses.
+		var tip: Vector3 = wf.a
+		var tip_y: float = wf.a.y
+		if wf.b.y > tip_y:
+			tip = wf.b
+			tip_y = wf.b.y
+		if wf.c.y > tip_y:
+			tip = wf.c
+			tip_y = wf.c.y
+		if wf.d.y > tip_y:
+			tip = wf.d
+			tip_y = wf.d.y
+
+		var near_d: float = minf(0.08 * _cell_size, maxf(0.02 * _cell_size, step * 0.25))
+		var p_side_near := tip + outward * near_d
+		var p_side_far := tip + outward * step
 		var top_y: float = _wall_face_max_world_y(wf)
-		var h_ceiling: float = _wd_surface_only_ceiling_y_at(p_side)
-		seam_overhang = h_ceiling > top_y + wall_decor_surface_margin
+		var hint: Vector3 = -outward
+		var h_ceiling_near: float = _wd_surface_only_ceiling_y_at(p_side_near, hint)
+		var h_ceiling_far: float = _wd_surface_only_ceiling_y_at(p_side_far, hint)
+		var cover_near: bool = h_ceiling_near > top_y + wall_decor_surface_margin
+		var cover_far: bool = h_ceiling_far > top_y + wall_decor_surface_margin
+		seam_overhang = cover_near or cover_far
 
 	if seam_overhang:
 		slot = WEDGE_SLOT_OVERHANG_RIGHT if side_is_right else WEDGE_SLOT_OVERHANG_LEFT
@@ -4112,6 +5119,8 @@ func _rebuild_floor_decor() -> void:
 		buckets[i] = []
 
 	for face in _floor_faces:
+		if face.center.y < floor_decor_min_world_y:
+			continue
 		var pick: int = int(abs(face.key ^ floor_decor_seed)) % floor_decor_meshes.size()
 		buckets[pick].append(face)
 
@@ -4558,7 +5567,7 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_x: bool, capture_decor: bool = true) -> void:
+	normal_pos_x: bool, capture_decor: bool = true, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -4588,6 +5597,9 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 		d = tmp
 	if capture_decor:
 		_capture_wall_face(a, b, c, d)
+		var n_cells: int = max(2, cells_per_side)
+		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
+			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_E, n_cells)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -4616,7 +5628,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 
 func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float, subdiv: int,
-	normal_pos_z: bool, capture_decor: bool = true) -> void:
+	normal_pos_z: bool, capture_decor: bool = true, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -4646,6 +5658,9 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 		d = tmp
 	if capture_decor:
 		_capture_wall_face(a, b, c, d)
+		var n_cells: int = max(2, cells_per_side)
+		if _in_bounds(cell_a.x, cell_a.y, n_cells) and _in_bounds(cell_b.x, cell_b.y, n_cells):
+			_tag_last_wall_face_meta(cell_a, cell_b, EDGE_S, n_cells)
 
 	if d0 > eps and d1 > eps:
 		if subdiv > 1:
@@ -4732,7 +5747,7 @@ func _add_cell_top_grid(
 	var idx: int = cell_z * max(2, cells_per_side) + cell_x
 	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
 	var is_ramp: bool = ramp_dir != RAMP_NONE
-	if enable_floor_decor and not floor_decor_meshes.is_empty():
+	if _want_floor_face_capture():
 		var f_a := Vector3(x0, h00, z0)
 		var f_b := Vector3(x1, h10, z0)
 		var f_c := Vector3(x1, h11, z1)

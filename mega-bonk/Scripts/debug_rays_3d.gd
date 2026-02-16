@@ -10,7 +10,7 @@ extends Node3D
 
 @export var show_hit_markers: bool = true
 @export_range(0.005, 0.25, 0.005) var hit_radius: float = 0.04
-@export var no_depth_test: bool = true
+@export var no_depth_test: bool = false
 
 var _segments: Array[Dictionary] = []
 
@@ -41,9 +41,13 @@ func add_ray(from: Vector3, to: Vector3, color: Color = Color(0, 1, 0, 0.85), hi
 	if not enabled:
 		return
 
+	var draw_to: Vector3 = to
+	if hit_pos is Vector3:
+		draw_to = hit_pos
+
 	_segments.append({
 		"a": from,
-		"b": to,
+		"b": draw_to,
 		"c": color,
 		"hit": hit_pos,
 	})
@@ -68,9 +72,12 @@ func _setup() -> void:
 	_line_mat = StandardMaterial3D.new()
 	_line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_line_mat.vertex_color_use_as_albedo = true
-	_line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_line_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	_line_mat.no_depth_test = no_depth_test
+	_line_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	_line_mi.material_override = _line_mat
+	_line_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_line_mat.render_priority = 0
 
 	# Hit markers
 	if show_hit_markers:
@@ -93,9 +100,12 @@ func _setup() -> void:
 		_hit_mat = StandardMaterial3D.new()
 		_hit_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_hit_mat.vertex_color_use_as_albedo = true
-		_hit_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_hit_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 		_hit_mat.no_depth_test = no_depth_test
+		_hit_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 		_hit_mmi.material_override = _hit_mat
+		_hit_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_hit_mat.render_priority = 0
 	else:
 		_hit_mmi = get_node_or_null(^"Hits") as MultiMeshInstance3D
 		if _hit_mmi != null:
