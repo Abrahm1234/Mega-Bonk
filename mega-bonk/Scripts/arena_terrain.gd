@@ -366,7 +366,7 @@ func grid_cell_world_rect(cell: Vector2i) -> Rect2:
 	_grid_refresh_transforms()
 	var x0 := _ox + float(cell.x) * _cell_size
 	var z0 := _oz + float(cell.y) * _cell_size
-	var corners := [
+	var corners: Array[Vector3] = [
 		_grid_local_to_world * Vector3(x0, 0.0, z0),
 		_grid_local_to_world * Vector3(x0 + _cell_size, 0.0, z0),
 		_grid_local_to_world * Vector3(x0 + _cell_size, 0.0, z0 + _cell_size),
@@ -376,7 +376,7 @@ func grid_cell_world_rect(cell: Vector2i) -> Rect2:
 	var min_z := INF
 	var max_x := -INF
 	var max_z := -INF
-	for p in corners:
+	for p: Vector3 in corners:
 		min_x = minf(min_x, p.x)
 		min_z = minf(min_z, p.z)
 		max_x = maxf(max_x, p.x)
@@ -396,7 +396,7 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 		lo = outer_floor_height
 	if is_nan(hi):
 		hi = box_height
-	var local_corners := [
+	var local_corners: Array[Vector3] = [
 		Vector3(x0, lo, z0),
 		Vector3(x0 + _cell_size, lo, z0),
 		Vector3(x0 + _cell_size, lo, z0 + _cell_size),
@@ -408,8 +408,8 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 	]
 	var min_v := Vector3(INF, INF, INF)
 	var max_v := Vector3(-INF, -INF, -INF)
-	for lp in local_corners:
-		var wp := _grid_local_to_world * lp
+	for lp: Vector3 in local_corners:
+		var wp: Vector3 = _grid_local_to_world * lp
 		min_v.x = minf(min_v.x, wp.x)
 		min_v.y = minf(min_v.y, wp.y)
 		min_v.z = minf(min_v.z, wp.z)
