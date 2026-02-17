@@ -149,6 +149,15 @@ var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
 
 # Debug wireframe for the grid (toggle with the '1' key).
+# By default, the wireframe is depth-tested (occluded by terrain) so you only see lines on visible faces.
+# You can optionally draw-through for alignment inspection.
+@export var grid_wire_draw_through_geometry: bool = false
+@export_range(0.0, 1.0, 0.01) var grid_wire_alpha: float = 0.28
+
+# When using the rock shader, wall/ramp displacement can push faces outside exact cell bounds.
+# For grid-alignment debugging, this option zeros wall/ramp displacement while the grid wire is visible.
+@export var grid_wire_disable_side_displacement: bool = true
+
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
@@ -376,19 +385,41 @@ func _grid_wire_get_material() -> Material:
 	if _grid_wire_material == null:
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		m.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
-		# Debug overlay: draw through geometry so you can inspect alignment.
-		m.no_depth_test = true
+		# Do not write depth; but do depth-test unless explicitly asked to draw-through.
+		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 		m.render_priority = 127
 		_grid_wire_material = m
+
+	# Always refresh runtime-tweakable settings.
+	_grid_wire_material.albedo_color = Color(1.0, 1.0, 1.0, clampf(grid_wire_alpha, 0.0, 1.0))
+	_grid_wire_material.no_depth_test = grid_wire_draw_through_geometry
 	return _grid_wire_material
+
+func _grid_wire_apply_debug_fit(enabled: bool) -> void:
+	# If the rock shader displaces walls/ramps along their normals, faces can protrude outside
+	# the exact XZ cell bounds (especially for vertical walls where normals point along ±X/±Z).
+	# For grid alignment debugging, optionally zero those displacement channels while the wire is visible.
+	if mesh_instance == null:
+		return
+	if not use_rock_shader:
+		return
+	var sm := mesh_instance.material_override as ShaderMaterial
+	if sm == null:
+		return
+	if enabled and grid_wire_disable_side_displacement:
+		sm.set_shader_parameter("disp_strength_wall", 0.0)
+		sm.set_shader_parameter("disp_strength_ramp", 0.0)
+	else:
+		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
+		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
 
 func _grid_wire_set_visible(enabled: bool) -> void:
 	_grid_wire_visible = enabled
 	_ensure_grid_wire_node()
 	_grid_wire_instance.visible = _grid_wire_visible
+	_grid_wire_apply_debug_fit(_grid_wire_visible)
 	if _grid_wire_visible:
 		_grid_wire_rebuild_mesh()
 
