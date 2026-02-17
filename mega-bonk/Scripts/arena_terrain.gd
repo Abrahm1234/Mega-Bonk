@@ -108,6 +108,7 @@ class_name ArenaBlockyTerrain
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
 
 var _cell_size: float
+var _resolved_world_size: float
 var _ox: float
 var _oz: float
 var _heights: PackedFloat32Array  # one height per cell (cells_per_side * cells_per_side)
@@ -401,8 +402,10 @@ func _grid_wire_rebuild_mesh() -> void:
 		return
 	_ensure_grid_wire_node()
 
-	var n := _grid_n	# grid is n×n cells
-	var w := _cell_size * float(n)
+	var n := _grid_n # grid is n x n cells
+	var w := _resolved_world_size
+	if w <= 0.0:
+		w = _cell_size * float(n)
 	var x0 := _ox
 	var z0 := _oz
 	var x1 := _ox + w
@@ -410,10 +413,27 @@ func _grid_wire_rebuild_mesh() -> void:
 	var y0 := outer_floor_height
 	var y1 := box_height
 
-	var im := ImmediateMesh.new()	# PRIMITIVE_LINES
+	# Draw a full 3D lattice so every voxel cell is outlined along X, Y, and Z.
+	var y_step := height_step
+	if y_step <= 0.0:
+		y_step = _cell_size
+	if y_step <= 0.0:
+		y_step = 1.0
+	var y_span := maxf(0.0, y1 - y0)
+	var y_slices: int = ceili(y_span / y_step)
+	if y_slices < 1:
+		y_slices = 1
+
+	# Hard cap for overlay density; if clamped, recompute step so the last slice lands on y1.
+	var max_slices := 256
+	if y_slices > max_slices:
+		y_slices = max_slices
+		y_step = y_span / float(y_slices)
+
+	var im := ImmediateMesh.new() # PRIMITIVE_LINES
 	im.surface_begin(Mesh.PRIMITIVE_LINES, _grid_wire_get_material())
 
-	# Vertical lines at each grid intersection.
+	# Vertical lines at each grid intersection (Y axis).
 	for zi in range(n + 1):
 		var z := z0 + float(zi) * _cell_size
 		for xi in range(n + 1):
@@ -421,26 +441,26 @@ func _grid_wire_rebuild_mesh() -> void:
 			im.surface_add_vertex(Vector3(x, y0, z))
 			im.surface_add_vertex(Vector3(x, y1, z))
 
-	# Bottom/top X lines.
-	for zi in range(n + 1):
-		var z := z0 + float(zi) * _cell_size
-		im.surface_add_vertex(Vector3(x0, y0, z))
-		im.surface_add_vertex(Vector3(x1, y0, z))
-		im.surface_add_vertex(Vector3(x0, y1, z))
-		im.surface_add_vertex(Vector3(x1, y1, z))
+	# Horizontal lattice at every Y slice (X and Z axes).
+	for yi in range(y_slices + 1):
+		var y := y0 + float(yi) * y_step
+		if yi == y_slices:
+			y = y1
 
-	# Bottom/top Z lines.
-	for xi in range(n + 1):
-		var x := x0 + float(xi) * _cell_size
-		im.surface_add_vertex(Vector3(x, y0, z0))
-		im.surface_add_vertex(Vector3(x, y0, z1))
-		im.surface_add_vertex(Vector3(x, y1, z0))
-		im.surface_add_vertex(Vector3(x, y1, z1))
+		# X lines (vary X, fixed Z).
+		for zi in range(n + 1):
+			var z := z0 + float(zi) * _cell_size
+			im.surface_add_vertex(Vector3(x0, y, z))
+			im.surface_add_vertex(Vector3(x1, y, z))
+
+		# Z lines (vary Z, fixed X).
+		for xi in range(n + 1):
+			var x := x0 + float(xi) * _cell_size
+			im.surface_add_vertex(Vector3(x, y, z0))
+			im.surface_add_vertex(Vector3(x, y, z1))
 
 	im.surface_end()
 	_grid_wire_instance.mesh = im
-
-
 
 func _fmt_v3(v: Vector3) -> String:
 	return "(%.3f, %.3f, %.3f)" % [v.x, v.y, v.z]
@@ -1061,9 +1081,9 @@ func generate() -> void:
 
 	# Center the arena around (0,0) in XZ.
 	# Use the resolved grid width (n * cell_size) so every generated cell fits the grid exactly.
-	var resolved_w: float = _cell_size * float(n)
-	_ox = -resolved_w * 0.5
-	_oz = -resolved_w * 0.5
+	_resolved_world_size = _cell_size * float(n)
+	_ox = -_resolved_world_size * 0.5
+	_oz = -_resolved_world_size * 0.5
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -1111,7 +1131,7 @@ func _generate_heights() -> void:
 	noise.fractal_lacunarity = noise_lacunarity
 	noise.fractal_gain = noise_gain
 
-	var half_w: float = world_size_m * 0.5
+	var half_w: float = _resolved_world_size * 0.5
 	var flat_r: float = maxf(0.0, center_flat_radius_m)
 
 	var bs: int = max(1, block_size_cells)
@@ -2391,7 +2411,7 @@ func _sync_sun() -> void:
 	if sun == null:
 		return
 
-	var center := global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+	var center := global_position + Vector3(_ox + _resolved_world_size * 0.5, 0.0, _oz + _resolved_world_size * 0.5)
 	sun.global_position = center + Vector3(0.0, sun_height, 0.0)
 	sun.look_at(center, Vector3.UP)
 
@@ -2400,9 +2420,9 @@ func _sync_sun() -> void:
 # -----------------------------
 func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var a := Vector3(_ox, y, _oz)
-	var b := Vector3(_ox + world_size_m, y, _oz)
-	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
-	var d := Vector3(_ox, y, _oz + world_size_m)
+	var b := Vector3(_ox + _resolved_world_size, y, _oz)
+	var c := Vector3(_ox + _resolved_world_size, y, _oz + _resolved_world_size)
+	var d := Vector3(_ox, y, _oz + _resolved_world_size)
 	var u0 := Vector2(0.0, 0.0) * uv_scale
 	var u1 := Vector2(1.0, 0.0) * uv_scale
 	var u2 := Vector2(1.0, 1.0) * uv_scale
@@ -2413,13 +2433,13 @@ func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 
 func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
 	# West wall (x = _ox)
-	_add_box_wall_plane(st, Vector3(_ox, y0, _oz), Vector3(_ox, y0, _oz + world_size_m), y1, uv_scale, true)
-	# East wall (x = _ox + world_size_m)
-	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz), y1, uv_scale, true)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz), Vector3(_ox, y0, _oz + _resolved_world_size), y1, uv_scale, true)
+	# East wall (x = _ox + _resolved_world_size)
+	_add_box_wall_plane(st, Vector3(_ox + _resolved_world_size, y0, _oz + _resolved_world_size), Vector3(_ox + _resolved_world_size, y0, _oz), y1, uv_scale, true)
 	# North wall (z = _oz)
-	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz), Vector3(_ox, y0, _oz), y1, uv_scale, true)
-	# South wall (z = _oz + world_size_m)
-	_add_box_wall_plane(st, Vector3(_ox, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz + world_size_m), y1, uv_scale, true)
+	_add_box_wall_plane(st, Vector3(_ox + _resolved_world_size, y0, _oz), Vector3(_ox, y0, _oz), y1, uv_scale, true)
+	# South wall (z = _oz + _resolved_world_size)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz + _resolved_world_size), Vector3(_ox + _resolved_world_size, y0, _oz + _resolved_world_size), y1, uv_scale, true)
 
 func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float, uv_scale: float, outward: bool) -> void:
 	var a := p0
@@ -2445,9 +2465,9 @@ func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float
 
 func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var a := Vector3(_ox, y, _oz)
-	var b := Vector3(_ox + world_size_m, y, _oz)
-	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
-	var d := Vector3(_ox, y, _oz + world_size_m)
+	var b := Vector3(_ox + _resolved_world_size, y, _oz)
+	var c := Vector3(_ox + _resolved_world_size, y, _oz + _resolved_world_size)
+	var d := Vector3(_ox, y, _oz + _resolved_world_size)
 	# Flip winding vs floor so normals face inward-ish
 	var u0 := Vector2(0.0, 0.0) * uv_scale
 	var u1 := Vector2(0.0, 1.0) * uv_scale
