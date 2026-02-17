@@ -157,12 +157,17 @@ var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-
 # When using the rock shader, wall/ramp displacement can push faces outside exact cell bounds.
 # For grid-alignment debugging, this option zeros wall/ramp displacement while the grid wire is visible.
 @export var grid_wire_disable_side_displacement: bool = true
+@export var grid_wire_disable_displacement_when_visible: bool = true
 
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
 var _grid_local_to_world: Transform3D = Transform3D.IDENTITY
 var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
+var _grid_wire_prev_disp_top: float = 0.0
+var _grid_wire_prev_disp_wall: float = 0.0
+var _grid_wire_prev_disp_ramp: float = 0.0
+var _grid_wire_prev_disp_cached: bool = false
 
 func _grid_refresh_transforms() -> void:
 	if mesh_instance != null and is_instance_valid(mesh_instance):
@@ -459,9 +464,8 @@ func _grid_wire_get_material() -> Material:
 	return _grid_wire_material
 
 func _grid_wire_apply_debug_fit(enabled: bool) -> void:
-	# If the rock shader displaces walls/ramps along their normals, faces can protrude outside
-	# the exact XZ cell bounds (especially for vertical walls where normals point along ±X/±Z).
-	# For grid alignment debugging, optionally zero those displacement channels while the wire is visible.
+	# Vertex displacement can visually drift rendered terrain away from exact cell planes.
+	# For alignment debugging, optionally disable displacement while the wireframe is visible.
 	if mesh_instance == null:
 		return
 	if not use_rock_shader:
@@ -469,10 +473,35 @@ func _grid_wire_apply_debug_fit(enabled: bool) -> void:
 	var sm := mesh_instance.material_override as ShaderMaterial
 	if sm == null:
 		return
-	if enabled and grid_wire_disable_side_displacement:
-		sm.set_shader_parameter("disp_strength_wall", 0.0)
-		sm.set_shader_parameter("disp_strength_ramp", 0.0)
+
+	if enabled:
+		if not _grid_wire_prev_disp_cached:
+			_grid_wire_prev_disp_top = float(sm.get_shader_parameter("disp_strength_top"))
+			_grid_wire_prev_disp_wall = float(sm.get_shader_parameter("disp_strength_wall"))
+			_grid_wire_prev_disp_ramp = float(sm.get_shader_parameter("disp_strength_ramp"))
+			_grid_wire_prev_disp_cached = true
+
+		if grid_wire_disable_displacement_when_visible:
+			sm.set_shader_parameter("disp_strength_top", 0.0)
+			sm.set_shader_parameter("disp_strength_wall", 0.0)
+			sm.set_shader_parameter("disp_strength_ramp", 0.0)
+		elif grid_wire_disable_side_displacement:
+			sm.set_shader_parameter("disp_strength_top", _grid_wire_prev_disp_top)
+			sm.set_shader_parameter("disp_strength_wall", 0.0)
+			sm.set_shader_parameter("disp_strength_ramp", 0.0)
+		else:
+			sm.set_shader_parameter("disp_strength_top", _grid_wire_prev_disp_top)
+			sm.set_shader_parameter("disp_strength_wall", _grid_wire_prev_disp_wall)
+			sm.set_shader_parameter("disp_strength_ramp", _grid_wire_prev_disp_ramp)
+		return
+
+	if _grid_wire_prev_disp_cached:
+		sm.set_shader_parameter("disp_strength_top", _grid_wire_prev_disp_top)
+		sm.set_shader_parameter("disp_strength_wall", _grid_wire_prev_disp_wall)
+		sm.set_shader_parameter("disp_strength_ramp", _grid_wire_prev_disp_ramp)
+		_grid_wire_prev_disp_cached = false
 	else:
+		sm.set_shader_parameter("disp_strength_top", disp_strength_top)
 		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
 		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
 
