@@ -385,16 +385,22 @@ func _grid_wire_get_material() -> Material:
 	if _grid_wire_material == null:
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
-		# Do not write depth; but do depth-test unless explicitly asked to draw-through.
-		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 		m.render_priority = 127
 		_grid_wire_material = m
 
 	# Always refresh runtime-tweakable settings.
 	_grid_wire_material.albedo_color = Color(1.0, 1.0, 1.0, clampf(grid_wire_alpha, 0.0, 1.0))
 	_grid_wire_material.no_depth_test = grid_wire_draw_through_geometry
+	if grid_wire_draw_through_geometry:
+		# Legacy behavior: keep the overlay visible through everything.
+		_grid_wire_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_grid_wire_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	else:
+		# Debug behavior: respect scene depth so wire hidden behind terrain, including
+		# surfaces that use alpha materials (depth prepass writes depth first).
+		_grid_wire_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+		_grid_wire_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	return _grid_wire_material
 
 func _grid_wire_apply_debug_fit(enabled: bool) -> void:
