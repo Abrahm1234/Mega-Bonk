@@ -147,6 +147,14 @@ var _grid_contents: Array = [] # Array[Array[Node]] per-cell contents
 var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
 
+# Debug wireframe for the grid (toggle with the '1' key).
+var _grid_wire_visible: bool = false
+var _grid_wire_instance: MeshInstance3D
+var _grid_wire_material: StandardMaterial3D
+
+func _grid_is_valid_cell(cell: Vector2i) -> bool:
+	return _grid_n > 0 and cell.x >= 0 and cell.x < _grid_n and cell.y >= 0 and cell.y < _grid_n
+
 func _grid_init(n: int) -> void:
 	_grid_n = n
 	var count := n * n
@@ -207,12 +215,16 @@ func grid_cell_to_world_center(cell: Vector2i) -> Vector3:
 	return Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
 
 func grid_cell_index(cell: Vector2i) -> int:
+	if not _grid_is_valid_cell(cell):
+		return -1
 	return _idx2(cell.x, cell.y, _grid_n)
 
 func grid_cell_tags(cell: Vector2i) -> int:
 	if _grid_n <= 0:
 		return 0
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return 0
 	return int(_grid_tags[i])
 
 func grid_cell_has_tag(cell: Vector2i, tag_bit: int) -> bool:
@@ -220,10 +232,14 @@ func grid_cell_has_tag(cell: Vector2i, tag_bit: int) -> bool:
 
 func grid_add_cell_tag(cell: Vector2i, tag_bit: int) -> void:
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return
 	_grid_tags[i] = int(_grid_tags[i]) | tag_bit
 
 func grid_remove_cell_tag(cell: Vector2i, tag_bit: int) -> void:
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return
 	_grid_tags[i] = int(_grid_tags[i]) & ~tag_bit
 
 func grid_cells_with_tag(tag_bit: int) -> PackedInt32Array:
@@ -239,8 +255,16 @@ func grid_cells_with_tag(tag_bit: int) -> PackedInt32Array:
 func grid_register_object(node: Node3D, obj_tags: int = 0) -> void:
 	if node == null or _grid_n <= 0:
 		return
+
+	if _grid_object_to_cell.has(node):
+		_grid_object_tags[node] = obj_tags
+		grid_update_object_cell(node)
+		return
+
 	var cell := grid_world_to_cell(node.global_position)
 	var idx := grid_cell_index(cell)
+	if idx < 0:
+		return
 
 	_grid_contents[idx].append(node)
 	_grid_object_to_cell[node] = idx
@@ -261,6 +285,8 @@ func grid_update_object_cell(node: Node3D) -> void:
 	var old_idx: int = int(_grid_object_to_cell[node])
 	var cell := grid_world_to_cell(node.global_position)
 	var new_idx := grid_cell_index(cell)
+	if new_idx < 0:
+		return
 	if new_idx == old_idx:
 		return
 
@@ -275,7 +301,10 @@ func grid_update_object_cell(node: Node3D) -> void:
 func grid_objects_in_cell(cell: Vector2i) -> Array:
 	if _grid_n <= 0:
 		return []
-	return _grid_contents[grid_cell_index(cell)]
+	var idx := grid_cell_index(cell)
+	if idx < 0:
+		return []
+	return _grid_contents[idx]
 
 func grid_set_object_tags(node: Node, tags: int) -> void:
 	if node == null:
@@ -301,6 +330,115 @@ func _grid__on_object_exiting(node: Node) -> void:
 			arr.remove_at(k)
 		_grid_object_to_cell.erase(node)
 	_grid_object_tags.erase(node)
+
+
+# -----------------------------
+# Grid cell bounds helpers
+# -----------------------------
+func grid_cell_world_rect(cell: Vector2i) -> Rect2:
+	# Returns the XZ footprint of the cell in world-space (Rect2: position=(x,z), size=(w,d)).
+	if not _grid_is_valid_cell(cell):
+		return Rect2()
+	var x0 := _ox + float(cell.x) * _cell_size
+	var z0 := _oz + float(cell.y) * _cell_size
+	return Rect2(Vector2(x0, z0), Vector2(_cell_size, _cell_size))
+
+func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN) -> AABB:
+	# Returns a world-space AABB for the cell column. If y_min/y_max are omitted, uses outer_floor_height..box_height.
+	if not _grid_is_valid_cell(cell):
+		return AABB()
+	var x0 := _ox + float(cell.x) * _cell_size
+	var z0 := _oz + float(cell.y) * _cell_size
+	var lo := y_min
+	var hi := y_max
+	if is_nan(lo):
+		lo = outer_floor_height
+	if is_nan(hi):
+		hi = box_height
+	return AABB(Vector3(x0, lo, z0), Vector3(_cell_size, hi - lo, _cell_size))
+
+# -----------------------------
+# Grid wireframe visualization
+# -----------------------------
+func _ensure_grid_wire_node() -> void:
+	if _grid_wire_instance != null and is_instance_valid(_grid_wire_instance):
+		return
+	var parent := get_node_or_null('TerrainBody')
+	if parent == null:
+		parent = self
+	_grid_wire_instance = MeshInstance3D.new()
+	_grid_wire_instance.name = 'GridWireframe'
+	_grid_wire_instance.visible = false
+	parent.add_child(_grid_wire_instance)
+
+func _grid_wire_get_material() -> Material:
+	if _grid_wire_material == null:
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		# Debug overlay: draw through geometry so you can inspect alignment.
+		m.no_depth_test = true
+		m.render_priority = 127
+		_grid_wire_material = m
+	return _grid_wire_material
+
+func _grid_wire_set_visible(enabled: bool) -> void:
+	_grid_wire_visible = enabled
+	_ensure_grid_wire_node()
+	_grid_wire_instance.visible = _grid_wire_visible
+	if _grid_wire_visible:
+		_grid_wire_rebuild_mesh()
+
+func _toggle_grid_wireframe() -> void:
+	_grid_wire_set_visible(not _grid_wire_visible)
+
+func _grid_wire_rebuild_mesh() -> void:
+	if not _grid_wire_visible:
+		return
+	if _grid_n <= 0 or _cell_size <= 0.0:
+		return
+	_ensure_grid_wire_node()
+
+	var n := _grid_n	# grid is n×n cells
+	var w := _cell_size * float(n)
+	var x0 := _ox
+	var z0 := _oz
+	var x1 := _ox + w
+	var z1 := _oz + w
+	var y0 := outer_floor_height
+	var y1 := box_height
+
+	var im := ImmediateMesh.new()	# PRIMITIVE_LINES
+	im.surface_begin(Mesh.PRIMITIVE_LINES, _grid_wire_get_material())
+
+	# Vertical lines at each grid intersection.
+	for zi in range(n + 1):
+		var z := z0 + float(zi) * _cell_size
+		for xi in range(n + 1):
+			var x := x0 + float(xi) * _cell_size
+			im.surface_add_vertex(Vector3(x, y0, z))
+			im.surface_add_vertex(Vector3(x, y1, z))
+
+	# Bottom/top X lines.
+	for zi in range(n + 1):
+		var z := z0 + float(zi) * _cell_size
+		im.surface_add_vertex(Vector3(x0, y0, z))
+		im.surface_add_vertex(Vector3(x1, y0, z))
+		im.surface_add_vertex(Vector3(x0, y1, z))
+		im.surface_add_vertex(Vector3(x1, y1, z))
+
+	# Bottom/top Z lines.
+	for xi in range(n + 1):
+		var x := x0 + float(xi) * _cell_size
+		im.surface_add_vertex(Vector3(x, y0, z0))
+		im.surface_add_vertex(Vector3(x, y0, z1))
+		im.surface_add_vertex(Vector3(x, y1, z0))
+		im.surface_add_vertex(Vector3(x, y1, z1))
+
+	im.surface_end()
+	_grid_wire_instance.mesh = im
 
 
 
@@ -885,6 +1023,8 @@ func _ready() -> void:
 		mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
+	_ensure_grid_wire_node()
+	_grid_wire_set_visible(false)
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
@@ -897,14 +1037,19 @@ func _ready() -> void:
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
-		if randomize_seed_on_regen_key:
-			var rng := RandomNumberGenerator.new()
-			rng.randomize()
-			noise_seed = rng.randi()
-			if print_seed:
-				print("Noise seed:", noise_seed)
-		generate()
+	if e is InputEventKey and e.pressed and not e.echo:
+		if e.keycode == KEY_1 or e.keycode == KEY_KP_1:
+			_toggle_grid_wireframe()
+			return
+
+		if e.keycode == KEY_R:
+			if randomize_seed_on_regen_key:
+				var rng := RandomNumberGenerator.new()
+				rng.randomize()
+				noise_seed = rng.randi()
+				if print_seed:
+					print('Noise seed:', noise_seed)
+			generate()
 
 func generate() -> void:
 	var n: int = max(2, cells_per_side)
@@ -914,9 +1059,11 @@ func generate() -> void:
 		if sm != null:
 			sm.set_shader_parameter("cell_size", _cell_size)
 
-	# Center the arena around (0,0) in XZ
-	_ox = -world_size_m * 0.5
-	_oz = -world_size_m * 0.5
+	# Center the arena around (0,0) in XZ.
+	# Use the resolved grid width (n * cell_size) so every generated cell fits the grid exactly.
+	var resolved_w: float = _cell_size * float(n)
+	_ox = -resolved_w * 0.5
+	_oz = -resolved_w * 0.5
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -940,6 +1087,8 @@ func generate() -> void:
 	_generate_tunnels_layout(n, rng)
 	_grid_init(n)
 	_grid_rebuild_tags(n)
+	if _grid_wire_visible:
+		_grid_wire_rebuild_mesh()
 
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
