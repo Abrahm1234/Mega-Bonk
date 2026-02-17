@@ -147,6 +147,14 @@ var _grid_tags: PackedInt64Array = PackedInt64Array() # per-cell bitmask
 var _grid_contents: Array = [] # Array[Array[Node]] per-cell contents
 var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
+var _grid_wire_saved_disp_params: Dictionary = {}
+
+# Grid space transforms
+# The grid and generated mesh are authored in the *TerrainMesh local space*.
+# If TerrainBody/TerrainMesh nodes are moved/scaled in the scene, convert
+# between world-space points and this local grid-space to avoid offsets.
+var _grid_local_to_world: Transform3D = Transform3D.IDENTITY
+var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
 
 # Debug wireframe for the grid (toggle with the '1' key).
 # By default, the wireframe is depth-tested (occluded by terrain) so you only see lines on visible faces.
@@ -157,6 +165,7 @@ var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-
 # When using the rock shader, wall/ramp displacement can push faces outside exact cell bounds.
 # For grid-alignment debugging, this option zeros wall/ramp displacement while the grid wire is visible.
 @export var grid_wire_disable_side_displacement: bool = true
+@export var grid_wire_disable_displacement_when_visible: bool = true  # disables disp_strength_* while grid is visible for perfect alignment
 
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
@@ -181,6 +190,15 @@ func _grid_init(n: int) -> void:
 
 	_grid_object_to_cell.clear()
 	_grid_object_tags.clear()
+
+func _grid_refresh_space_xforms() -> void:
+	# Cache transforms used by the grid API.
+	# Grid-space == TerrainMesh local space (the same space vertices are authored in).
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		_grid_local_to_world = mesh_instance.global_transform
+	else:
+		_grid_local_to_world = global_transform
+	_grid_world_to_local = _grid_local_to_world.affine_inverse()
 
 func _grid_rebuild_tags(n: int) -> void:
 	if _grid_n != n or _grid_tags.size() != n * n:
@@ -211,161 +229,77 @@ func _grid_rebuild_tags(n: int) -> void:
 			_grid_tags[i] = t
 
 func grid_world_to_cell(p: Vector3) -> Vector2i:
-	if _grid_n <= 0 or _cell_size <= 0.0:
-		return Vector2i.ZERO
-	var xf := (p.x - _ox) / _cell_size
-	var zf := (p.z - _oz) / _cell_size
-	var x := int(floor(xf))
-	var z := int(floor(zf))
-	x = clamp(x, 0, _grid_n - 1)
-	z = clamp(z, 0, _grid_n - 1)
+	# Convert a *world-space* point into a grid cell (XZ).
+	# Important: terrain/grid are authored in TerrainMesh local space, so convert first.
+	var lp := _grid_world_to_local * p
+	var x := int(floor((lp.x - _ox) / _cell_size))
+	var z := int(floor((lp.z - _oz) / _cell_size))
+	x = clampi(x, 0, _grid_n - 1)
+	z = clampi(z, 0, _grid_n - 1)
 	return Vector2i(x, z)
 
+
 func grid_cell_to_world_center(cell: Vector2i) -> Vector3:
-	return Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
-
-func grid_cell_index(cell: Vector2i) -> int:
+	# Returns the *world-space* center point of a cell at Y=0 in grid local space.
 	if not _grid_is_valid_cell(cell):
-		return -1
-	return _idx2(cell.x, cell.y, _grid_n)
-
-func grid_cell_tags(cell: Vector2i) -> int:
-	if _grid_n <= 0:
-		return 0
-	var i := grid_cell_index(cell)
-	if i < 0:
-		return 0
-	return int(_grid_tags[i])
-
-func grid_cell_has_tag(cell: Vector2i, tag_bit: int) -> bool:
-	return (grid_cell_tags(cell) & tag_bit) != 0
-
-func grid_add_cell_tag(cell: Vector2i, tag_bit: int) -> void:
-	var i := grid_cell_index(cell)
-	if i < 0:
-		return
-	_grid_tags[i] = int(_grid_tags[i]) | tag_bit
-
-func grid_remove_cell_tag(cell: Vector2i, tag_bit: int) -> void:
-	var i := grid_cell_index(cell)
-	if i < 0:
-		return
-	_grid_tags[i] = int(_grid_tags[i]) & ~tag_bit
-
-func grid_cells_with_tag(tag_bit: int) -> PackedInt32Array:
-	var out := PackedInt32Array()
-	if _grid_n <= 0:
-		return out
-	var count := _grid_n * _grid_n
-	for i in range(count):
-		if (int(_grid_tags[i]) & tag_bit) != 0:
-			out.append(i)
-	return out
-
-func grid_register_object(node: Node3D, obj_tags: int = 0) -> void:
-	if node == null or _grid_n <= 0:
-		return
-
-	if _grid_object_to_cell.has(node):
-		_grid_object_tags[node] = obj_tags
-		grid_update_object_cell(node)
-		return
-
-	var cell := grid_world_to_cell(node.global_position)
-	var idx := grid_cell_index(cell)
-	if idx < 0:
-		return
-
-	_grid_contents[idx].append(node)
-	_grid_object_to_cell[node] = idx
-	_grid_object_tags[node] = obj_tags
-
-	# Auto-unregister when freed.
-	var cb := Callable(self, "_grid__on_object_exiting").bind(node)
-	if not node.tree_exiting.is_connected(cb):
-		node.tree_exiting.connect(cb)
-
-func grid_update_object_cell(node: Node3D) -> void:
-	if node == null or _grid_n <= 0:
-		return
-	if not _grid_object_to_cell.has(node):
-		grid_register_object(node)
-		return
-
-	var old_idx: int = int(_grid_object_to_cell[node])
-	var cell := grid_world_to_cell(node.global_position)
-	var new_idx := grid_cell_index(cell)
-	if new_idx < 0:
-		return
-	if new_idx == old_idx:
-		return
-
-	var arr: Array = _grid_contents[old_idx]
-	var k := arr.find(node)
-	if k != -1:
-		arr.remove_at(k)
-
-	_grid_contents[new_idx].append(node)
-	_grid_object_to_cell[node] = new_idx
-
-func grid_objects_in_cell(cell: Vector2i) -> Array:
-	if _grid_n <= 0:
-		return []
-	var idx := grid_cell_index(cell)
-	if idx < 0:
-		return []
-	return _grid_contents[idx]
-
-func grid_set_object_tags(node: Node, tags: int) -> void:
-	if node == null:
-		return
-	_grid_object_tags[node] = tags
-
-func grid_object_tags(node: Node) -> int:
-	if node == null:
-		return 0
-	return int(_grid_object_tags.get(node, 0))
-
-func grid_object_has_tag(node: Node, tag_bit: int) -> bool:
-	return (grid_object_tags(node) & tag_bit) != 0
-
-func _grid__on_object_exiting(node: Node) -> void:
-	if node == null:
-		return
-	if _grid_object_to_cell.has(node):
-		var idx: int = int(_grid_object_to_cell[node])
-		var arr: Array = _grid_contents[idx]
-		var k := arr.find(node)
-		if k != -1:
-			arr.remove_at(k)
-		_grid_object_to_cell.erase(node)
-	_grid_object_tags.erase(node)
+		return Vector3.ZERO
+	var lx := _ox + (float(cell.x) + 0.5) * _cell_size
+	var lz := _oz + (float(cell.y) + 0.5) * _cell_size
+	return _grid_local_to_world * Vector3(lx, 0.0, lz)
 
 
-# -----------------------------
-# Grid cell bounds helpers
-# -----------------------------
 func grid_cell_world_rect(cell: Vector2i) -> Rect2:
-	# Returns the XZ footprint of the cell in world-space (Rect2: position=(x,z), size=(w,d)).
+	# Returns a world-space XZ Rect2 AABB for the cell footprint.
+	# If the terrain node is transformed, this returns the axis-aligned bounds of the transformed cell.
 	if not _grid_is_valid_cell(cell):
 		return Rect2()
 	var x0 := _ox + float(cell.x) * _cell_size
 	var z0 := _oz + float(cell.y) * _cell_size
-	return Rect2(Vector2(x0, z0), Vector2(_cell_size, _cell_size))
+	var x1 := x0 + _cell_size
+	var z1 := z0 + _cell_size
+	var p00 := _grid_local_to_world * Vector3(x0, 0.0, z0)
+	var p10 := _grid_local_to_world * Vector3(x1, 0.0, z0)
+	var p01 := _grid_local_to_world * Vector3(x0, 0.0, z1)
+	var p11 := _grid_local_to_world * Vector3(x1, 0.0, z1)
+	var min_x: float = minf(minf(p00.x, p10.x), minf(p01.x, p11.x))
+	var max_x: float = maxf(maxf(p00.x, p10.x), maxf(p01.x, p11.x))
+	var min_z: float = minf(minf(p00.z, p10.z), minf(p01.z, p11.z))
+	var max_z: float = maxf(maxf(p00.z, p10.z), maxf(p01.z, p11.z))
+	return Rect2(Vector2(min_x, min_z), Vector2(max_x - min_x, max_z - min_z))
+
 
 func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN) -> AABB:
 	# Returns a world-space AABB for the cell column. If y_min/y_max are omitted, uses outer_floor_height..box_height.
+	# Note: if the terrain node is rotated, this returns the axis-aligned bounds of the rotated cell column.
 	if not _grid_is_valid_cell(cell):
 		return AABB()
 	var x0 := _ox + float(cell.x) * _cell_size
 	var z0 := _oz + float(cell.y) * _cell_size
+	var x1 := x0 + _cell_size
+	var z1 := z0 + _cell_size
 	var lo := y_min
 	var hi := y_max
 	if is_nan(lo):
 		lo = outer_floor_height
 	if is_nan(hi):
 		hi = box_height
-	return AABB(Vector3(x0, lo, z0), Vector3(_cell_size, hi - lo, _cell_size))
+	var corners: Array[Vector3] = [
+		Vector3(x0, lo, z0), Vector3(x1, lo, z0), Vector3(x0, lo, z1), Vector3(x1, lo, z1),
+		Vector3(x0, hi, z0), Vector3(x1, hi, z0), Vector3(x0, hi, z1), Vector3(x1, hi, z1),
+	]
+	var w0: Vector3 = _grid_local_to_world * corners[0]
+	var min_v: Vector3 = w0
+	var max_v: Vector3 = w0
+	for c: Vector3 in corners:
+		var w: Vector3 = _grid_local_to_world * c
+		min_v.x = minf(min_v.x, w.x)
+		min_v.y = minf(min_v.y, w.y)
+		min_v.z = minf(min_v.z, w.z)
+		max_v.x = maxf(max_v.x, w.x)
+		max_v.y = maxf(max_v.y, w.y)
+		max_v.z = maxf(max_v.z, w.z)
+	return AABB(min_v, max_v - min_v)
+
 
 # -----------------------------
 # Grid wireframe visualization
@@ -373,12 +307,19 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 func _ensure_grid_wire_node() -> void:
 	if _grid_wire_instance != null and is_instance_valid(_grid_wire_instance):
 		return
-	var parent := get_node_or_null('TerrainBody')
-	if parent == null:
-		parent = self
+	# Attach the wireframe to the same local space as the generated mesh so there is zero offset.
+	# (If TerrainMesh is translated/scaled in the scene, the wire follows automatically.)
+	var parent: Node = null
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		parent = mesh_instance
+	else:
+		parent = get_node_or_null('TerrainBody')
+		if parent == null:
+			parent = self
 	_grid_wire_instance = MeshInstance3D.new()
 	_grid_wire_instance.name = 'GridWireframe'
 	_grid_wire_instance.visible = false
+	_grid_wire_instance.transform = Transform3D.IDENTITY
 	parent.add_child(_grid_wire_instance)
 
 func _grid_wire_get_material() -> Material:
@@ -403,23 +344,46 @@ func _grid_wire_get_material() -> Material:
 		_grid_wire_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	return _grid_wire_material
 
-func _grid_wire_apply_debug_fit(enabled: bool) -> void:
-	# If the rock shader displaces walls/ramps along their normals, faces can protrude outside
-	# the exact XZ cell bounds (especially for vertical walls where normals point along ±X/±Z).
-	# For grid alignment debugging, optionally zero those displacement channels while the wire is visible.
-	if mesh_instance == null:
+func _grid_wire_capture_disp_params(sm: ShaderMaterial) -> void:
+	if _grid_wire_saved_disp_params.size() > 0:
 		return
-	if not use_rock_shader:
+	var names := [
+		StringName("disp_strength_top"),
+		StringName("disp_strength_wall"),
+		StringName("disp_strength_ramp"),
+	]
+	for p in names:
+		var v: Variant = sm.get_shader_parameter(p)
+		if v != null:
+			_grid_wire_saved_disp_params[p] = v
+
+func _grid_wire_restore_disp_params(sm: ShaderMaterial) -> void:
+	if _grid_wire_saved_disp_params.size() == 0:
+		return
+	for p in _grid_wire_saved_disp_params.keys():
+		sm.set_shader_parameter(p, _grid_wire_saved_disp_params[p])
+	_grid_wire_saved_disp_params.clear()
+
+func _grid_wire_apply_debug_fit(enabled: bool) -> void:
+	# When the 3D grid is visible, disable vertex displacement so the rendered terrain and
+	# the wire overlay share the exact same cell-aligned geometry (no visual drift/offset).
+	if mesh_instance == null:
 		return
 	var sm := mesh_instance.material_override as ShaderMaterial
 	if sm == null:
 		return
-	if enabled and grid_wire_disable_side_displacement:
-		sm.set_shader_parameter("disp_strength_wall", 0.0)
-		sm.set_shader_parameter("disp_strength_ramp", 0.0)
+	var disable := enabled and (grid_wire_disable_displacement_when_visible or grid_wire_disable_side_displacement)
+	if disable:
+		_grid_wire_capture_disp_params(sm)
+		if sm.get_shader_parameter("disp_strength_top") != null:
+			sm.set_shader_parameter("disp_strength_top", 0.0)
+		if sm.get_shader_parameter("disp_strength_wall") != null:
+			sm.set_shader_parameter("disp_strength_wall", 0.0)
+		if sm.get_shader_parameter("disp_strength_ramp") != null:
+			sm.set_shader_parameter("disp_strength_ramp", 0.0)
 	else:
-		sm.set_shader_parameter("disp_strength_wall", disp_strength_wall)
-		sm.set_shader_parameter("disp_strength_ramp", disp_strength_ramp)
+		# Restore whatever the material had before the grid was enabled.
+		_grid_wire_restore_disp_params(sm)
 
 func _grid_wire_set_visible(enabled: bool) -> void:
 	_grid_wire_visible = enabled
@@ -1080,6 +1044,7 @@ func _ready() -> void:
 		mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
+	_grid_refresh_space_xforms()
 	_ensure_grid_wire_node()
 	_grid_wire_set_visible(false)
 
@@ -1121,6 +1086,9 @@ func generate() -> void:
 	_resolved_world_size = _cell_size * float(n)
 	_ox = -_resolved_world_size * 0.5
 	_oz = -_resolved_world_size * 0.5
+
+	# Refresh grid-space transforms (handles TerrainMesh/TerrainBody transforms).
+	_grid_refresh_space_xforms()
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
