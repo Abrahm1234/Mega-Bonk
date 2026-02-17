@@ -117,6 +117,9 @@ var _tunnel_mask: PackedByteArray
 var _tunnel_hole_mask: PackedByteArray
 var _tunnel_mesh_instance: MeshInstance3D
 var _tunnel_collision_shape: CollisionShape3D
+var _grid_wireframe_instance: MeshInstance3D
+var _show_grid_wireframe: bool = false
+var _resolved_world_size: float = 0.0
 var _tunnel_floor_resolved: float = 0.0
 var _tunnel_ceil_resolved: float = 0.0
 var _tunnel_base_floor_y: float = 0.0
@@ -208,6 +211,25 @@ func grid_world_to_cell(p: Vector3) -> Vector2i:
 
 func grid_cell_to_world_center(cell: Vector2i) -> Vector3:
 	return Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
+
+func grid_cell_world_rect(cell: Vector2i) -> Rect2:
+	if not _grid_is_valid_cell(cell):
+		return Rect2()
+	return Rect2(Vector2(_ox + float(cell.x) * _cell_size, _oz + float(cell.y) * _cell_size), Vector2(_cell_size, _cell_size))
+
+func grid_cell_world_aabb(cell: Vector2i, y_min: float = INF, y_max: float = INF) -> AABB:
+	if not _grid_is_valid_cell(cell):
+		return AABB()
+	if is_inf(y_min):
+		y_min = outer_floor_height
+	if is_inf(y_max):
+		y_max = box_height
+	if y_max < y_min:
+		var t := y_min
+		y_min = y_max
+		y_max = t
+	var r := grid_cell_world_rect(cell)
+	return AABB(Vector3(r.position.x, y_min, r.position.y), Vector3(r.size.x, y_max - y_min, r.size.y))
 
 func grid_cell_index(cell: Vector2i) -> int:
 	if not _grid_is_valid_cell(cell):
@@ -909,6 +931,7 @@ func _ready() -> void:
 		mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
+	_ensure_grid_wireframe_node()
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
@@ -921,26 +944,31 @@ func _ready() -> void:
 	generate()
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e is InputEventKey and e.pressed and e.keycode == KEY_R:
-		if randomize_seed_on_regen_key:
-			var rng := RandomNumberGenerator.new()
-			rng.randomize()
-			noise_seed = rng.randi()
-			if print_seed:
-				print("Noise seed:", noise_seed)
-		generate()
+	if e is InputEventKey and e.pressed and not e.echo:
+		if e.keycode == KEY_R:
+			if randomize_seed_on_regen_key:
+				var rng := RandomNumberGenerator.new()
+				rng.randomize()
+				noise_seed = rng.randi()
+				if print_seed:
+					print("Noise seed:", noise_seed)
+			generate()
+		elif e.keycode == KEY_1 or e.keycode == KEY_KP_1:
+			_show_grid_wireframe = not _show_grid_wireframe
+			_update_grid_wireframe_visibility()
 
 func generate() -> void:
 	var n: int = max(2, cells_per_side)
 	_cell_size = world_size_m / float(n)
+	_resolved_world_size = _cell_size * float(n)
 	if use_rock_shader and mesh_instance != null:
 		var sm := mesh_instance.material_override as ShaderMaterial
 		if sm != null:
 			sm.set_shader_parameter("cell_size", _cell_size)
 
 	# Center the arena around (0,0) in XZ
-	_ox = -world_size_m * 0.5
-	_oz = -world_size_m * 0.5
+	_ox = -_resolved_world_size * 0.5
+	_oz = -_resolved_world_size * 0.5
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -967,6 +995,8 @@ func generate() -> void:
 
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
+	_build_grid_wireframe_mesh(n)
+	_update_grid_wireframe_visibility()
 	print("Ramp slots:", _count_ramps())
 	_sync_sun()
 
@@ -986,7 +1016,7 @@ func _generate_heights() -> void:
 	noise.fractal_lacunarity = noise_lacunarity
 	noise.fractal_gain = noise_gain
 
-	var half_w: float = world_size_m * 0.5
+	var half_w: float = _resolved_world_size * 0.5
 	var flat_r: float = maxf(0.0, center_flat_radius_m)
 
 	var bs: int = max(1, block_size_cells)
@@ -1387,6 +1417,75 @@ func _ensure_tunnel_nodes() -> void:
 	mat.vertex_color_use_as_albedo = true
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tunnel_mesh_instance.material_override = mat
+
+func _ensure_grid_wireframe_node() -> void:
+	var terrain_body: Node = get_node_or_null("TerrainBody")
+	if terrain_body == null:
+		return
+
+	_grid_wireframe_instance = terrain_body.get_node_or_null("GridWireframe") as MeshInstance3D
+	if _grid_wireframe_instance == null:
+		_grid_wireframe_instance = MeshInstance3D.new()
+		_grid_wireframe_instance.name = "GridWireframe"
+		terrain_body.add_child(_grid_wireframe_instance)
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_grid_wireframe_instance.material_override = mat
+	_grid_wireframe_instance.visible = _show_grid_wireframe
+
+func _build_grid_wireframe_mesh(n: int) -> void:
+	_ensure_grid_wireframe_node()
+	if _grid_wireframe_instance == null:
+		return
+
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+
+	var y0 := outer_floor_height
+	var y1 := box_height
+	var c := Color(1.0, 1.0, 1.0, 0.28)
+
+	for i in range(n + 1):
+		var x := _ox + float(i) * _cell_size
+		var z := _oz + float(i) * _cell_size
+
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y0, _oz))
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y0, _oz + _resolved_world_size))
+
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y1, _oz))
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y1, _oz + _resolved_world_size))
+
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(_ox, y0, z))
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(_ox + _resolved_world_size, y0, z))
+
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(_ox, y1, z))
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(_ox + _resolved_world_size, y1, z))
+
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y0, z))
+		mesh.surface_set_color(c)
+		mesh.surface_add_vertex(Vector3(x, y1, z))
+
+	mesh.surface_end()
+	_grid_wireframe_instance.mesh = mesh
+
+func _update_grid_wireframe_visibility() -> void:
+	if _grid_wireframe_instance == null:
+		return
+	_grid_wireframe_instance.visible = _show_grid_wireframe
 
 # -----------------------------
 # Cliff limiter (enforces max neighbor delta)
@@ -2266,7 +2365,7 @@ func _sync_sun() -> void:
 	if sun == null:
 		return
 
-	var center := global_position + Vector3(_ox + world_size_m * 0.5, 0.0, _oz + world_size_m * 0.5)
+	var center := global_position + Vector3(_ox + _resolved_world_size * 0.5, 0.0, _oz + _resolved_world_size * 0.5)
 	sun.global_position = center + Vector3(0.0, sun_height, 0.0)
 	sun.look_at(center, Vector3.UP)
 
@@ -2275,9 +2374,9 @@ func _sync_sun() -> void:
 # -----------------------------
 func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var a := Vector3(_ox, y, _oz)
-	var b := Vector3(_ox + world_size_m, y, _oz)
-	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
-	var d := Vector3(_ox, y, _oz + world_size_m)
+	var b := Vector3(_ox + _resolved_world_size, y, _oz)
+	var c := Vector3(_ox + _resolved_world_size, y, _oz + _resolved_world_size)
+	var d := Vector3(_ox, y, _oz + _resolved_world_size)
 	var u0 := Vector2(0.0, 0.0) * uv_scale
 	var u1 := Vector2(1.0, 0.0) * uv_scale
 	var u2 := Vector2(1.0, 1.0) * uv_scale
@@ -2288,13 +2387,13 @@ func _add_floor(st: SurfaceTool, y: float, uv_scale: float) -> void:
 
 func _add_box_walls(st: SurfaceTool, y0: float, y1: float, uv_scale: float) -> void:
 	# West wall (x = _ox)
-	_add_box_wall_plane(st, Vector3(_ox, y0, _oz), Vector3(_ox, y0, _oz + world_size_m), y1, uv_scale, true)
-	# East wall (x = _ox + world_size_m)
-	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz), y1, uv_scale, true)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz), Vector3(_ox, y0, _oz + _resolved_world_size), y1, uv_scale, true)
+	# East wall (x = _ox + _resolved_world_size)
+	_add_box_wall_plane(st, Vector3(_ox + _resolved_world_size, y0, _oz + _resolved_world_size), Vector3(_ox + _resolved_world_size, y0, _oz), y1, uv_scale, true)
 	# North wall (z = _oz)
-	_add_box_wall_plane(st, Vector3(_ox + world_size_m, y0, _oz), Vector3(_ox, y0, _oz), y1, uv_scale, true)
-	# South wall (z = _oz + world_size_m)
-	_add_box_wall_plane(st, Vector3(_ox, y0, _oz + world_size_m), Vector3(_ox + world_size_m, y0, _oz + world_size_m), y1, uv_scale, true)
+	_add_box_wall_plane(st, Vector3(_ox + _resolved_world_size, y0, _oz), Vector3(_ox, y0, _oz), y1, uv_scale, true)
+	# South wall (z = _oz + _resolved_world_size)
+	_add_box_wall_plane(st, Vector3(_ox, y0, _oz + _resolved_world_size), Vector3(_ox + _resolved_world_size, y0, _oz + _resolved_world_size), y1, uv_scale, true)
 
 func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float, uv_scale: float, outward: bool) -> void:
 	var a := p0
@@ -2320,9 +2419,9 @@ func _add_box_wall_plane(st: SurfaceTool, p0: Vector3, p1: Vector3, top_y: float
 
 func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 	var a := Vector3(_ox, y, _oz)
-	var b := Vector3(_ox + world_size_m, y, _oz)
-	var c := Vector3(_ox + world_size_m, y, _oz + world_size_m)
-	var d := Vector3(_ox, y, _oz + world_size_m)
+	var b := Vector3(_ox + _resolved_world_size, y, _oz)
+	var c := Vector3(_ox + _resolved_world_size, y, _oz + _resolved_world_size)
+	var d := Vector3(_ox, y, _oz + _resolved_world_size)
 	# Flip winding vs floor so normals face inward-ish
 	var u0 := Vector2(0.0, 0.0) * uv_scale
 	var u1 := Vector2(0.0, 1.0) * uv_scale
