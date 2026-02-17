@@ -376,11 +376,12 @@ func grid_cell_world_rect(cell: Vector2i) -> Rect2:
 	var min_z := INF
 	var max_x := -INF
 	var max_z := -INF
-	for p: Vector3 in corners:
-		min_x = minf(min_x, p.x)
-		min_z = minf(min_z, p.z)
-		max_x = maxf(max_x, p.x)
-		max_z = maxf(max_z, p.z)
+	for p in corners:
+		var corner: Vector3 = p
+		min_x = minf(min_x, corner.x)
+		min_z = minf(min_z, corner.z)
+		max_x = maxf(max_x, corner.x)
+		max_z = maxf(max_z, corner.z)
 	return Rect2(Vector2(min_x, min_z), Vector2(max_x - min_x, max_z - min_z))
 
 func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN) -> AABB:
@@ -408,8 +409,9 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 	]
 	var min_v := Vector3(INF, INF, INF)
 	var max_v := Vector3(-INF, -INF, -INF)
-	for lp: Vector3 in local_corners:
-		var wp: Vector3 = _grid_local_to_world * lp
+	for lp in local_corners:
+		var local_corner: Vector3 = lp
+		var wp: Vector3 = Vector3(_grid_local_to_world * local_corner)
 		min_v.x = minf(min_v.x, wp.x)
 		min_v.y = minf(min_v.y, wp.y)
 		min_v.z = minf(min_v.z, wp.z)
