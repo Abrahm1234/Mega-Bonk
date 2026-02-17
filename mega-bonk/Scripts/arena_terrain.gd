@@ -161,6 +161,16 @@ var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
+var _grid_local_to_world: Transform3D = Transform3D.IDENTITY
+var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
+
+func _grid_refresh_transforms() -> void:
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		_grid_local_to_world = mesh_instance.global_transform
+		_grid_world_to_local = _grid_local_to_world.affine_inverse()
+	else:
+		_grid_local_to_world = global_transform
+		_grid_world_to_local = _grid_local_to_world.affine_inverse()
 
 func _grid_is_valid_cell(cell: Vector2i) -> bool:
 	return _grid_n > 0 and cell.x >= 0 and cell.x < _grid_n and cell.y >= 0 and cell.y < _grid_n
@@ -213,8 +223,10 @@ func _grid_rebuild_tags(n: int) -> void:
 func grid_world_to_cell(p: Vector3) -> Vector2i:
 	if _grid_n <= 0 or _cell_size <= 0.0:
 		return Vector2i.ZERO
-	var xf := (p.x - _ox) / _cell_size
-	var zf := (p.z - _oz) / _cell_size
+	_grid_refresh_transforms()
+	var local_p := _grid_world_to_local * p
+	var xf := (local_p.x - _ox) / _cell_size
+	var zf := (local_p.z - _oz) / _cell_size
 	var x := int(floor(xf))
 	var z := int(floor(zf))
 	x = clamp(x, 0, _grid_n - 1)
@@ -222,7 +234,9 @@ func grid_world_to_cell(p: Vector3) -> Vector2i:
 	return Vector2i(x, z)
 
 func grid_cell_to_world_center(cell: Vector2i) -> Vector3:
-	return Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
+	_grid_refresh_transforms()
+	var local_center := Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
+	return _grid_local_to_world * local_center
 
 func grid_cell_index(cell: Vector2i) -> int:
 	if not _grid_is_valid_cell(cell):
@@ -349,14 +363,31 @@ func grid_cell_world_rect(cell: Vector2i) -> Rect2:
 	# Returns the XZ footprint of the cell in world-space (Rect2: position=(x,z), size=(w,d)).
 	if not _grid_is_valid_cell(cell):
 		return Rect2()
+	_grid_refresh_transforms()
 	var x0 := _ox + float(cell.x) * _cell_size
 	var z0 := _oz + float(cell.y) * _cell_size
-	return Rect2(Vector2(x0, z0), Vector2(_cell_size, _cell_size))
+	var corners := [
+		_grid_local_to_world * Vector3(x0, 0.0, z0),
+		_grid_local_to_world * Vector3(x0 + _cell_size, 0.0, z0),
+		_grid_local_to_world * Vector3(x0 + _cell_size, 0.0, z0 + _cell_size),
+		_grid_local_to_world * Vector3(x0, 0.0, z0 + _cell_size),
+	]
+	var min_x := INF
+	var min_z := INF
+	var max_x := -INF
+	var max_z := -INF
+	for p in corners:
+		min_x = minf(min_x, p.x)
+		min_z = minf(min_z, p.z)
+		max_x = maxf(max_x, p.x)
+		max_z = maxf(max_z, p.z)
+	return Rect2(Vector2(min_x, min_z), Vector2(max_x - min_x, max_z - min_z))
 
 func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN) -> AABB:
 	# Returns a world-space AABB for the cell column. If y_min/y_max are omitted, uses outer_floor_height..box_height.
 	if not _grid_is_valid_cell(cell):
 		return AABB()
+	_grid_refresh_transforms()
 	var x0 := _ox + float(cell.x) * _cell_size
 	var z0 := _oz + float(cell.y) * _cell_size
 	var lo := y_min
@@ -365,7 +396,27 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 		lo = outer_floor_height
 	if is_nan(hi):
 		hi = box_height
-	return AABB(Vector3(x0, lo, z0), Vector3(_cell_size, hi - lo, _cell_size))
+	var local_corners := [
+		Vector3(x0, lo, z0),
+		Vector3(x0 + _cell_size, lo, z0),
+		Vector3(x0 + _cell_size, lo, z0 + _cell_size),
+		Vector3(x0, lo, z0 + _cell_size),
+		Vector3(x0, hi, z0),
+		Vector3(x0 + _cell_size, hi, z0),
+		Vector3(x0 + _cell_size, hi, z0 + _cell_size),
+		Vector3(x0, hi, z0 + _cell_size),
+	]
+	var min_v := Vector3(INF, INF, INF)
+	var max_v := Vector3(-INF, -INF, -INF)
+	for lp in local_corners:
+		var wp := _grid_local_to_world * lp
+		min_v.x = minf(min_v.x, wp.x)
+		min_v.y = minf(min_v.y, wp.y)
+		min_v.z = minf(min_v.z, wp.z)
+		max_v.x = maxf(max_v.x, wp.x)
+		max_v.y = maxf(max_v.y, wp.y)
+		max_v.z = maxf(max_v.z, wp.z)
+	return AABB(min_v, max_v - min_v)
 
 # -----------------------------
 # Grid wireframe visualization
@@ -373,7 +424,9 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 func _ensure_grid_wire_node() -> void:
 	if _grid_wire_instance != null and is_instance_valid(_grid_wire_instance):
 		return
-	var parent := get_node_or_null('TerrainBody')
+	var parent: Node = mesh_instance
+	if parent == null:
+		parent = get_node_or_null('TerrainBody')
 	if parent == null:
 		parent = self
 	_grid_wire_instance = MeshInstance3D.new()
@@ -1121,6 +1174,7 @@ func generate() -> void:
 	_resolved_world_size = _cell_size * float(n)
 	_ox = -_resolved_world_size * 0.5
 	_oz = -_resolved_world_size * 0.5
+	_grid_refresh_transforms()
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
