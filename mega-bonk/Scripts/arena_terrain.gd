@@ -1090,16 +1090,16 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 
 		# Enforce entrance spacing so we never mark adjacent cells as holes.
 		var ok: bool = true
+		var candidate_entrances: Array[Vector2i] = [b]
 		if built == 0:
+			candidate_entrances.push_front(a)
+		for c in candidate_entrances:
 			for e in entrances:
-				if maxi(abs(e.x - a.x), abs(e.y - a.y)) <= min_chebyshev_sep:
+				if maxi(abs(e.x - c.x), abs(e.y - c.y)) <= min_chebyshev_sep:
 					ok = false
 					break
-		if ok:
-			for e in entrances:
-				if maxi(abs(e.x - b.x), abs(e.y - b.y)) <= min_chebyshev_sep:
-					ok = false
-					break
+			if not ok:
+				break
 		if not ok:
 			continue
 
