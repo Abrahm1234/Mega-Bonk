@@ -147,6 +147,9 @@ var _grid_contents: Array = [] # Array[Array[Node]] per-cell contents
 var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
 
+func _grid_is_valid_cell(cell: Vector2i) -> bool:
+	return _grid_n > 0 and cell.x >= 0 and cell.x < _grid_n and cell.y >= 0 and cell.y < _grid_n
+
 func _grid_init(n: int) -> void:
 	_grid_n = n
 	var count := n * n
@@ -207,12 +210,16 @@ func grid_cell_to_world_center(cell: Vector2i) -> Vector3:
 	return Vector3(_ox + (float(cell.x) + 0.5) * _cell_size, 0.0, _oz + (float(cell.y) + 0.5) * _cell_size)
 
 func grid_cell_index(cell: Vector2i) -> int:
+	if not _grid_is_valid_cell(cell):
+		return -1
 	return _idx2(cell.x, cell.y, _grid_n)
 
 func grid_cell_tags(cell: Vector2i) -> int:
 	if _grid_n <= 0:
 		return 0
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return 0
 	return int(_grid_tags[i])
 
 func grid_cell_has_tag(cell: Vector2i, tag_bit: int) -> bool:
@@ -220,10 +227,14 @@ func grid_cell_has_tag(cell: Vector2i, tag_bit: int) -> bool:
 
 func grid_add_cell_tag(cell: Vector2i, tag_bit: int) -> void:
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return
 	_grid_tags[i] = int(_grid_tags[i]) | tag_bit
 
 func grid_remove_cell_tag(cell: Vector2i, tag_bit: int) -> void:
 	var i := grid_cell_index(cell)
+	if i < 0:
+		return
 	_grid_tags[i] = int(_grid_tags[i]) & ~tag_bit
 
 func grid_cells_with_tag(tag_bit: int) -> PackedInt32Array:
@@ -239,8 +250,16 @@ func grid_cells_with_tag(tag_bit: int) -> PackedInt32Array:
 func grid_register_object(node: Node3D, obj_tags: int = 0) -> void:
 	if node == null or _grid_n <= 0:
 		return
+
+	if _grid_object_to_cell.has(node):
+		_grid_object_tags[node] = obj_tags
+		grid_update_object_cell(node)
+		return
+
 	var cell := grid_world_to_cell(node.global_position)
 	var idx := grid_cell_index(cell)
+	if idx < 0:
+		return
 
 	_grid_contents[idx].append(node)
 	_grid_object_to_cell[node] = idx
@@ -261,6 +280,8 @@ func grid_update_object_cell(node: Node3D) -> void:
 	var old_idx: int = int(_grid_object_to_cell[node])
 	var cell := grid_world_to_cell(node.global_position)
 	var new_idx := grid_cell_index(cell)
+	if new_idx < 0:
+		return
 	if new_idx == old_idx:
 		return
 
@@ -275,7 +296,10 @@ func grid_update_object_cell(node: Node3D) -> void:
 func grid_objects_in_cell(cell: Vector2i) -> Array:
 	if _grid_n <= 0:
 		return []
-	return _grid_contents[grid_cell_index(cell)]
+	var idx := grid_cell_index(cell)
+	if idx < 0:
+		return []
+	return _grid_contents[idx]
 
 func grid_set_object_tags(node: Node, tags: int) -> void:
 	if node == null:
