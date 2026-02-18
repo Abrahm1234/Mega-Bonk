@@ -148,12 +148,19 @@ const TAG_SHAFT_ENTRANCE: int = 1 << 3
 const TAG_SURFACE_HOLE: int = 1 << 4
 const TAG_FLAT_SURFACE: int = 1 << 5
 
+enum SurfaceKind { FLOOR, RAMP, WALL, TUNNEL_FLOOR, TUNNEL_WALL, TUNNEL_CEIL }
+enum SurfaceSide { NONE = -1, N = 0, S = 1, E = 2, W = 3 }
+
 var _grid_n: int = 0
 var _grid_tags: PackedInt64Array = PackedInt64Array() # per-cell bitmask
 var _grid_contents: Array = [] # Array[Array[Node]] per-cell contents
 var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
 var _grid_wire_saved_disp_params: Dictionary = {} # int instance_id -> Dictionary[StringName, Variant]
+var _surface_next_id: int = 1
+var _surfaces: Array[Dictionary] = []
+var _surface_by_id: Dictionary = {}
+var _cell_surface_ids: Array = [] # Array[PackedInt32Array] per (x,z) cell
 
 # Grid space transforms
 # The grid and generated mesh are authored in the *TerrainMesh local space*.
@@ -262,6 +269,160 @@ func _grid_init(n: int) -> void:
 
 	_grid_object_to_cell.clear()
 	_grid_object_tags.clear()
+
+func grid_cell_id(x: int, z: int, n: int) -> int:
+	return 1 + x + z * n
+
+func grid_voxel_id(x: int, z: int, ly: int, n: int) -> int:
+	return 1 + x + z * n + ly * n * n
+
+func grid_y_to_level(y: float) -> int:
+	return _h_to_level(y)
+
+func grid_level_to_y(ly: int) -> float:
+	return _level_to_h(ly)
+
+func _surface_registry_reset(n: int) -> void:
+	_surface_next_id = 1
+	_surfaces.clear()
+	_surface_by_id.clear()
+	_cell_surface_ids.clear()
+	_cell_surface_ids.resize(n * n)
+	for i in range(n * n):
+		var ids := PackedInt32Array()
+		_cell_surface_ids[i] = ids
+
+func _surface_key(cell: Vector2i, kind: int, side: int) -> String:
+	var base := "C%04d" % grid_cell_id(cell.x, cell.y, _grid_n)
+	match kind:
+		SurfaceKind.FLOOR:
+			return "%s_F" % base
+		SurfaceKind.RAMP:
+			return "%s_R" % base
+		SurfaceKind.WALL:
+			var suffix := "N"
+			if side == SurfaceSide.S:
+				suffix = "S"
+			elif side == SurfaceSide.E:
+				suffix = "E"
+			elif side == SurfaceSide.W:
+				suffix = "W"
+			return "%s_W_%s" % [base, suffix]
+		SurfaceKind.TUNNEL_FLOOR:
+			return "%s_T_F" % base
+		SurfaceKind.TUNNEL_WALL:
+			var ws := "N"
+			if side == SurfaceSide.S:
+				ws = "S"
+			elif side == SurfaceSide.E:
+				ws = "E"
+			elif side == SurfaceSide.W:
+				ws = "W"
+			return "%s_T_W_%s" % [base, ws]
+		SurfaceKind.TUNNEL_CEIL:
+			return "%s_T_C" % base
+		_:
+			return "%s_S" % base
+
+func _register_surface(kind: int, cell_a: Vector2i, side_a: int, cell_b: Vector2i = Vector2i(-1, -1), side_b: int = SurfaceSide.NONE, verts: PackedVector3Array = PackedVector3Array(), normal: Vector3 = Vector3.ZERO, extra: Dictionary = {}) -> int:
+	if _grid_n <= 0 or not _grid_is_valid_cell(cell_a):
+		return -1
+	var id := _surface_next_id
+	_surface_next_id += 1
+	var nrm := normal
+	if nrm == Vector3.ZERO and verts.size() >= 3:
+		nrm = Plane(verts[0], verts[1], verts[2]).normal
+	var rec: Dictionary = {
+		"id": id,
+		"key": _surface_key(cell_a, kind, side_a),
+		"kind": kind,
+		"cell_a": cell_a,
+		"side_a": side_a,
+		"cell_b": cell_b,
+		"side_b": side_b,
+		"verts_local": verts,
+		"normal_local": nrm,
+		"extra": extra,
+	}
+	_surfaces.append(rec)
+	_surface_by_id[id] = rec
+	var ia := _idx2(cell_a.x, cell_a.y, _grid_n)
+	var list_a: PackedInt32Array = _cell_surface_ids[ia]
+	list_a.append(id)
+	_cell_surface_ids[ia] = list_a
+	if _grid_is_valid_cell(cell_b):
+		var ib := _idx2(cell_b.x, cell_b.y, _grid_n)
+		var list_b: PackedInt32Array = _cell_surface_ids[ib]
+		list_b.append(id)
+		_cell_surface_ids[ib] = list_b
+	return id
+
+func grid_get_cell_surfaces(cell: Vector2i) -> Array[Dictionary]:
+	if not _grid_is_valid_cell(cell):
+		return []
+	var ids: PackedInt32Array = _cell_surface_ids[_idx2(cell.x, cell.y, _grid_n)]
+	var out: Array[Dictionary] = []
+	for id in ids:
+		if _surface_by_id.has(id):
+			out.append(_surface_by_id[id])
+	return out
+
+func grid_get_floor_or_ramp(cell: Vector2i) -> Dictionary:
+	for s in grid_get_cell_surfaces(cell):
+		if s["kind"] == SurfaceKind.FLOOR or s["kind"] == SurfaceKind.RAMP:
+			return s
+	return {}
+
+func grid_get_walls(cell: Vector2i, side: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for s in grid_get_cell_surfaces(cell):
+		if s["kind"] != SurfaceKind.WALL:
+			continue
+		if (s["cell_a"] == cell and s["side_a"] == side) or (s["cell_b"] == cell and s["side_b"] == side):
+			out.append(s)
+	return out
+
+
+func grid_register_object(node: Node, world_pos: Vector3, object_tags: int = 0) -> bool:
+	if node == null or _grid_n <= 0:
+		return false
+	var cell := grid_world_to_cell(world_pos)
+	if not _grid_is_valid_cell(cell):
+		return false
+	var idx := _idx2(cell.x, cell.y, _grid_n)
+	if _grid_object_to_cell.has(node):
+		grid_move_object(node, world_pos)
+		if object_tags != 0:
+			_grid_object_tags[node] = object_tags
+		return true
+	_grid_contents[idx].append(node)
+	_grid_object_to_cell[node] = idx
+	if object_tags != 0:
+		_grid_object_tags[node] = object_tags
+	return true
+
+func grid_move_object(node: Node, world_pos: Vector3) -> bool:
+	if node == null or not _grid_object_to_cell.has(node) or _grid_n <= 0:
+		return false
+	var new_cell := grid_world_to_cell(world_pos)
+	if not _grid_is_valid_cell(new_cell):
+		return false
+	var old_idx: int = int(_grid_object_to_cell[node])
+	var new_idx := _idx2(new_cell.x, new_cell.y, _grid_n)
+	if old_idx == new_idx:
+		return true
+	_grid_contents[old_idx].erase(node)
+	_grid_contents[new_idx].append(node)
+	_grid_object_to_cell[node] = new_idx
+	return true
+
+func grid_unregister_object(node: Node) -> void:
+	if node == null or not _grid_object_to_cell.has(node):
+		return
+	var idx: int = int(_grid_object_to_cell[node])
+	_grid_contents[idx].erase(node)
+	_grid_object_to_cell.erase(node)
+	_grid_object_tags.erase(node)
 
 func _grid_refresh_space_xforms() -> void:
 	# Cache transforms used by the grid API.
@@ -1284,6 +1445,7 @@ func generate() -> void:
 	_generate_tunnels_layout(n, rng)
 	_grid_init(n)
 	_grid_rebuild_tags(n)
+	_surface_registry_reset(n)
 	if _grid_wire_visible:
 		_grid_wire_rebuild_mesh()
 
@@ -2250,7 +2412,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_b: float = (b_w.x + b_w.y) * 0.5
 						var normal_pos_x: bool = mean_a > mean_b
 						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, normal_pos_x
+							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, normal_pos_x,
+							Vector2i(x, z), Vector2i(x + 1, z)
 							)
 
 			if z + 1 < n:
@@ -2276,7 +2439,8 @@ func _build_mesh_and_collision(n: int) -> void:
 						var mean_c: float = (c_n.x + c_n.y) * 0.5
 						var normal_pos_z: bool = mean_a > mean_c
 						_add_wall_z_between(
-							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, normal_pos_z
+							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, normal_pos_z,
+							Vector2i(x, z), Vector2i(x, z + 1)
 							)
 
 	# Container walls (keeps everything “inside a box”)
@@ -2449,6 +2613,7 @@ func _build_tunnel_mesh(n: int) -> void:
 			var z1: float = z0 + _cell_size
 
 			var is_entrance: bool = tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0
+			var cell := Vector2i(x, z)
 
 			var has_w: bool = false
 			var has_e: bool = false
@@ -2461,68 +2626,98 @@ func _build_tunnel_mesh(n: int) -> void:
 			var c11: float = floors[2] + tunnel_height_y
 			var c01: float = floors[3] + tunnel_height_y
 
+			var tf_a := Vector3(x0, floors[0], z0)
+			var tf_b := Vector3(x1, floors[1], z0)
+			var tf_c := Vector3(x1, floors[2], z1)
+			var tf_d := Vector3(x0, floors[3], z1)
 			_add_quad(
 				st,
-				Vector3(x0, floors[0], z0),
-				Vector3(x1, floors[1], z0),
-				Vector3(x1, floors[2], z1),
-				Vector3(x0, floors[3], z1),
+				tf_a,
+				tf_b,
+				tf_c,
+				tf_d,
 				Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 				tunnel_color
 			)
+			_register_surface(SurfaceKind.TUNNEL_FLOOR, cell, SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([tf_a, tf_b, tf_c, tf_d]), Vector3.UP, {"level": grid_y_to_level(floor_y)})
 
 			if not is_entrance:
+				var tc_a := Vector3(x0, c01, z1)
+				var tc_b := Vector3(x1, c11, z1)
+				var tc_c := Vector3(x1, c10, z0)
+				var tc_d := Vector3(x0, c00, z0)
 				_add_quad(
 					st,
-					Vector3(x0, c01, z1),
-					Vector3(x1, c11, z1),
-					Vector3(x1, c10, z0),
-					Vector3(x0, c00, z0),
+					tc_a,
+					tc_b,
+					tc_c,
+					tc_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_CEIL, cell, SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([tc_a, tc_b, tc_c, tc_d]), Vector3.DOWN, {"level": grid_y_to_level(ceil_y)})
 			else:
 				var surf: Vector4 = _cell_corners(x, z)
 				# West wall
+				var tw_a := Vector3(x0, floors[0], z0)
+				var tw_b := Vector3(x0, floors[3], z1)
+				var tw_c := Vector3(x0, surf.w, z1)
+				var tw_d := Vector3(x0, surf.x, z0)
 				_add_quad(
 					st,
-					Vector3(x0, floors[0], z0),
-					Vector3(x0, floors[3], z1),
-					Vector3(x0, surf.w, z1),
-					Vector3(x0, surf.x, z0),
+					tw_a,
+					tw_b,
+					tw_c,
+					tw_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.W, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([tw_a, tw_b, tw_c, tw_d]), Vector3.LEFT, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(surf.x)})
 				# East wall
+				var te_a := Vector3(x1, floors[2], z1)
+				var te_b := Vector3(x1, floors[1], z0)
+				var te_c := Vector3(x1, surf.y, z0)
+				var te_d := Vector3(x1, surf.z, z1)
 				_add_quad(
 					st,
-					Vector3(x1, floors[2], z1),
-					Vector3(x1, floors[1], z0),
-					Vector3(x1, surf.y, z0),
-					Vector3(x1, surf.z, z1),
+					te_a,
+					te_b,
+					te_c,
+					te_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.E, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([te_a, te_b, te_c, te_d]), Vector3.RIGHT, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(surf.y)})
 				# North wall
+				var tn_a := Vector3(x1, floors[1], z0)
+				var tn_b := Vector3(x0, floors[0], z0)
+				var tn_c := Vector3(x0, surf.x, z0)
+				var tn_d := Vector3(x1, surf.y, z0)
 				_add_quad(
 					st,
-					Vector3(x1, floors[1], z0),
-					Vector3(x0, floors[0], z0),
-					Vector3(x0, surf.x, z0),
-					Vector3(x1, surf.y, z0),
+					tn_a,
+					tn_b,
+					tn_c,
+					tn_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.N, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([tn_a, tn_b, tn_c, tn_d]), Vector3.BACK, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(surf.x)})
 				# South wall
+				var ts_a := Vector3(x0, floors[3], z1)
+				var ts_b := Vector3(x1, floors[2], z1)
+				var ts_c := Vector3(x1, surf.z, z1)
+				var ts_d := Vector3(x0, surf.w, z1)
 				_add_quad(
 					st,
-					Vector3(x0, floors[3], z1),
-					Vector3(x1, floors[2], z1),
-					Vector3(x1, surf.z, z1),
-					Vector3(x0, surf.w, z1),
+					ts_a,
+					ts_b,
+					ts_c,
+					ts_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.S, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([ts_a, ts_b, ts_c, ts_d]), Vector3.FORWARD, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(surf.z)})
 				continue
 
 			if x > 0 and _tunnel_mask[_idx2(x - 1, z, n)] != 0:
@@ -2532,15 +2727,20 @@ func _build_tunnel_mesh(n: int) -> void:
 				has_w = _edges_match(edge_a_w, edge_b_w)
 
 			if not has_w:
+				var w_a := Vector3(x0, floors[0], z0)
+				var w_b := Vector3(x0, floors[3], z1)
+				var w_c := Vector3(x0, c01, z1)
+				var w_d := Vector3(x0, c00, z0)
 				_add_quad(
 					st,
-					Vector3(x0, floors[0], z0),
-					Vector3(x0, floors[3], z1),
-					Vector3(x0, c01, z1),
-					Vector3(x0, c00, z0),
+					w_a,
+					w_b,
+					w_c,
+					w_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.W, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([w_a, w_b, w_c, w_d]), Vector3.LEFT, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(ceil_y)})
 			if x < n - 1 and _tunnel_mask[_idx2(x + 1, z, n)] != 0:
 				var nb_floors_e: PackedFloat32Array = PackedFloat32Array([floor_y, floor_y, floor_y, floor_y])
 				var edge_a_e: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 0)
@@ -2548,15 +2748,20 @@ func _build_tunnel_mesh(n: int) -> void:
 				has_e = _edges_match(edge_a_e, edge_b_e)
 
 			if not has_e:
+				var e_a := Vector3(x1, floors[2], z1)
+				var e_b := Vector3(x1, floors[1], z0)
+				var e_c := Vector3(x1, c10, z0)
+				var e_d := Vector3(x1, c11, z1)
 				_add_quad(
 					st,
-					Vector3(x1, floors[2], z1),
-					Vector3(x1, floors[1], z0),
-					Vector3(x1, c10, z0),
-					Vector3(x1, c11, z1),
+					e_a,
+					e_b,
+					e_c,
+					e_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.E, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([e_a, e_b, e_c, e_d]), Vector3.RIGHT, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(ceil_y)})
 			if z > 0 and _tunnel_mask[_idx2(x, z - 1, n)] != 0:
 				var nb_floors_n: PackedFloat32Array = PackedFloat32Array([floor_y, floor_y, floor_y, floor_y])
 				var edge_a_n: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 2)
@@ -2564,15 +2769,20 @@ func _build_tunnel_mesh(n: int) -> void:
 				has_n = _edges_match(edge_a_n, edge_b_n)
 
 			if not has_n:
+				var n_a := Vector3(x1, floors[1], z0)
+				var n_b := Vector3(x0, floors[0], z0)
+				var n_c := Vector3(x0, c00, z0)
+				var n_d := Vector3(x1, c10, z0)
 				_add_quad(
 					st,
-					Vector3(x1, floors[1], z0),
-					Vector3(x0, floors[0], z0),
-					Vector3(x0, c00, z0),
-					Vector3(x1, c10, z0),
+					n_a,
+					n_b,
+					n_c,
+					n_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.N, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([n_a, n_b, n_c, n_d]), Vector3.BACK, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(ceil_y)})
 			if z < n - 1 and _tunnel_mask[_idx2(x, z + 1, n)] != 0:
 				var nb_floors_s: PackedFloat32Array = PackedFloat32Array([floor_y, floor_y, floor_y, floor_y])
 				var edge_a_s: Vector2 = _edge_pair(Vector4(floors[0], floors[1], floors[2], floors[3]), 3)
@@ -2580,15 +2790,20 @@ func _build_tunnel_mesh(n: int) -> void:
 				has_s = _edges_match(edge_a_s, edge_b_s)
 
 			if not has_s:
+				var s_a := Vector3(x0, floors[3], z1)
+				var s_b := Vector3(x1, floors[2], z1)
+				var s_c := Vector3(x1, c11, z1)
+				var s_d := Vector3(x0, c01, z1)
 				_add_quad(
 					st,
-					Vector3(x0, floors[3], z1),
-					Vector3(x1, floors[2], z1),
-					Vector3(x1, c11, z1),
-					Vector3(x0, c01, z1),
+					s_a,
+					s_b,
+					s_c,
+					s_d,
 					Vector2(0, 0) * uv_scale, Vector2(1, 0) * uv_scale, Vector2(1, 1) * uv_scale, Vector2(0, 1) * uv_scale,
 					tunnel_color
 				)
+				_register_surface(SurfaceKind.TUNNEL_WALL, cell, SurfaceSide.S, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([s_a, s_b, s_c, s_d]), Vector3.FORWARD, {"y0_level": grid_y_to_level(floor_y), "y1_level": grid_y_to_level(ceil_y)})
 
 
 	st.generate_normals()
@@ -2672,7 +2887,7 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float,
-	normal_pos_x: bool) -> void:
+	normal_pos_x: bool, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2700,6 +2915,10 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 		tmp = c
 		c = d
 		d = tmp
+	var side_a := SurfaceSide.E
+	var side_b := SurfaceSide.W
+	_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([a, b, c, d]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(maxf(high0, high1))})
+
 	if d0 > eps and d1 > eps:
 		_add_quad_uv2(st, a, b, c, d,
 			ua, ub, uc, ud,
@@ -2720,7 +2939,7 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 
 func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float,
-	normal_pos_z: bool) -> void:
+	normal_pos_z: bool, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
 	var eps: float = 0.0005
 	var d0: float = absf(high0 - low0)
 	var d1: float = absf(high1 - low1)
@@ -2748,6 +2967,10 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 		tmp = c
 		c = d
 		d = tmp
+	var side_a := SurfaceSide.S
+	var side_b := SurfaceSide.N
+	_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([a, b, c, d]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(maxf(high0, high1))})
+
 	if d0 > eps and d1 > eps:
 		_add_quad_uv2(st, a, b, c, d,
 			ua, ub, uc, ud,
@@ -2799,6 +3022,13 @@ func _add_cell_top_grid(
 	ub *= uv_scale
 	uc *= uv_scale
 	ud *= uv_scale
+
+	var verts := PackedVector3Array([a, b, c, d])
+	var floor_level := grid_y_to_level((h00 + h10 + h11 + h01) * 0.25)
+	if is_ramp:
+		_register_surface(SurfaceKind.RAMP, Vector2i(cell_x, cell_z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "ramp_dir": ramp_dir})
+	else:
+		_register_surface(SurfaceKind.FLOOR, Vector2i(cell_x, cell_z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level})
 
 	_add_quad_uv2(
 		st,
