@@ -38,6 +38,7 @@ class_name ArenaBlockyTerrain
 # -----------------------------
 @export var outer_floor_height: float = -40.0
 @export var box_height: float = 80.0
+@export var grid_y0: float = 0.0  # authoritative vertical grid origin (TerrainMesh local space)
 @export var build_ceiling: bool = false
 
 # -----------------------------
@@ -182,14 +183,32 @@ var _grid_debug_saved_overrides: Dictionary = {} # int instance_id -> Material
 func _quantize_y_to_grid(y: float) -> float:
 	if height_step <= 0.0:
 		return y
-	var k := roundf((y - outer_floor_height) / height_step)
-	return outer_floor_height + k * height_step
+	var k := roundf((y - grid_y0) / height_step)
+	return grid_y0 + k * height_step
 
 func _resolve_vertical_grid_bounds() -> void:
-	outer_floor_height = _quantize_y_to_grid(outer_floor_height)
+	grid_y0 = _quantize_y_to_grid(grid_y0)
+	outer_floor_height = minf(_quantize_y_to_grid(outer_floor_height), grid_y0)
 	box_height = _quantize_y_to_grid(box_height)
-	if box_height <= outer_floor_height:
-		box_height = outer_floor_height + maxf(0.001, height_step)
+	if box_height <= grid_y0:
+		box_height = grid_y0 + maxf(0.001, height_step)
+
+func _surface_min_y() -> float:
+	return _level_to_h(SURFACE_MIN_LEVEL)
+
+func _print_grid_contract() -> void:
+	if _heights.is_empty():
+		return
+	var hmin := INF
+	var hmax := -INF
+	for h in _heights:
+		hmin = minf(hmin, h)
+		hmax = maxf(hmax, h)
+	print("Grid contract y0=", grid_y0,
+		" tunnel_floor=", _tunnel_floor_resolved,
+		" tunnel_ceil=", _tunnel_ceil_resolved,
+		" surface_min=", _surface_min_y(),
+		" heights[min,max]=", hmin, ",", hmax)
 
 func _grid_debug_collect_mesh_instances() -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
@@ -505,7 +524,7 @@ func _grid_wire_rebuild_mesh() -> void:
 	var z0 := _oz
 	var x1 := _ox + w
 	var z1 := _oz + w
-	var y0 := outer_floor_height
+	var y0 := grid_y0
 	var y1 := box_height
 	var nudge := maxf(0.0, grid_wire_surface_nudge)
 	var nx0 := x0 + nudge
@@ -591,6 +610,9 @@ const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
 const _NEG_INF := -1.0e20
+const TUNNEL_FLOOR_LEVEL := 0
+const TUNNEL_HEIGHT_LEVELS := 1
+const SURFACE_MIN_LEVEL := 2
 
 
 func _neighbor_of(x: int, z: int, dir: int) -> Vector2i:
@@ -1152,7 +1174,7 @@ func _ready() -> void:
 		sm.set_shader_parameter("snap_y_to_height_step", shader_snap_y_to_height_step)
 		sm.set_shader_parameter("height_step", height_step)
 		sm.set_shader_parameter("snap_y_strength", shader_snap_y_strength)
-		sm.set_shader_parameter("grid_y_min", outer_floor_height)
+		sm.set_shader_parameter("grid_y_min", grid_y0)
 		sm.set_shader_parameter("grid_y_max", box_height)
 		mesh_instance.material_override = sm
 	else:
@@ -1236,7 +1258,7 @@ func generate() -> void:
 		if sm.get_shader_parameter("snap_y_strength") != null:
 			sm.set_shader_parameter("snap_y_strength", shader_snap_y_strength)
 		if sm.get_shader_parameter("grid_y_min") != null:
-			sm.set_shader_parameter("grid_y_min", outer_floor_height)
+			sm.set_shader_parameter("grid_y_min", grid_y0)
 		if sm.get_shader_parameter("grid_y_max") != null:
 			sm.set_shader_parameter("grid_y_max", box_height)
 
@@ -1268,6 +1290,7 @@ func generate() -> void:
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
+	_print_grid_contract()
 	_sync_sun()
 
 # -----------------------------
@@ -1321,7 +1344,7 @@ func _generate_heights() -> void:
 			h += edge_t * edge_t * height_scale * edge_ramp_strength
 
 			# Clamp + quantize (voxel look)
-			h = clampf(h, min_height, minf(max_height, box_height - 0.5))
+			h = clampf(h, maxf(min_height, _surface_min_y()), minf(max_height, box_height - 0.5))
 			h = _quantize(h, height_step)
 
 			_heights[z * n + x] = h
@@ -1329,8 +1352,8 @@ func _generate_heights() -> void:
 func _quantize(h: float, step: float) -> float:
 	if step <= 0.0:
 		return h
-	var k := roundf((h - outer_floor_height) / step)
-	return outer_floor_height + k * step
+	var k := roundf((h - grid_y0) / step)
+	return grid_y0 + k * step
 
 func _cell_h(x: int, z: int) -> float:
 	var n: int = max(2, cells_per_side)
@@ -1442,9 +1465,8 @@ func _tunnel_flat_corners(y: float) -> Vector4:
 	return Vector4(y, y, y, y)
 
 func _resolve_tunnel_layer(n: int) -> void:
-	var min_floor: float = outer_floor_height + tunnel_floor_clearance_from_box
-	var floor_y: float = maxf(min_floor, tunnel_floor_y)
-	var ceil_y: float = floor_y + maxf(1.0, tunnel_height)
+	var floor_y: float = _level_to_h(TUNNEL_FLOOR_LEVEL)
+	var ceil_y: float = _level_to_h(TUNNEL_FLOOR_LEVEL + TUNNEL_HEIGHT_LEVELS)
 
 	var roof_min: float = INF
 	for z in range(n):
@@ -1454,15 +1476,9 @@ func _resolve_tunnel_layer(n: int) -> void:
 			roof_min = minf(roof_min, roof)
 
 	var max_ceiling: float = roof_min - tunnel_ceiling_clearance
-	var desired_h: float = maxf(0.5, float(tunnel_height_steps) * height_step)
 	if ceil_y > max_ceiling:
 		ceil_y = max_ceiling
-		floor_y = ceil_y - maxf(1.0, tunnel_height)
-		floor_y = maxf(floor_y, min_floor)
-
-	var max_h: float = maxf(0.5, max_ceiling - floor_y)
-	var h: float = clampf(desired_h, 0.5, max_h)
-	ceil_y = floor_y + h
+		floor_y = minf(floor_y, ceil_y - maxf(0.5, height_step))
 
 	_tunnel_floor_resolved = floor_y
 	_tunnel_ceil_resolved = ceil_y
@@ -1499,11 +1515,8 @@ func _tunnel_stamp_entrance_shaft(entrance_idx: int) -> void:
 	_tunnel_mask[entrance_idx] = 1
 
 func _choose_tunnel_base_depth(_n: int, _entrances: Array[Vector2i]) -> void:
-	var thickness: float = _tunnel_ceil_resolved - _tunnel_floor_resolved
-	_tunnel_base_floor_y = outer_floor_height + tunnel_floor_clearance_from_box
-	_tunnel_base_ceil_y = _tunnel_base_floor_y + thickness
-	_tunnel_floor_resolved = _tunnel_base_floor_y
-	_tunnel_ceil_resolved = _tunnel_base_ceil_y
+	_tunnel_base_floor_y = _tunnel_floor_resolved
+	_tunnel_base_ceil_y = _tunnel_ceil_resolved
 
 func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Vector2i]:
 	if start == goal:
@@ -1685,10 +1698,10 @@ func _ensure_tunnel_nodes() -> void:
 # Cliff limiter (enforces max neighbor delta)
 # -----------------------------
 func _h_to_level(h: float) -> int:
-	return int(roundf(h / maxf(0.0001, height_step)))
+	return int(roundf((h - grid_y0) / maxf(0.0001, height_step)))
 
 func _level_to_h(level: int) -> float:
-	return float(level) * height_step
+	return grid_y0 + float(level) * height_step
 
 func _limit_neighbor_cliffs() -> void:
 	var n: int = max(2, cells_per_side)
@@ -1737,7 +1750,7 @@ func _limit_neighbor_cliffs() -> void:
 
 	for i in range(n * n):
 		var h: float = _level_to_h(levels[i])
-		h = clampf(h, min_height, minf(max_height, box_height - 0.5))
+		h = clampf(h, maxf(min_height, _surface_min_y()), minf(max_height, box_height - 0.5))
 		_heights[i] = h
 
 func _fill_pits() -> void:
