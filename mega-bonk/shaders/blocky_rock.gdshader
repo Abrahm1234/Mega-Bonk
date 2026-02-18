@@ -27,6 +27,11 @@ uniform float seam_lock_width = 0.06;
 uniform float seam_lock_soft  = 0.02;
 uniform bool seam_lock_use_world_cell = true;
 uniform vec2 grid_origin_xz = vec2(0.0, 0.0);
+uniform bool clamp_to_cell = true;
+uniform float cell_margin_m = 0.02;
+uniform bool snap_y_to_height_step = false;
+uniform float height_step = 1.0;
+uniform float snap_y_strength = 1.0;
 
 uniform bool debug_disable_side_disp = false;
 uniform bool debug_show_vertex_color = false;
@@ -114,7 +119,9 @@ void vertex() {
 	vec3 world_p0 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec3 world_n0 = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 
-	vec2 cell = floor(world_p0.xz / max(cell_size, 1e-5));
+	vec2 cell = floor((world_p0.xz - grid_origin_xz) / max(cell_size, 1e-5));
+	vec2 cell_min = grid_origin_xz + cell * cell_size;
+	vec2 cell_max = cell_min + vec2(cell_size);
 	float rnd = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
 	vec3 p = world_p0 + vec3(rnd * 19.0, rnd * 7.0, rnd * 23.0);
 
@@ -130,11 +137,46 @@ void vertex() {
 	float seam = seam_lock_use_world_cell ? seam_world : seam_uv2;
 	disp *= seam * (1.0 - is_box);
 
-	vec3 world_dir = world_n0;
+	vec2 cell_center_xz = (cell_min + cell_max) * 0.5;
+	vec2 to_center_xz = cell_center_xz - world_p0.xz;
+	vec3 dir_top = vec3(0.0, 1.0, 0.0);
+	vec3 dir_wall = normalize(vec3(to_center_xz.x, 0.0, to_center_xz.y) + vec3(1e-6, 0.0, 1e-6));
+	vec3 dir_ramp = normalize(mix(world_n0, dir_top, 0.65));
+	vec3 world_dir = dir_top * is_top + dir_wall * is_wall + dir_ramp * is_ramp;
+	world_dir = normalize(world_dir + vec3(1e-6));
+
 	vec3 local_dir = normalize((INV_MODEL_MATRIX * vec4(world_dir, 0.0)).xyz);
 	VERTEX += local_dir * disp;
 
-	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 world_p1 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	if (clamp_to_cell) {
+		float m = max(cell_margin_m, 0.0);
+		float min_x = cell_min.x + m;
+		float max_x = cell_max.x - m;
+		float min_z = cell_min.y + m;
+		float max_z = cell_max.y - m;
+		if (min_x > max_x) {
+			float cx = (cell_min.x + cell_max.x) * 0.5;
+			min_x = cx;
+			max_x = cx;
+		}
+		if (min_z > max_z) {
+			float cz = (cell_min.y + cell_max.y) * 0.5;
+			min_z = cz;
+			max_z = cz;
+		}
+		world_p1.x = clamp(world_p1.x, min_x, max_x);
+		world_p1.z = clamp(world_p1.z, min_z, max_z);
+	}
+
+	if (snap_y_to_height_step) {
+		float hs = max(height_step, 1e-5);
+		float y_snap = round(world_p1.y / hs) * hs;
+		world_p1.y = mix(world_p1.y, y_snap, clamp(snap_y_strength, 0.0, 1.0));
+	}
+
+	VERTEX = (INV_MODEL_MATRIX * vec4(world_p1, 1.0)).xyz;
+	v_world_pos = world_p1;
 }
 
 void fragment() {
