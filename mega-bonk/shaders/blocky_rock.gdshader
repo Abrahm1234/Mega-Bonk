@@ -145,7 +145,8 @@ void vertex() {
 	vec3 world_dir = dir_top * is_top + dir_wall * is_wall + dir_ramp * is_ramp;
 	world_dir = normalize(world_dir + vec3(1e-6));
 
-	vec3 local_dir = normalize((INV_MODEL_MATRIX * vec4(world_dir, 0.0)).xyz);
+	mat4 inv_model_matrix = inverse(MODEL_MATRIX);
+	vec3 local_dir = normalize((inv_model_matrix * vec4(world_dir, 0.0)).xyz);
 	VERTEX += local_dir * disp;
 
 	vec3 world_p1 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -175,7 +176,7 @@ void vertex() {
 		world_p1.y = mix(world_p1.y, y_snap, clamp(snap_y_strength, 0.0, 1.0));
 	}
 
-	VERTEX = (INV_MODEL_MATRIX * vec4(world_p1, 1.0)).xyz;
+	VERTEX = (inv_model_matrix * vec4(world_p1, 1.0)).xyz;
 	v_world_pos = world_p1;
 }
 
