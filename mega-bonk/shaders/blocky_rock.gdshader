@@ -25,7 +25,10 @@ uniform float disp_scale_ramp = 0.06;
 
 uniform float seam_lock_width = 0.06;
 uniform float seam_lock_soft  = 0.02;
+uniform bool seam_lock_use_world_cell = true;
+uniform vec2 grid_origin_xz = vec2(0.0, 0.0);
 
+uniform bool debug_disable_side_disp = false;
 uniform bool debug_show_vertex_color = false;
 
 const float TAG_TOP  = 0.00;
@@ -38,6 +41,14 @@ varying float v_tag;
 
 float seam_lock_mask(vec2 uv2) {
 	float edge_dist = min(min(uv2.x, 1.0 - uv2.x), min(uv2.y, 1.0 - uv2.y));
+	float w0 = seam_lock_width;
+	float w1 = seam_lock_width + seam_lock_soft;
+	return smoothstep(w0, w1, edge_dist);
+}
+
+float seam_lock_mask_world(vec3 world_p0) {
+	vec2 in_cell = fract((world_p0.xz - grid_origin_xz) / max(cell_size, 1e-5));
+	float edge_dist = min(min(in_cell.x, 1.0 - in_cell.x), min(in_cell.y, 1.0 - in_cell.y));
 	float w0 = seam_lock_width;
 	float w1 = seam_lock_width + seam_lock_soft;
 	return smoothstep(w0, w1, edge_dist);
@@ -87,6 +98,11 @@ void vertex() {
 	float is_ramp = decode_is(v_tag, TAG_RAMP);
 	float is_box  = decode_is(v_tag, TAG_BOX);
 
+	if (debug_disable_side_disp) {
+		is_wall = 0.0;
+		is_ramp = 0.0;
+	}
+
 	float disp_strength = disp_strength_top * is_top
 	                    + disp_strength_wall * is_wall
 	                    + disp_strength_ramp * is_ramp;
@@ -109,10 +125,14 @@ void vertex() {
 
 	float disp = (n * 2.0 - 1.0) * disp_strength;
 
-	float seam = seam_lock_mask(UV2);
+	float seam_uv2 = seam_lock_mask(UV2);
+	float seam_world = seam_lock_mask_world(world_p0);
+	float seam = seam_lock_use_world_cell ? seam_world : seam_uv2;
 	disp *= seam * (1.0 - is_box);
 
-	VERTEX += normalize(NORMAL) * disp;
+	vec3 world_dir = world_n0;
+	vec3 local_dir = normalize((INV_MODEL_MATRIX * vec4(world_dir, 0.0)).xyz);
+	VERTEX += local_dir * disp;
 
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }

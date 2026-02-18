@@ -418,9 +418,13 @@ func _grid_wire_apply_debug_fit(enabled: bool) -> void:
 				sm.set_shader_parameter("disp_strength_wall", 0.0)
 			if sm.get_shader_parameter("disp_strength_ramp") != null:
 				sm.set_shader_parameter("disp_strength_ramp", 0.0)
+			if sm.get_shader_parameter("debug_disable_side_disp") != null:
+				sm.set_shader_parameter("debug_disable_side_disp", true)
 		else:
 			# Restore whatever each material had before the grid was enabled.
 			_grid_wire_restore_disp_params(sm)
+			if sm.get_shader_parameter("debug_disable_side_disp") != null:
+				sm.set_shader_parameter("debug_disable_side_disp", false)
 
 func _grid_wire_set_visible(enabled: bool) -> void:
 	_grid_wire_visible = enabled
@@ -1087,6 +1091,9 @@ func _ready() -> void:
 		sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
 		sm.set_shader_parameter("normal_strength", normal_strength)
 		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
+		sm.set_shader_parameter("debug_disable_side_disp", false)
+		sm.set_shader_parameter("seam_lock_use_world_cell", true)
+		sm.set_shader_parameter("grid_origin_xz", Vector2(0.0, 0.0))
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
@@ -1141,6 +1148,13 @@ func generate() -> void:
 
 	# Refresh grid-space transforms (handles TerrainMesh/TerrainBody transforms).
 	_grid_refresh_space_xforms()
+
+	# Keep shader seam-lock origin aligned to generated cell-space origin.
+	for sm in _grid_wire_collect_shader_materials():
+		if sm.get_shader_parameter("cell_size") != null:
+			sm.set_shader_parameter("cell_size", _cell_size)
+		if sm.get_shader_parameter("grid_origin_xz") != null:
+			sm.set_shader_parameter("grid_origin_xz", Vector2(_ox, _oz))
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
