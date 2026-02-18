@@ -69,7 +69,6 @@ class_name ArenaBlockyTerrain
 @export var tunnel_height: float = 8.0
 @export_range(1, 8, 1) var tunnel_height_steps: int = 2
 @export var tunnel_roof_clearance: float = 0.75
-@export var tunnel_turn_penalty: float = 3.0
 @export var tunnel_floor_clearance_from_box: float = 2.0
 @export var tunnel_ceiling_clearance: float = 1.0
 @export var tunnel_edge_clearance: float = 0.5
@@ -1358,11 +1357,16 @@ func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Ve
 	if start == goal:
 		return [start]
 
+	# If either endpoint violates the tunnel/shaft constraints, abort.
+	if not _tunnel_cell_passable(start.x, start.y, n, ceil_y):
+		return []
+	if not _tunnel_cell_passable(goal.x, goal.y, n, ceil_y):
+		return []
+
 	var open: Array[Vector2i] = [start]
 	var came_from: Dictionary = {}
 	var g: Dictionary = {start: 0.0}
 	var f: Dictionary = {start: float(abs(start.x - goal.x) + abs(start.y - goal.y))}
-	var last_dir: Dictionary = {}
 
 	while open.size() > 0:
 		var best_i: int = 0
@@ -1383,20 +1387,20 @@ func _a_star(n: int, start: Vector2i, goal: Vector2i, ceil_y: float) -> Array[Ve
 			out.reverse()
 			return out
 
-		for dir in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
-			var nb: Vector2i = _neighbor_of(current.x, current.y, dir)
+		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+		for d in dirs:
+			var nb: Vector2i = current + d
 			if not _in_bounds(nb.x, nb.y, n):
+				continue
+			# Enforce the same constraints as entrance selection (no ramp cells / no outer rim).
+			if not _tunnel_cell_passable(nb.x, nb.y, n, ceil_y):
 				continue
 			if not _edge_is_open_at_ceil(n, current, nb, ceil_y):
 				continue
 
 			var tentative: float = g.get(current, 1.0e20) + 1.0
-			if last_dir.has(current) and int(last_dir[current]) != dir:
-				tentative += tunnel_turn_penalty
-
 			if tentative < g.get(nb, 1.0e20):
 				came_from[nb] = current
-				last_dir[nb] = dir
 				g[nb] = tentative
 				var h: float = float(abs(nb.x - goal.x) + abs(nb.y - goal.y))
 				f[nb] = tentative + h
@@ -1491,19 +1495,6 @@ func _generate_tunnels_layout(n: int, rng: RandomNumberGenerator) -> void:
 			var idx: int = int(k)
 			if idx >= 0 and idx < _tunnel_hole_mask.size():
 				_tunnel_hole_mask[idx] = 1
-
-func _dir_from_to(a: Vector2i, b: Vector2i) -> int:
-	var dx: int = b.x - a.x
-	var dz: int = b.y - a.y
-	if dx == 1 and dz == 0:
-		return RAMP_EAST
-	if dx == -1 and dz == 0:
-		return RAMP_WEST
-	if dx == 0 and dz == 1:
-		return RAMP_SOUTH
-	if dx == 0 and dz == -1:
-		return RAMP_NORTH
-	return RAMP_EAST
 
 func _ensure_tunnel_nodes() -> void:
 	var terrain_body: Node = get_node_or_null("TerrainBody")
