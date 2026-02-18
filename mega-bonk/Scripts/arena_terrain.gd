@@ -106,7 +106,7 @@ class_name ArenaBlockyTerrain
 @export var shader_snap_y_to_height_step: bool = false
 @export_range(0.0, 1.0, 0.01) var shader_snap_y_strength: float = 1.0
 @export var grid_debug_force_flat_material: bool = false
-@export var grid_wire_flat_material_toggle_key: Key = Key.KEY_F2
+@export var grid_wire_flat_material_toggle_key: Key = KEY_F2
 @export var sun_height: float = 200.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
@@ -1145,7 +1145,7 @@ func _ready() -> void:
 		sm.set_shader_parameter("normal_strength", normal_strength)
 		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
 		sm.set_shader_parameter("debug_disable_side_disp", false)
-		sm.set_shader_parameter("seam_lock_use_world_cell", true)
+		sm.set_shader_parameter("seam_lock_use_world_cell", false)
 		sm.set_shader_parameter("grid_origin_xz", Vector2(0.0, 0.0))
 		sm.set_shader_parameter("clamp_to_cell", shader_clamp_to_cell)
 		sm.set_shader_parameter("cell_margin_m", shader_cell_margin_m)
@@ -1223,6 +1223,8 @@ func generate() -> void:
 			sm.set_shader_parameter("cell_size", _cell_size)
 		if sm.get_shader_parameter("grid_origin_xz") != null:
 			sm.set_shader_parameter("grid_origin_xz", Vector2(_ox, _oz))
+		if sm.get_shader_parameter("seam_lock_use_world_cell") != null:
+			sm.set_shader_parameter("seam_lock_use_world_cell", false)
 		if sm.get_shader_parameter("clamp_to_cell") != null:
 			sm.set_shader_parameter("clamp_to_cell", shader_clamp_to_cell)
 		if sm.get_shader_parameter("cell_margin_m") != null:

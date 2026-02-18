@@ -25,7 +25,7 @@ uniform float disp_scale_ramp = 0.06;
 
 uniform float seam_lock_width = 0.06;
 uniform float seam_lock_soft  = 0.02;
-uniform bool seam_lock_use_world_cell = true;
+uniform bool seam_lock_use_world_cell = false;
 uniform vec2 grid_origin_xz = vec2(0.0, 0.0);
 uniform bool clamp_to_cell = true;
 uniform float cell_margin_m = 0.02;
@@ -53,8 +53,8 @@ float seam_lock_mask(vec2 uv2) {
 	return smoothstep(w0, w1, edge_dist);
 }
 
-float seam_lock_mask_world(vec3 world_p0) {
-	vec2 in_cell = fract((world_p0.xz - grid_origin_xz) / max(cell_size, 1e-5));
+float seam_lock_mask_local(vec2 local_xz) {
+	vec2 in_cell = fract((local_xz - grid_origin_xz) / max(cell_size, 1e-5));
 	float edge_dist = min(min(in_cell.x, 1.0 - in_cell.x), min(in_cell.y, 1.0 - in_cell.y));
 	float w0 = seam_lock_width;
 	float w1 = seam_lock_width + seam_lock_soft;
@@ -118,10 +118,11 @@ void vertex() {
 	                 + disp_scale_wall * is_wall
 	                 + disp_scale_ramp * is_ramp;
 
-	vec3 world_p0 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 local_p0 = VERTEX;
+	vec3 world_p0 = (MODEL_MATRIX * vec4(local_p0, 1.0)).xyz;
 	vec3 world_n0 = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 
-	vec2 cell = floor((world_p0.xz - grid_origin_xz) / max(cell_size, 1e-5));
+	vec2 cell = floor((local_p0.xz - grid_origin_xz) / max(cell_size, 1e-5));
 	vec2 cell_min = grid_origin_xz + cell * cell_size;
 	vec2 cell_max = cell_min + vec2(cell_size);
 	float rnd = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
@@ -135,23 +136,24 @@ void vertex() {
 	float disp = (n * 2.0 - 1.0) * disp_strength;
 
 	float seam_uv2 = seam_lock_mask(UV2);
-	float seam_world = seam_lock_mask_world(world_p0);
-	float seam = seam_lock_use_world_cell ? seam_world : seam_uv2;
+	float seam_local = seam_lock_mask_local(local_p0.xz);
+	float seam = seam_lock_use_world_cell ? seam_uv2 : seam_local;
 	disp *= seam * (1.0 - is_box);
 
-	vec2 cell_center_xz = (cell_min + cell_max) * 0.5;
-	vec2 to_center_xz = cell_center_xz - world_p0.xz;
-	vec3 dir_top = vec3(0.0, 1.0, 0.0);
-	vec3 dir_wall = normalize(vec3(to_center_xz.x, 0.0, to_center_xz.y) + vec3(1e-6, 0.0, 1e-6));
-	vec3 dir_ramp = normalize(mix(world_n0, dir_top, 0.65));
-	vec3 world_dir = dir_top * is_top + dir_wall * is_wall + dir_ramp * is_ramp;
-	world_dir = normalize(world_dir + vec3(1e-6));
+	if (is_top > 0.5 || is_ramp > 0.5) {
+		disp = -abs(disp);
+	}
 
-	mat4 inv_model_matrix = inverse(MODEL_MATRIX);
-	vec3 local_dir = normalize((inv_model_matrix * vec4(world_dir, 0.0)).xyz);
+	vec2 cell_center_xz = (cell_min + cell_max) * 0.5;
+	vec2 to_center_xz = cell_center_xz - local_p0.xz;
+	vec3 dir_top = vec3(0.0, -1.0, 0.0);
+	vec3 dir_wall = normalize(vec3(to_center_xz.x, 0.0, to_center_xz.y) + vec3(1e-6, 0.0, 1e-6));
+	vec3 dir_ramp = normalize(mix(normalize(NORMAL), dir_top, 0.65));
+	vec3 local_dir = dir_top * is_top + dir_wall * is_wall + dir_ramp * is_ramp;
+	local_dir = normalize(local_dir + vec3(1e-6));
+
 	VERTEX += local_dir * disp;
 
-	vec3 world_p1 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	if (clamp_to_cell) {
 		float m = max(cell_margin_m, 0.0);
 		float min_x = cell_min.x + m;
@@ -168,21 +170,22 @@ void vertex() {
 			min_z = cz;
 			max_z = cz;
 		}
-		world_p1.x = clamp(world_p1.x, min_x, max_x);
-		world_p1.z = clamp(world_p1.z, min_z, max_z);
+		VERTEX.x = clamp(VERTEX.x, min_x, max_x);
+		VERTEX.z = clamp(VERTEX.z, min_z, max_z);
 	}
 
-	world_p1.y = clamp(world_p1.y, grid_y_min, grid_y_max);
+	VERTEX.y = min(VERTEX.y, local_p0.y);
+	VERTEX.y = clamp(VERTEX.y, grid_y_min, grid_y_max);
 
 	if (snap_y_to_height_step) {
 		float hs = max(height_step, 1e-5);
-		float y_snap = round((world_p1.y - grid_y_min) / hs) * hs + grid_y_min;
-		world_p1.y = mix(world_p1.y, y_snap, clamp(snap_y_strength, 0.0, 1.0));
-		world_p1.y = clamp(world_p1.y, grid_y_min, grid_y_max);
+		float y_snap = round((VERTEX.y - grid_y_min) / hs) * hs + grid_y_min;
+		VERTEX.y = mix(VERTEX.y, y_snap, clamp(snap_y_strength, 0.0, 1.0));
+		VERTEX.y = clamp(VERTEX.y, grid_y_min, grid_y_max);
+		VERTEX.y = min(VERTEX.y, local_p0.y);
 	}
 
-	VERTEX = (inv_model_matrix * vec4(world_p1, 1.0)).xyz;
-	v_world_pos = world_p1;
+	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
 void fragment() {
