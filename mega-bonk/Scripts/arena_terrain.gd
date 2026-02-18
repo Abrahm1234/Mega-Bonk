@@ -105,6 +105,8 @@ class_name ArenaBlockyTerrain
 @export_range(0.0, 2.0, 0.001) var shader_cell_margin_m: float = 0.02
 @export var shader_snap_y_to_height_step: bool = false
 @export_range(0.0, 1.0, 0.01) var shader_snap_y_strength: float = 1.0
+@export var grid_debug_force_flat_material: bool = false
+@export var grid_wire_flat_material_toggle_key: Key = Key.F2
 @export var sun_height: float = 200.0
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
@@ -174,6 +176,53 @@ var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
+var _grid_debug_flat_enabled: bool = false
+var _grid_debug_saved_overrides: Dictionary = {} # int instance_id -> Material
+
+func _quantize_y_to_grid(y: float) -> float:
+	if height_step <= 0.0:
+		return y
+	var k := roundf((y - outer_floor_height) / height_step)
+	return outer_floor_height + k * height_step
+
+func _resolve_vertical_grid_bounds() -> void:
+	outer_floor_height = _quantize_y_to_grid(outer_floor_height)
+	box_height = _quantize_y_to_grid(box_height)
+	if box_height <= outer_floor_height:
+		box_height = outer_floor_height + maxf(0.001, height_step)
+
+func _grid_debug_collect_mesh_instances() -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		out.append(mesh_instance)
+	if _tunnel_mesh_instance != null and is_instance_valid(_tunnel_mesh_instance):
+		out.append(_tunnel_mesh_instance)
+	return out
+
+func _grid_debug_get_flat_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.no_depth_test = false
+	return m
+
+func _apply_grid_debug_flat_material(enabled: bool) -> void:
+	if enabled == _grid_debug_flat_enabled:
+		return
+	if enabled:
+		_grid_debug_saved_overrides.clear()
+		var flat_mat := _grid_debug_get_flat_material()
+		for mi in _grid_debug_collect_mesh_instances():
+			_grid_debug_saved_overrides[mi.get_instance_id()] = mi.material_override
+			mi.material_override = flat_mat
+	else:
+		for mi in _grid_debug_collect_mesh_instances():
+			var id := mi.get_instance_id()
+			if _grid_debug_saved_overrides.has(id):
+				mi.material_override = _grid_debug_saved_overrides[id]
+		_grid_debug_saved_overrides.clear()
+	_grid_debug_flat_enabled = enabled
 
 func _grid_is_valid_cell(cell: Vector2i) -> bool:
 	return _grid_n > 0 and cell.x >= 0 and cell.x < _grid_n and cell.y >= 0 and cell.y < _grid_n
@@ -1103,6 +1152,8 @@ func _ready() -> void:
 		sm.set_shader_parameter("snap_y_to_height_step", shader_snap_y_to_height_step)
 		sm.set_shader_parameter("height_step", height_step)
 		sm.set_shader_parameter("snap_y_strength", shader_snap_y_strength)
+		sm.set_shader_parameter("grid_y_min", outer_floor_height)
+		sm.set_shader_parameter("grid_y_max", box_height)
 		mesh_instance.material_override = sm
 	else:
 		var mat := StandardMaterial3D.new()
@@ -1112,6 +1163,7 @@ func _ready() -> void:
 		mesh_instance.material_override = mat
 
 	_ensure_tunnel_nodes()
+	_apply_grid_debug_flat_material(grid_debug_force_flat_material)
 	_grid_refresh_space_xforms()
 	_ensure_grid_wire_node()
 	_grid_wire_set_visible(false)
@@ -1132,6 +1184,11 @@ func _unhandled_input(e: InputEvent) -> void:
 			_toggle_grid_wireframe()
 			return
 
+		if e.keycode == grid_wire_flat_material_toggle_key:
+			grid_debug_force_flat_material = not grid_debug_force_flat_material
+			_apply_grid_debug_flat_material(grid_debug_force_flat_material)
+			return
+
 		if e.keycode == KEY_R:
 			if randomize_seed_on_regen_key:
 				var rng := RandomNumberGenerator.new()
@@ -1142,6 +1199,8 @@ func _unhandled_input(e: InputEvent) -> void:
 			generate()
 
 func generate() -> void:
+	_resolve_vertical_grid_bounds()
+	_apply_grid_debug_flat_material(grid_debug_force_flat_material)
 	var n: int = max(2, cells_per_side)
 	_cell_size = world_size_m / float(n)
 	if use_rock_shader and mesh_instance != null:
@@ -1174,6 +1233,10 @@ func generate() -> void:
 			sm.set_shader_parameter("height_step", height_step)
 		if sm.get_shader_parameter("snap_y_strength") != null:
 			sm.set_shader_parameter("snap_y_strength", shader_snap_y_strength)
+		if sm.get_shader_parameter("grid_y_min") != null:
+			sm.set_shader_parameter("grid_y_min", outer_floor_height)
+		if sm.get_shader_parameter("grid_y_max") != null:
+			sm.set_shader_parameter("grid_y_max", box_height)
 
 	_generate_heights()
 	_limit_neighbor_cliffs()
@@ -1264,7 +1327,8 @@ func _generate_heights() -> void:
 func _quantize(h: float, step: float) -> float:
 	if step <= 0.0:
 		return h
-	return roundf(h / step) * step
+	var k := roundf((h - outer_floor_height) / step)
+	return outer_floor_height + k * step
 
 func _cell_h(x: int, z: int) -> float:
 	var n: int = max(2, cells_per_side)
@@ -2210,7 +2274,36 @@ func _build_mesh_and_collision(n: int) -> void:
 	st.generate_tangents()
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
+	_validate_mesh_bounds(mesh, "terrain")
 	collision_shape.shape = mesh.create_trimesh_shape()
+func _validate_mesh_bounds(mesh: ArrayMesh, label: String) -> void:
+	if mesh == null:
+		return
+	if mesh.get_surface_count() <= 0:
+		return
+	var arrays := mesh.surface_get_arrays(0)
+	if arrays.is_empty():
+		return
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if vertices.is_empty():
+		return
+	var min_x := _ox
+	var max_x := _ox + _resolved_world_size
+	var min_z := _oz
+	var max_z := _oz + _resolved_world_size
+	var max_over_y := 0.0
+	var max_under_y := 0.0
+	var max_snap_err := 0.0
+	for v in vertices:
+		max_over_y = maxf(max_over_y, v.y - box_height)
+		max_under_y = maxf(max_under_y, outer_floor_height - v.y)
+		max_snap_err = maxf(max_snap_err, absf(v.y - _quantize_y_to_grid(v.y)))
+		if v.x < min_x - 0.01 or v.x > max_x + 0.01 or v.z < min_z - 0.01 or v.z > max_z + 0.01:
+			push_warning("%s mesh vertex outside XZ bounds: %s" % [label, str(v)])
+			break
+	if max_over_y > 0.001 or max_under_y > 0.001 or max_snap_err > 0.001:
+		push_warning("%s bounds check: over_y=%.4f under_y=%.4f snap_err=%.4f" % [label, max_over_y, max_under_y, max_snap_err])
+
 func _basis_from_outward(outward: Vector3) -> Basis:
 	var z_axis: Vector3 = outward.normalized()
 	var x_axis: Vector3 = Vector3.UP.cross(z_axis)

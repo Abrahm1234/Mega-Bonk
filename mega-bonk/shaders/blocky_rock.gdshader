@@ -32,6 +32,8 @@ uniform float cell_margin_m = 0.02;
 uniform bool snap_y_to_height_step = false;
 uniform float height_step = 1.0;
 uniform float snap_y_strength = 1.0;
+uniform float grid_y_min = -100000.0;
+uniform float grid_y_max = 100000.0;
 
 uniform bool debug_disable_side_disp = false;
 uniform bool debug_show_vertex_color = false;
@@ -170,10 +172,13 @@ void vertex() {
 		world_p1.z = clamp(world_p1.z, min_z, max_z);
 	}
 
+	world_p1.y = clamp(world_p1.y, grid_y_min, grid_y_max);
+
 	if (snap_y_to_height_step) {
 		float hs = max(height_step, 1e-5);
-		float y_snap = round(world_p1.y / hs) * hs;
+		float y_snap = round((world_p1.y - grid_y_min) / hs) * hs + grid_y_min;
 		world_p1.y = mix(world_p1.y, y_snap, clamp(snap_y_strength, 0.0, 1.0));
+		world_p1.y = clamp(world_p1.y, grid_y_min, grid_y_max);
 	}
 
 	VERTEX = (inv_model_matrix * vec4(world_p1, 1.0)).xyz;
