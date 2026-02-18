@@ -146,7 +146,7 @@ var _grid_tags: PackedInt64Array = PackedInt64Array() # per-cell bitmask
 var _grid_contents: Array = [] # Array[Array[Node]] per-cell contents
 var _grid_object_to_cell: Dictionary = {} # Node -> int cell index
 var _grid_object_tags: Dictionary = {} # Node -> int bitmask tags (optional per-object tags)
-var _grid_wire_saved_disp_params: Dictionary = {}
+var _grid_wire_saved_disp_params: Dictionary = {} # int instance_id -> Dictionary[StringName, Variant]
 
 # Grid space transforms
 # The grid and generated mesh are authored in the *TerrainMesh local space*.
@@ -165,6 +165,7 @@ var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
 # For grid-alignment debugging, this option zeros wall/ramp displacement while the grid wire is visible.
 @export var grid_wire_disable_side_displacement: bool = true
 @export var grid_wire_disable_displacement_when_visible: bool = true  # disables disp_strength_* while grid is visible for perfect alignment
+@export_range(0.0, 0.01, 0.0005) var grid_wire_surface_nudge: float = 0.0005
 
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
@@ -343,46 +344,83 @@ func _grid_wire_get_material() -> Material:
 		_grid_wire_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	return _grid_wire_material
 
+func _grid_wire_collect_from_mesh_instance(mi: MeshInstance3D, seen: Dictionary, result: Array[ShaderMaterial]) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+
+	var override_sm := mi.material_override as ShaderMaterial
+	if override_sm != null:
+		var id_override := override_sm.get_instance_id()
+		if not seen.has(id_override):
+			seen[id_override] = true
+			result.append(override_sm)
+
+	var mesh: Mesh = mi.mesh
+	if mesh == null:
+		return
+
+	for si in range(mesh.get_surface_count()):
+		var sm := mesh.surface_get_material(si) as ShaderMaterial
+		if sm == null:
+			continue
+		var id_surface := sm.get_instance_id()
+		if seen.has(id_surface):
+			continue
+		seen[id_surface] = true
+		result.append(sm)
+
+func _grid_wire_collect_shader_materials() -> Array[ShaderMaterial]:
+	var result: Array[ShaderMaterial] = []
+	var seen := {}
+	_grid_wire_collect_from_mesh_instance(mesh_instance, seen, result)
+	_grid_wire_collect_from_mesh_instance(_tunnel_mesh_instance, seen, result)
+	return result
+
 func _grid_wire_capture_disp_params(sm: ShaderMaterial) -> void:
-	if _grid_wire_saved_disp_params.size() > 0:
+	var mat_id := sm.get_instance_id()
+	if _grid_wire_saved_disp_params.has(mat_id):
 		return
 	var names := [
 		StringName("disp_strength_top"),
 		StringName("disp_strength_wall"),
 		StringName("disp_strength_ramp"),
 	]
+	var saved_for_mat := {}
 	for p in names:
 		var v: Variant = sm.get_shader_parameter(p)
 		if v != null:
-			_grid_wire_saved_disp_params[p] = v
+			saved_for_mat[p] = v
+	if saved_for_mat.size() > 0:
+		_grid_wire_saved_disp_params[mat_id] = saved_for_mat
 
 func _grid_wire_restore_disp_params(sm: ShaderMaterial) -> void:
-	if _grid_wire_saved_disp_params.size() == 0:
+	var mat_id := sm.get_instance_id()
+	if not _grid_wire_saved_disp_params.has(mat_id):
 		return
-	for p in _grid_wire_saved_disp_params.keys():
-		sm.set_shader_parameter(p, _grid_wire_saved_disp_params[p])
-	_grid_wire_saved_disp_params.clear()
+	var saved_for_mat: Dictionary = _grid_wire_saved_disp_params[mat_id]
+	for p in saved_for_mat.keys():
+		sm.set_shader_parameter(p, saved_for_mat[p])
+	_grid_wire_saved_disp_params.erase(mat_id)
 
 func _grid_wire_apply_debug_fit(enabled: bool) -> void:
 	# When the 3D grid is visible, disable vertex displacement so the rendered terrain and
 	# the wire overlay share the exact same cell-aligned geometry (no visual drift/offset).
-	if mesh_instance == null:
-		return
-	var sm := mesh_instance.material_override as ShaderMaterial
-	if sm == null:
+	var shader_materials := _grid_wire_collect_shader_materials()
+	if shader_materials.is_empty():
 		return
 	var disable := enabled and (grid_wire_disable_displacement_when_visible or grid_wire_disable_side_displacement)
-	if disable:
-		_grid_wire_capture_disp_params(sm)
-		if sm.get_shader_parameter("disp_strength_top") != null:
-			sm.set_shader_parameter("disp_strength_top", 0.0)
-		if sm.get_shader_parameter("disp_strength_wall") != null:
-			sm.set_shader_parameter("disp_strength_wall", 0.0)
-		if sm.get_shader_parameter("disp_strength_ramp") != null:
-			sm.set_shader_parameter("disp_strength_ramp", 0.0)
-	else:
-		# Restore whatever the material had before the grid was enabled.
-		_grid_wire_restore_disp_params(sm)
+	for sm in shader_materials:
+		if disable:
+			_grid_wire_capture_disp_params(sm)
+			if sm.get_shader_parameter("disp_strength_top") != null:
+				sm.set_shader_parameter("disp_strength_top", 0.0)
+			if sm.get_shader_parameter("disp_strength_wall") != null:
+				sm.set_shader_parameter("disp_strength_wall", 0.0)
+			if sm.get_shader_parameter("disp_strength_ramp") != null:
+				sm.set_shader_parameter("disp_strength_ramp", 0.0)
+		else:
+			# Restore whatever each material had before the grid was enabled.
+			_grid_wire_restore_disp_params(sm)
 
 func _grid_wire_set_visible(enabled: bool) -> void:
 	_grid_wire_visible = enabled
@@ -412,6 +450,17 @@ func _grid_wire_rebuild_mesh() -> void:
 	var z1 := _oz + w
 	var y0 := outer_floor_height
 	var y1 := box_height
+	var nudge := maxf(0.0, grid_wire_surface_nudge)
+	var nx0 := x0 + nudge
+	var nz0 := z0 + nudge
+	var nx1 := x1 - nudge
+	var nz1 := z1 - nudge
+	if nx0 > nx1:
+		nx0 = (x0 + x1) * 0.5
+		nx1 = nx0
+	if nz0 > nz1:
+		nz0 = (z0 + z1) * 0.5
+		nz1 = nz0
 
 	# Draw a full 3D lattice so every voxel cell is outlined along X, Y, and Z.
 	var y_step := height_step
@@ -438,8 +487,10 @@ func _grid_wire_rebuild_mesh() -> void:
 		var z := z0 + float(zi) * _cell_size
 		for xi in range(n + 1):
 			var x := x0 + float(xi) * _cell_size
-			im.surface_add_vertex(Vector3(x, y0, z))
-			im.surface_add_vertex(Vector3(x, y1, z))
+			var xn := clampf(x, nx0, nx1)
+			var zn := clampf(z, nz0, nz1)
+			im.surface_add_vertex(Vector3(xn, y0 + nudge, zn))
+			im.surface_add_vertex(Vector3(xn, y1 - nudge, zn))
 
 	# Horizontal lattice at every Y slice (X and Z axes).
 	for yi in range(y_slices + 1):
@@ -450,14 +501,16 @@ func _grid_wire_rebuild_mesh() -> void:
 		# X lines (vary X, fixed Z).
 		for zi in range(n + 1):
 			var z := z0 + float(zi) * _cell_size
-			im.surface_add_vertex(Vector3(x0, y, z))
-			im.surface_add_vertex(Vector3(x1, y, z))
+			var zn := clampf(z, nz0, nz1)
+			im.surface_add_vertex(Vector3(nx0, y, zn))
+			im.surface_add_vertex(Vector3(nx1, y, zn))
 
 		# Z lines (vary Z, fixed X).
 		for xi in range(n + 1):
 			var x := x0 + float(xi) * _cell_size
-			im.surface_add_vertex(Vector3(x, y, z0))
-			im.surface_add_vertex(Vector3(x, y, z1))
+			var xn := clampf(x, nx0, nx1)
+			im.surface_add_vertex(Vector3(xn, y, nz0))
+			im.surface_add_vertex(Vector3(xn, y, nz1))
 
 	im.surface_end()
 	_grid_wire_instance.mesh = im
