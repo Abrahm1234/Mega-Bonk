@@ -2238,16 +2238,14 @@ func _sample_surface_y(world_x: float, world_z: float) -> float:
 	return lerpf(y0, y1, tz)
 
 func _xz_in_bounds(x: float, z: float) -> bool:
-	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n)
-	var max_z := _oz + _cell_size * float(n)
+	var max_x := _ox + _resolved_world_size
+	var max_z := _oz + _resolved_world_size
 	var eps := 1e-3
 	return (x >= _ox - eps and x <= max_x + eps and z >= _oz - eps and z <= max_z + eps)
 
 func _sample_surface_y_open(x: float, z: float) -> float:
-	var n: int = max(2, cells_per_side)
-	var max_x := _ox + _cell_size * float(n)
-	var max_z := _oz + _cell_size * float(n)
+	var max_x := _ox + _resolved_world_size
+	var max_z := _oz + _resolved_world_size
 	var eps := 1e-3
 
 	# Truly outside: return invalid
