@@ -1,5 +1,4 @@
 extends Node3D
-class_name ArenaBlockyTerrain
 
 # -----------------------------
 # Arena size (14x14)
