@@ -69,6 +69,12 @@ extends Node3D
 @export var ramp_jump_detector_check_inside_corners: bool = true
 @export var ramp_jump_detector_debug_print: bool = false
 
+@export var overhang_enable: bool = true
+@export_range(0.0, 8.0, 0.01) var overhang_min_drop: float = 0.75
+@export_range(0.0, 4.0, 0.01) var overhang_max_neighbor_delta: float = 0.25
+@export_range(0.0, 0.1, 0.001) var overhang_zfight_epsilon: float = 0.01
+@export var overhang_allow_on_ramp_neighbors: bool = true
+
 # -----------------------------
 # Tunnels (separate mesh under the terrain shell)
 # -----------------------------
@@ -150,6 +156,8 @@ var _ramp_up_dir: PackedInt32Array
 var _ramps_need_regen: bool = false
 var _tunnel_mask: PackedByteArray
 var _tunnel_hole_mask: PackedByteArray
+var _overhang_mask: PackedByteArray
+var _overhang_y: PackedFloat32Array
 var _tunnel_mesh_instance: MeshInstance3D
 var _tunnel_collision_shape: CollisionShape3D
 var _tunnel_floor_resolved: float = 0.0
@@ -175,6 +183,7 @@ const TAG_TUNNEL: int = 1 << 2
 const TAG_SHAFT_ENTRANCE: int = 1 << 3
 const TAG_SURFACE_HOLE: int = 1 << 4
 const TAG_FLAT_SURFACE: int = 1 << 5
+const TAG_OVERHANG: int = 1 << 6
 
 enum SurfaceKind { FLOOR, RAMP, WALL, TUNNEL_FLOOR, TUNNEL_WALL, TUNNEL_CEIL }
 enum SurfaceSide { NONE = -1, N = 0, S = 1, E = 2, W = 3 }
@@ -639,6 +648,8 @@ func _surface_label_text(srec: Dictionary) -> String:
 		base += " L%d" % int(extra.get("floor_level", 0))
 	elif extra.has("level"):
 		base += " L%d" % int(extra.get("level", 0))
+	if bool(extra.get("overhang", false)):
+		base += " OH"
 	return base
 
 func _surface_label_pos_local(srec: Dictionary) -> Vector3:
@@ -2170,6 +2181,7 @@ func generate() -> void:
 	_generate_tunnels_layout(n, rng)
 	_grid_init(n)
 	_grid_rebuild_tags(n)
+	_rebuild_overhang_walkways(n)
 	_surface_registry_reset(n)
 	if _grid_wire_visible:
 		_grid_wire_rebuild_mesh()
@@ -2177,6 +2189,12 @@ func generate() -> void:
 	_build_mesh_and_collision(n)
 	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
+	if _overhang_mask.size() == n * n:
+		var overhang_count: int = 0
+		for i in range(n * n):
+			if _overhang_mask[i] != 0:
+				overhang_count += 1
+		print("Overhang walkways:", overhang_count)
 	_print_grid_contract()
 	_sync_sun()
 	_apply_debug_tag_colors()
@@ -3077,6 +3095,111 @@ func _edge_pair(c: Vector4, edge: int) -> Vector2:
 		_:
 			return Vector2(c.x, c.x)
 
+func _cell_walk_y(i: int) -> float:
+	if i < 0 or i >= _heights.size():
+		return _NEG_INF
+	return _heights[i]
+
+func _is_walkable_floor_idx(i: int, n: int) -> bool:
+	if i < 0 or i >= n * n:
+		return false
+	if _overhang_mask.size() == n * n and _overhang_mask[i] != 0:
+		return true
+	if _grid_tags.size() != n * n:
+		return false
+	var t: int = int(_grid_tags[i])
+	if (t & TAG_SURFACE_HOLE) != 0:
+		return false
+	if (t & TAG_OVERHANG) != 0:
+		return true
+	if (t & TAG_RAMP) != 0:
+		return overhang_allow_on_ramp_neighbors
+	return (t & TAG_FLAT_SURFACE) != 0
+
+func _overhang_consider_pair(x: int, z: int, a: Vector2i, b: Vector2i, n: int, base_y: float, best_y: float) -> float:
+	var ax: int = x + a.x
+	var az: int = z + a.y
+	var bx: int = x + b.x
+	var bz: int = z + b.y
+	if not _in_bounds(ax, az, n) or not _in_bounds(bx, bz, n):
+		return best_y
+	var ia: int = _idx2(ax, az, n)
+	var ib: int = _idx2(bx, bz, n)
+	if not _is_walkable_floor_idx(ia, n) or not _is_walkable_floor_idx(ib, n):
+		return best_y
+	var ya: float = _cell_walk_y(ia)
+	var yb: float = _cell_walk_y(ib)
+	if absf(ya - yb) > overhang_max_neighbor_delta:
+		return best_y
+	var platform_y: float = minf(ya, yb)
+	if (platform_y - base_y) < overhang_min_drop:
+		return best_y
+	return minf(best_y, platform_y)
+
+func _rebuild_overhang_walkways(n: int) -> void:
+	if _overhang_mask.size() != n * n:
+		_overhang_mask = PackedByteArray()
+		_overhang_mask.resize(n * n)
+	if _overhang_y.size() != n * n:
+		_overhang_y = PackedFloat32Array()
+		_overhang_y.resize(n * n)
+	_overhang_mask.fill(0)
+	_overhang_y.fill(0.0)
+
+	if not overhang_enable:
+		return
+	if _grid_tags.size() != n * n:
+		return
+
+	var inf_y: float = 1.0e20
+	var dirs: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	for z in range(n):
+		for x in range(n):
+			var i: int = _idx2(x, z, n)
+			if _is_walkable_floor_idx(i, n):
+				continue
+			if _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[i] != 0:
+				continue
+			var base_y: float = _cell_walk_y(i)
+			var best_y: float = inf_y
+
+			best_y = _overhang_consider_pair(x, z, dirs[0], dirs[1], n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, dirs[1], dirs[2], n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, dirs[2], dirs[3], n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, dirs[3], dirs[0], n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, dirs[0], dirs[2], n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, dirs[1], dirs[3], n, base_y, best_y)
+
+			if best_y < inf_y:
+				_overhang_mask[i] = 1
+				_overhang_y[i] = best_y
+				_grid_tags[i] = int(_grid_tags[i]) | TAG_OVERHANG
+
+func _add_overhang_platforms(st: SurfaceTool, n: int, uv_scale_top: float) -> void:
+	if _overhang_mask.size() != n * n or _overhang_y.size() != n * n:
+		return
+	for z in range(n):
+		for x in range(n):
+			var i: int = _idx2(x, z, n)
+			if _overhang_mask[i] == 0:
+				continue
+			var x0: float = _ox + float(x) * _cell_size
+			var x1: float = x0 + _cell_size
+			var z0: float = _oz + float(z) * _cell_size
+			var z1: float = z0 + _cell_size
+			var y: float = _overhang_y[i] + overhang_zfight_epsilon
+			var col: Color = terrain_color
+			col.a = SURF_TOP
+			_add_quad_uv2(
+				st,
+				Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1),
+				Vector2(0, 0) * uv_scale_top, Vector2(1, 0) * uv_scale_top, Vector2(1, 1) * uv_scale_top, Vector2(0, 1) * uv_scale_top,
+				Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+				col
+			)
+			var verts := PackedVector3Array([Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1)])
+			_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": grid_y_to_level(y), "overhang": true})
+
 # -----------------------------
 # Mesh building
 # -----------------------------
@@ -3116,6 +3239,8 @@ func _build_mesh_and_collision(n: int) -> void:
 			var c0 := _cell_corners(x, z)
 
 			var idx: int = z * n + x
+			if _overhang_mask.size() == n * n and _overhang_mask[idx] != 0:
+				skip_top = true
 			var is_ramp: bool = enable_ramps and _ramp_is_effective_idx(idx, n)
 			var top_col: Color = ramp_color if is_ramp else terrain_color
 			top_col.a = SURF_RAMP if is_ramp else SURF_TOP
@@ -3166,33 +3291,34 @@ func _build_mesh_and_collision(n: int) -> void:
 			if x + 1 < n:
 				var idx_a: int = z * n + x
 				var idx_b: int = z * n + (x + 1)
-				var hole_touches_x_edge: bool = false
-				if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
-					hole_touches_x_edge = _tunnel_hole_mask[idx_a] != 0 or _tunnel_hole_mask[idx_b] != 0
-				if ramps_openings and not hole_touches_x_edge and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels):
-					pass
-				else:
-					var cB := _cell_corners(x + 1, z)
-					var a_e := _edge_pair(cA, 0)
-					var b_w := _edge_pair(cB, 1)
+				if not (_overhang_mask.size() == n * n and (_overhang_mask[idx_a] != 0 or _overhang_mask[idx_b] != 0)):
+					var hole_touches_x_edge: bool = false
+					if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
+						hole_touches_x_edge = _tunnel_hole_mask[idx_a] != 0 or _tunnel_hole_mask[idx_b] != 0
+					if not (ramps_openings and not hole_touches_x_edge and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
+						var cB := _cell_corners(x + 1, z)
+						var a_e := _edge_pair(cA, 0)
+						var b_w := _edge_pair(cB, 1)
 
-					var top0 := maxf(a_e.x, b_w.x)
-					var top1 := maxf(a_e.y, b_w.y)
-					var bot0 := minf(a_e.x, b_w.x)
-					var bot1 := minf(a_e.y, b_w.y)
+						var top0 := maxf(a_e.x, b_w.x)
+						var top1 := maxf(a_e.y, b_w.y)
+						var bot0 := minf(a_e.x, b_w.x)
+						var bot1 := minf(a_e.y, b_w.y)
 
-					if (top0 - bot0) > eps or (top1 - bot1) > eps:
-						var mean_a: float = (a_e.x + a_e.y) * 0.5
-						var mean_b: float = (b_w.x + b_w.y) * 0.5
-						var normal_pos_x: bool = mean_a > mean_b
-						_add_wall_x_between(
-							st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, normal_pos_x,
-							Vector2i(x, z), Vector2i(x + 1, z)
+						if (top0 - bot0) > eps or (top1 - bot1) > eps:
+							var mean_a: float = (a_e.x + a_e.y) * 0.5
+							var mean_b: float = (b_w.x + b_w.y) * 0.5
+							var normal_pos_x: bool = mean_a > mean_b
+							_add_wall_x_between(
+								st, x1, z0, z1, bot0, bot1, top0, top1, uv_scale_wall, normal_pos_x,
+								Vector2i(x, z), Vector2i(x + 1, z)
 							)
 
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
+				if _overhang_mask.size() == n * n and (_overhang_mask[idx_c] != 0 or _overhang_mask[idx_d] != 0):
+					continue
 				var hole_touches_z_edge: bool = false
 				if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
 					hole_touches_z_edge = _tunnel_hole_mask[idx_c] != 0 or _tunnel_hole_mask[idx_d] != 0
@@ -3215,7 +3341,9 @@ func _build_mesh_and_collision(n: int) -> void:
 						_add_wall_z_between(
 							st, x0, x1, z1, bot0z, bot1z, top0z, top1z, uv_scale_wall, normal_pos_z,
 							Vector2i(x, z), Vector2i(x, z + 1)
-							)
+						)
+
+	_add_overhang_platforms(st, n, uv_scale_top)
 
 	# Container walls (keeps everything “inside a box”)
 	_add_box_walls(st, outer_floor_height, box_height, uv_scale_wall)
