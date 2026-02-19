@@ -3195,6 +3195,29 @@ func _add_ceiling(st: SurfaceTool, y: float, uv_scale: float) -> void:
 # -----------------------------
 # Terrain wall helpers (between unequal cells)
 # -----------------------------
+func _emit_vertical_face(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+	ua: Vector2, ub: Vector2, uc: Vector2, ud: Vector2, vcol: Color, eps: float = 0.0005) -> void:
+	var left_h: float = absf(a.y - d.y)
+	var right_h: float = absf(b.y - c.y)
+	if left_h > eps and right_h > eps:
+		_add_quad_uv2(st, a, b, c, d,
+			ua, ub, uc, ud,
+			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+			vcol
+		)
+		return
+	if left_h > eps:
+		st.set_color(vcol)
+		st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+		st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+		st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+		return
+	if right_h > eps:
+		st.set_color(vcol)
+		st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
+		st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
+		st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
+
 func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float,
 	normal_pos_x: bool, cell_a: Vector2i = Vector2i(-1, -1), cell_b: Vector2i = Vector2i(-1, -1)) -> void:
@@ -3204,48 +3227,49 @@ func _add_wall_x_between(st: SurfaceTool, x_edge: float, z0: float, z1: float,
 	if d0 <= eps and d1 <= eps:
 		return
 
-	var a := Vector3(x_edge, high0, z0)
-	var b := Vector3(x_edge, high1, z1)
-	var c := Vector3(x_edge, low1, z1)
-	var d := Vector3(x_edge, low0, z0)
-	var wall_col := terrain_color
-	wall_col.a = SURF_WALL
-	var ua := Vector2(0.0, 1.0)
-	var ub := Vector2(1.0, 1.0)
-	var uc := Vector2(1.0, 0.0)
-	var ud := Vector2(0.0, 0.0)
-	ua.x *= uv_scale
-	ub.x *= uv_scale
-	uc.x *= uv_scale
-	ud.x *= uv_scale
-	if not normal_pos_x:
-		var tmp: Vector3 = a
-		a = b
-		b = tmp
-		tmp = c
-		c = d
-		d = tmp
 	var side_a := SurfaceSide.E
 	var side_b := SurfaceSide.W
-	_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([a, b, c, d]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(maxf(high0, high1))})
+	var y_split: float = minf(high0, high1)
+	var ua := Vector2(0.0, 1.0 * uv_scale)
+	var ub := Vector2(1.0 * uv_scale, 1.0 * uv_scale)
+	var uc := Vector2(1.0 * uv_scale, 0.0)
+	var ud := Vector2(0.0, 0.0)
 
-	if d0 > eps and d1 > eps:
-		_add_quad_uv2(st, a, b, c, d,
-			ua, ub, uc, ud,
-			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
-			wall_col
-		)
-		return
+	# Rectangular wall piece (always tagged WALL)
+	if y_split > minf(low0, low1) + eps:
+		var wa := Vector3(x_edge, y_split, z0)
+		var wb := Vector3(x_edge, y_split, z1)
+		var wc := Vector3(x_edge, low1, z1)
+		var wd := Vector3(x_edge, low0, z0)
+		if not normal_pos_x:
+			var tmpw: Vector3 = wa
+			wa = wb
+			wb = tmpw
+			tmpw = wc
+			wc = wd
+			wd = tmpw
+		_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([wa, wb, wc, wd]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(y_split)})
+		var wall_col := terrain_color
+		wall_col.a = SURF_WALL
+		_emit_vertical_face(st, wa, wb, wc, wd, ua, ub, uc, ud, wall_col, eps)
 
-	st.set_color(wall_col)
-	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-
-	st.set_color(wall_col)
-	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	# Trapezoid cap piece (separate from WALL, tagged as RAMP)
+	if absf(high0 - high1) > eps:
+		var ca := Vector3(x_edge, high0, z0)
+		var cb := Vector3(x_edge, high1, z1)
+		var cc := Vector3(x_edge, y_split, z1)
+		var cd := Vector3(x_edge, y_split, z0)
+		if not normal_pos_x:
+			var tmpc: Vector3 = ca
+			ca = cb
+			cb = tmpc
+			tmpc = cc
+			cc = cd
+			cd = tmpc
+		_register_surface(SurfaceKind.RAMP, cell_a, side_a, cell_b, side_b, PackedVector3Array([ca, cb, cc, cd]), Vector3.ZERO, {"y0_level": grid_y_to_level(y_split), "y1_level": grid_y_to_level(maxf(high0, high1))})
+		var cap_col := terrain_color
+		cap_col.a = SURF_RAMP
+		_emit_vertical_face(st, ca, cb, cc, cd, ua, ub, uc, ud, cap_col, eps)
 
 func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	low0: float, low1: float, high0: float, high1: float, uv_scale: float,
@@ -3256,48 +3280,49 @@ func _add_wall_z_between(st: SurfaceTool, x0: float, x1: float, z_edge: float,
 	if d0 <= eps and d1 <= eps:
 		return
 
-	var a := Vector3(x0, high0, z_edge)
-	var b := Vector3(x1, high1, z_edge)
-	var c := Vector3(x1, low1, z_edge)
-	var d := Vector3(x0, low0, z_edge)
-	var wall_col := terrain_color
-	wall_col.a = SURF_WALL
-	var ua := Vector2(0.0, 1.0)
-	var ub := Vector2(1.0, 1.0)
-	var uc := Vector2(1.0, 0.0)
-	var ud := Vector2(0.0, 0.0)
-	ua.x *= uv_scale
-	ub.x *= uv_scale
-	uc.x *= uv_scale
-	ud.x *= uv_scale
-	if normal_pos_z:
-		var tmp: Vector3 = a
-		a = b
-		b = tmp
-		tmp = c
-		c = d
-		d = tmp
 	var side_a := SurfaceSide.S
 	var side_b := SurfaceSide.N
-	_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([a, b, c, d]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(maxf(high0, high1))})
+	var y_split: float = minf(high0, high1)
+	var ua := Vector2(0.0, 1.0 * uv_scale)
+	var ub := Vector2(1.0 * uv_scale, 1.0 * uv_scale)
+	var uc := Vector2(1.0 * uv_scale, 0.0)
+	var ud := Vector2(0.0, 0.0)
 
-	if d0 > eps and d1 > eps:
-		_add_quad_uv2(st, a, b, c, d,
-			ua, ub, uc, ud,
-			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
-			wall_col
-		)
-		return
+	# Rectangular wall piece (always tagged WALL)
+	if y_split > minf(low0, low1) + eps:
+		var wa := Vector3(x0, y_split, z_edge)
+		var wb := Vector3(x1, y_split, z_edge)
+		var wc := Vector3(x1, low1, z_edge)
+		var wd := Vector3(x0, low0, z_edge)
+		if normal_pos_z:
+			var tmpw: Vector3 = wa
+			wa = wb
+			wb = tmpw
+			tmpw = wc
+			wc = wd
+			wd = tmpw
+		_register_surface(SurfaceKind.WALL, cell_a, side_a, cell_b, side_b, PackedVector3Array([wa, wb, wc, wd]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(low0, low1)), "y1_level": grid_y_to_level(y_split)})
+		var wall_col := terrain_color
+		wall_col.a = SURF_WALL
+		_emit_vertical_face(st, wa, wb, wc, wd, ua, ub, uc, ud, wall_col, eps)
 
-	st.set_color(wall_col)
-	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(ub); st.set_uv2(Vector2(1, 0)); st.add_vertex(b)
-	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-
-	st.set_color(wall_col)
-	st.set_uv(ua); st.set_uv2(Vector2(0, 0)); st.add_vertex(a)
-	st.set_uv(uc); st.set_uv2(Vector2(1, 1)); st.add_vertex(c)
-	st.set_uv(ud); st.set_uv2(Vector2(0, 1)); st.add_vertex(d)
+	# Trapezoid cap piece (separate from WALL, tagged as RAMP)
+	if absf(high0 - high1) > eps:
+		var ca := Vector3(x0, high0, z_edge)
+		var cb := Vector3(x1, high1, z_edge)
+		var cc := Vector3(x1, y_split, z_edge)
+		var cd := Vector3(x0, y_split, z_edge)
+		if normal_pos_z:
+			var tmpc: Vector3 = ca
+			ca = cb
+			cb = tmpc
+			tmpc = cc
+			cc = cd
+			cd = tmpc
+		_register_surface(SurfaceKind.RAMP, cell_a, side_a, cell_b, side_b, PackedVector3Array([ca, cb, cc, cd]), Vector3.ZERO, {"y0_level": grid_y_to_level(y_split), "y1_level": grid_y_to_level(maxf(high0, high1))})
+		var cap_col := terrain_color
+		cap_col.a = SURF_RAMP
+		_emit_vertical_face(st, ca, cb, cc, cd, ua, ub, uc, ud, cap_col, eps)
 
 # -----------------------------
 # Quad writer
