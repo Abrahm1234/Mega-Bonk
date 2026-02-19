@@ -480,7 +480,7 @@ func _grid_rebuild_tags(n: int) -> void:
 			if x == 0 or x == n - 1 or z == 0 or z == n - 1:
 				t |= TAG_EDGE
 
-			if _ramp_up_dir.size() == n * n and _ramp_up_dir[i] != 0:
+			if _ramp_is_effective_idx(i, n):
 				t |= TAG_RAMP
 
 			if _tunnel_mask.size() == n * n and _tunnel_mask[i] != 0:
@@ -1106,6 +1106,37 @@ func _count_ramps() -> int:
 		if _ramp_up_dir[i] != RAMP_NONE:
 			count += 1
 	return count
+
+func _ramp_rise_levels_idx(i: int, n: int) -> int:
+	if i < 0 or i >= n * n:
+		return 0
+	if _ramp_up_dir.size() != n * n:
+		return 0
+	var dir_up: int = _ramp_up_dir[i]
+	if dir_up == RAMP_NONE:
+		return 0
+	var x: int = i % n
+	var z: int = int(float(i) / float(n))
+	var nb: Vector2i = _neighbor_of(x, z, dir_up)
+	if not _in_bounds(nb.x, nb.y, n):
+		return 0
+	var hi: int = _idx2(nb.x, nb.y, n)
+	return _h_to_level(_heights[hi]) - _h_to_level(_heights[i])
+
+func _ramp_is_effective_idx(i: int, n: int) -> bool:
+	var rise: int = _ramp_rise_levels_idx(i, n)
+	var want: int = maxi(1, ramp_step_count)
+	return rise >= 1 and rise <= want
+
+func _prune_flattened_ramps(n: int) -> int:
+	if _ramp_up_dir.size() != n * n:
+		return 0
+	var removed: int = 0
+	for i in range(n * n):
+		if _ramp_up_dir[i] != RAMP_NONE and not _ramp_is_effective_idx(i, n):
+			_ramp_up_dir[i] = RAMP_NONE
+			removed += 1
+	return removed
 
 func _is_ramp_bridge(a_idx: int, b_idx: int, dir_a_to_b: int, want: int, levels: PackedInt32Array) -> bool:
 	var delta_ab: int = levels[b_idx] - levels[a_idx]
@@ -2789,54 +2820,71 @@ func _generate_ramps() -> void:
 					break
 
 	_prune_ramps_strict()
+	_prune_flattened_ramps(n)
 
 	var raised: bool = _ensure_basin_escapes(n, want_levels, levels)
 	if raised:
 		_apply_levels_to_heights(n, levels)
+		_prune_ramps_strict()
+		_prune_flattened_ramps(n)
 		_limit_neighbor_cliffs()
 		_fill_pits()
 		_ramps_need_regen = true
 		return
 
 	_prune_ramps_strict()
+	_prune_flattened_ramps(n)
 
 	var fix_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
 	if (fix_flags & FIX_LEVELS) != 0:
 		_apply_levels_to_heights(n, levels)
+		_prune_ramps_strict()
+		_prune_flattened_ramps(n)
 		_limit_neighbor_cliffs()
 		_fill_pits()
 		_ramps_need_regen = true
 		return
 	elif (fix_flags & FIX_PLACED) != 0:
 		_prune_ramps_strict()
+		_prune_flattened_ramps(n)
 
 	var clearance_flags: int = _apply_ramp_clearance(n, want_levels, levels)
 	if (clearance_flags & FIX_LEVELS) != 0:
 		_apply_levels_to_heights(n, levels)
+		_prune_ramps_strict()
+		_prune_flattened_ramps(n)
 	if clearance_flags != FIX_NONE:
 		var post_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
 		if (post_flags & FIX_LEVELS) != 0:
 			_apply_levels_to_heights(n, levels)
+			_prune_ramps_strict()
+			_prune_flattened_ramps(n)
 			_limit_neighbor_cliffs()
 			_fill_pits()
 			_ramps_need_regen = true
 			return
 		elif (post_flags & FIX_PLACED) != 0:
 			_prune_ramps_strict()
+			_prune_flattened_ramps(n)
 
 	var jump_flags: int = _apply_ramp_jump_detector(n, want_levels, levels)
 	if (jump_flags & FIX_LEVELS) != 0:
 		_apply_levels_to_heights(n, levels)
+		_prune_ramps_strict()
+		_prune_flattened_ramps(n)
 	if jump_flags != FIX_NONE:
 		var post_jump_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
 		if (post_jump_flags & FIX_LEVELS) != 0:
 			_apply_levels_to_heights(n, levels)
+			_prune_ramps_strict()
+			_prune_flattened_ramps(n)
 			_limit_neighbor_cliffs()
 			_fill_pits()
 			_ramps_need_regen = true
 			return
 		elif (post_jump_flags & FIX_PLACED) != 0:
 			_prune_ramps_strict()
+			_prune_flattened_ramps(n)
 
 	if auto_lower_unreachable_peaks:
 		var lowered_any: bool = false
@@ -2899,6 +2947,8 @@ func _generate_ramps() -> void:
 
 		if lowered_any:
 			_apply_levels_to_heights(n, levels)
+			_prune_ramps_strict()
+			_prune_flattened_ramps(n)
 			_limit_neighbor_cliffs()
 			_fill_pits()
 			_ramps_need_regen = true
@@ -2988,7 +3038,7 @@ func _build_mesh_and_collision(n: int) -> void:
 			var c0 := _cell_corners(x, z)
 
 			var idx: int = z * n + x
-			var is_ramp: bool = enable_ramps and _ramp_up_dir[idx] != RAMP_NONE
+			var is_ramp: bool = enable_ramps and _ramp_is_effective_idx(idx, n)
 			var top_col: Color = ramp_color if is_ramp else terrain_color
 			top_col.a = SURF_RAMP if is_ramp else SURF_TOP
 
@@ -3677,7 +3727,7 @@ func _add_cell_top_grid(
 	var h01 := corners.w
 	var idx: int = cell_z * max(2, cells_per_side) + cell_x
 	var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
-	var is_ramp: bool = ramp_dir != RAMP_NONE
+	var is_ramp: bool = _ramp_is_effective_idx(idx, max(2, cells_per_side))
 
 	var a := Vector3(x0, h00, z0)
 	var b := Vector3(x1, h10, z0)
