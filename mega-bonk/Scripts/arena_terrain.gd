@@ -58,6 +58,12 @@ class_name ArenaBlockyTerrain
 @export_range(1, 64, 1) var peak_max_cells: int = 4
 @export var auto_fix_global_access: bool = true
 @export_range(1, 64, 1) var global_fix_passes: int = 24
+@export var ramp_clearance_enabled: bool = true
+@export_range(1, 2, 1) var ramp_clearance_radius: int = 1
+@export var ramp_clearance_require_two_wide_exit: bool = true
+@export_range(0, 8, 1) var ramp_clearance_max_fixes_per_ramp: int = 2
+@export var ramp_clearance_lower_instead_of_remove: bool = true
+@export var ramp_clearance_remove_conflicting_ramps: bool = true
 
 # -----------------------------
 # Tunnels (separate mesh under the terrain shell)
@@ -1236,6 +1242,105 @@ func _try_place_any_from_candidates(cands: Array, n: int, levels: PackedInt32Arr
 const FIX_NONE := 0
 const FIX_PLACED := 1
 const FIX_LEVELS := 2
+
+func _cell_idx(x: int, z: int, n: int) -> int:
+	return z * n + x
+
+func _ramp_front_is_blocking(cell: Vector2i, n: int, high_lvl: int, allow_up: int, low_idx: int, levels: PackedInt32Array) -> bool:
+	if cell.x < 0 or cell.x >= n or cell.y < 0 or cell.y >= n:
+		return true
+	var idx: int = _cell_idx(cell.x, cell.y, n)
+	if idx == low_idx:
+		return false
+	if levels[idx] > high_lvl + allow_up:
+		return true
+	if ramp_clearance_remove_conflicting_ramps and _ramp_up_dir[idx] != RAMP_NONE and _ramp_up_dir[idx] != _ramp_up_dir[low_idx]:
+		return true
+	return false
+
+func _apply_ramp_clearance(n: int, want: int, levels: PackedInt32Array) -> int:
+	if not ramp_clearance_enabled:
+		return FIX_NONE
+	if ramp_clearance_radius != 1:
+		# current implementation is 3x3 around ramp top; keep setting for future expansion.
+		pass
+
+	var flags: int = FIX_NONE
+	var allow_up: int = maxi(0, walk_up_steps_without_ramp)
+	var max_fixes: int = maxi(0, ramp_clearance_max_fixes_per_ramp)
+	var changed: bool = true
+	var guard: int = 0
+
+	while changed and guard < 3:
+		guard += 1
+		changed = false
+		for low_idx in range(n * n):
+			var dir_up: int = _ramp_up_dir[low_idx]
+			if dir_up == RAMP_NONE:
+				continue
+			var low_x: int = low_idx % n
+			var low_z: int = int(float(low_idx) / float(n))
+			var high: Vector2i = _neighbor_of(low_x, low_z, dir_up)
+			if high.x < 0 or high.x >= n or high.y < 0 or high.y >= n:
+				continue
+			var high_idx: int = _cell_idx(high.x, high.y, n)
+			var high_lvl: int = levels[high_idx]
+			var dirs: Array[int] = _perp_dirs(dir_up)
+			var left: Vector2i = _neighbor_of(high.x, high.y, dirs[0])
+			var right: Vector2i = _neighbor_of(high.x, high.y, dirs[1])
+			var front: Array[Vector2i] = [left, high, right]
+			var fixes_used: int = 0
+
+			for ci in [0, 2]:
+				var c: Vector2i = front[ci]
+				if c.x < 0 or c.x >= n or c.y < 0 or c.y >= n:
+					continue
+				var idx: int = _cell_idx(c.x, c.y, n)
+				if levels[idx] > high_lvl + allow_up:
+					if ramp_clearance_lower_instead_of_remove and fixes_used < max_fixes:
+						levels[idx] = high_lvl + allow_up
+						flags |= FIX_LEVELS
+						fixes_used += 1
+						changed = true
+				if ramp_clearance_remove_conflicting_ramps and _ramp_up_dir[idx] != RAMP_NONE and _ramp_up_dir[idx] != dir_up and fixes_used < max_fixes:
+					_ramp_up_dir[idx] = RAMP_NONE
+					flags |= FIX_PLACED
+					fixes_used += 1
+					changed = true
+
+			var ok_l: bool = not _ramp_front_is_blocking(left, n, high_lvl, allow_up, low_idx, levels)
+			var ok_m: bool = true
+			var ok_r: bool = not _ramp_front_is_blocking(right, n, high_lvl, allow_up, low_idx, levels)
+			var two_wide_ok: bool = (ok_l and ok_m) or (ok_m and ok_r)
+			if ramp_clearance_require_two_wide_exit and not two_wide_ok:
+				for c in [left, right]:
+					if fixes_used >= max_fixes:
+						break
+					if c.x < 0 or c.x >= n or c.y < 0 or c.y >= n:
+						continue
+					var idx2: int = _cell_idx(c.x, c.y, n)
+					if levels[idx2] > high_lvl + allow_up and ramp_clearance_lower_instead_of_remove:
+						levels[idx2] = high_lvl + allow_up
+						flags |= FIX_LEVELS
+						fixes_used += 1
+						changed = true
+					elif ramp_clearance_remove_conflicting_ramps and _ramp_up_dir[idx2] != RAMP_NONE and _ramp_up_dir[idx2] != dir_up:
+						_ramp_up_dir[idx2] = RAMP_NONE
+						flags |= FIX_PLACED
+						fixes_used += 1
+						changed = true
+
+				ok_l = not _ramp_front_is_blocking(left, n, high_lvl, allow_up, low_idx, levels)
+				ok_r = not _ramp_front_is_blocking(right, n, high_lvl, allow_up, low_idx, levels)
+				two_wide_ok = (ok_l and ok_m) or (ok_m and ok_r)
+				if not two_wide_ok:
+					_ramp_up_dir[low_idx] = RAMP_NONE
+					flags |= FIX_PLACED
+					changed = true
+
+	if flags != FIX_NONE:
+		_prune_ramps_strict()
+	return flags
 
 func _pick_root_idx_from_levels(n: int, levels: PackedInt32Array) -> int:
 	var cx0: int = n >> 1
@@ -2501,6 +2606,20 @@ func _generate_ramps() -> void:
 		return
 	elif (fix_flags & FIX_PLACED) != 0:
 		_prune_ramps_strict()
+
+	var clearance_flags: int = _apply_ramp_clearance(n, want_levels, levels)
+	if (clearance_flags & FIX_LEVELS) != 0:
+		_apply_levels_to_heights(n, levels)
+	if clearance_flags != FIX_NONE:
+		var post_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
+		if (post_flags & FIX_LEVELS) != 0:
+			_apply_levels_to_heights(n, levels)
+			_limit_neighbor_cliffs()
+			_fill_pits()
+			_ramps_need_regen = true
+			return
+		elif (post_flags & FIX_PLACED) != 0:
+			_prune_ramps_strict()
 
 	if auto_lower_unreachable_peaks:
 		var lowered_any: bool = false
