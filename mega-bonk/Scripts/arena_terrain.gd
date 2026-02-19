@@ -1488,6 +1488,22 @@ func _local_min_jumps(center_x: int, center_z: int, start_i: int, goals: PackedI
 
 	return inf
 
+func _append_idx_if_in_bounds(out: PackedInt32Array, cell: Vector2i, n: int) -> void:
+	if _in_bounds(cell.x, cell.y, n):
+		out.append(_idx2(cell.x, cell.y, n))
+
+func _min_jumps_any_start(center_x: int, center_z: int, starts: PackedInt32Array, goals: PackedInt32Array, radius: int, want: int, levels: PackedInt32Array, n: int) -> int:
+	var best: int = 1_000_000_000
+	for s in starts:
+		var si: int = int(s)
+		if si < 0 or si >= n * n:
+			continue
+		var mj: int = _local_min_jumps(center_x, center_z, si, goals, radius, want, levels, n)
+		best = mini(best, mj)
+		if best <= 0:
+			return 0
+	return best
+
 func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> int:
 	if not ramp_jump_detector_enabled:
 		return FIX_NONE
@@ -1502,35 +1518,55 @@ func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> i
 			continue
 		var lx: int = low_idx % n
 		var lz: int = int(float(low_idx) / float(n))
+		var low: Vector2i = Vector2i(lx, lz)
 		var high: Vector2i = _neighbor_of(lx, lz, dir_up)
 		if not _in_bounds(high.x, high.y, n):
 			continue
 
 		var high_idx: int = _idx2(high.x, high.y, n)
 		var high_lvl: int = levels[high_idx]
+		var dir_down: int = _opposite_dir(dir_up)
 		var off_f: Vector2i = _dir_off(dir_up)
-		var fwd: Vector2i = high + off_f
+		var off_b: Vector2i = _dir_off(dir_down)
 		var perp: Array[int] = _perp_dirs(dir_up)
-		var left: Vector2i = high + _dir_off(perp[0])
-		var right: Vector2i = high + _dir_off(perp[1])
-		var goals: PackedInt32Array = PackedInt32Array()
-		goals.append(high_idx)
-		if _in_bounds(fwd.x, fwd.y, n):
-			goals.append(_idx2(fwd.x, fwd.y, n))
-		if _in_bounds(left.x, left.y, n):
-			goals.append(_idx2(left.x, left.y, n))
-		if _in_bounds(right.x, right.y, n):
-			goals.append(_idx2(right.x, right.y, n))
+		var off_l: Vector2i = _dir_off(perp[0])
+		var off_r: Vector2i = _dir_off(perp[1])
 
-		var min_jumps: int = _local_min_jumps(high.x, high.y, low_idx, goals, ramp_jump_detector_radius, want, levels, n)
+		# Starts include low plus approach-side neighborhood.
+		var approach: Vector2i = low + off_b
+		var approach_l: Vector2i = approach + off_l
+		var approach_r: Vector2i = approach + off_r
+		var starts: PackedInt32Array = PackedInt32Array()
+		_append_idx_if_in_bounds(starts, low, n)
+		_append_idx_if_in_bounds(starts, approach, n)
+		_append_idx_if_in_bounds(starts, approach_l, n)
+		_append_idx_if_in_bounds(starts, approach_r, n)
+
+		# Goals include top landing, 1-2 forward runout, and side escapes.
+		var fwd: Vector2i = high + off_f
+		var fwd2: Vector2i = fwd + off_f
+		var left: Vector2i = high + off_l
+		var right: Vector2i = high + off_r
+		var fwd_l: Vector2i = fwd + off_l
+		var fwd_r: Vector2i = fwd + off_r
+		var goals: PackedInt32Array = PackedInt32Array()
+		_append_idx_if_in_bounds(goals, high, n)
+		_append_idx_if_in_bounds(goals, fwd, n)
+		_append_idx_if_in_bounds(goals, fwd2, n)
+		_append_idx_if_in_bounds(goals, left, n)
+		_append_idx_if_in_bounds(goals, right, n)
+		_append_idx_if_in_bounds(goals, fwd_l, n)
+		_append_idx_if_in_bounds(goals, fwd_r, n)
+
+		var min_jumps: int = _min_jumps_any_start(high.x, high.y, starts, goals, ramp_jump_detector_radius, want, levels, n)
 		if min_jumps <= 0:
 			continue
 
 		if ramp_jump_detector_debug_print:
-			print("Ramp jump detector: low=", Vector2i(lx, lz), " dir=", dir_up, " min_jumps=", min_jumps)
+			print("Ramp jump detector: low=", low, " dir=", dir_up, " min_jumps=", min_jumps)
 
 		var fixes_used: int = 0
-		var fix_cells: Array[Vector2i] = [left, right, fwd, fwd + _dir_off(perp[0]), fwd + _dir_off(perp[1])]
+		var fix_cells: Array[Vector2i] = [left, right, fwd, fwd2, fwd_l, fwd_r, approach_l, approach_r]
 		for c in fix_cells:
 			if fixes_used >= max_fixes:
 				break
@@ -1542,6 +1578,7 @@ func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> i
 				flags |= FIX_LEVELS
 				fixes_used += 1
 			elif ramp_clearance_remove_conflicting_ramps and _ramp_up_dir[ci] != RAMP_NONE and _ramp_up_dir[ci] != dir_up:
+				# Remove nearby conflicting ramps (notably perpendicular pinch cases).
 				_ramp_up_dir[ci] = RAMP_NONE
 				flags |= FIX_PLACED
 				fixes_used += 1
@@ -1550,14 +1587,18 @@ func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> i
 			for turn_dir in perp:
 				if fixes_used >= max_fixes:
 					break
-				var diag: Vector2i = high + off_f + _dir_off(turn_dir)
-				if not _in_bounds(diag.x, diag.y, n):
-					continue
-				var di: int = _idx2(diag.x, diag.y, n)
-				if levels[di] > high_lvl + allow_up:
-					levels[di] = high_lvl + allow_up
-					flags |= FIX_LEVELS
-					fixes_used += 1
+				var diag_hi: Vector2i = high + off_f + _dir_off(turn_dir)
+				var diag_lo: Vector2i = low + off_b + _dir_off(turn_dir)
+				for diag in [diag_hi, diag_lo]:
+					if fixes_used >= max_fixes:
+						break
+					if not _in_bounds(diag.x, diag.y, n):
+						continue
+					var di: int = _idx2(diag.x, diag.y, n)
+					if levels[di] > high_lvl + allow_up:
+						levels[di] = high_lvl + allow_up
+						flags |= FIX_LEVELS
+						fixes_used += 1
 
 		if fixes_used < max_fixes and _in_bounds(fwd.x, fwd.y, n):
 			var fwd_idx: int = _idx2(fwd.x, fwd.y, n)
@@ -1567,7 +1608,7 @@ func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> i
 					flags |= FIX_PLACED
 					fixes_used += 1
 
-		var min_jumps_after: int = _local_min_jumps(high.x, high.y, low_idx, goals, ramp_jump_detector_radius, want, levels, n)
+		var min_jumps_after: int = _min_jumps_any_start(high.x, high.y, starts, goals, ramp_jump_detector_radius, want, levels, n)
 		if min_jumps_after > 0:
 			_ramp_up_dir[low_idx] = RAMP_NONE
 			flags |= FIX_PLACED
