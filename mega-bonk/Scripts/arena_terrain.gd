@@ -109,6 +109,17 @@ class_name ArenaBlockyTerrain
 @export var grid_debug_force_flat_material: bool = false
 @export var grid_wire_flat_material_toggle_key: Key = KEY_F2
 @export var sun_height: float = 200.0
+@export var debug_menu_enabled: bool = true
+@export var debug_menu_toggle_key: Key = KEY_F1
+@export var debug_surface_labels_enabled: bool = false
+@export var debug_cell_labels_enabled: bool = false
+@export var debug_surface_labels_toggle_key: Key = KEY_F3
+@export var debug_cell_labels_toggle_key: Key = KEY_F4
+@export_range(8, 128, 1) var debug_surface_labels_font_size: int = 26
+@export_range(0.0001, 0.05, 0.0001) var debug_surface_labels_pixel_size: float = 0.0025
+@export_range(0.0, 2.0, 0.01) var debug_surface_labels_normal_offset: float = 0.18
+@export_range(1.0, 10000.0, 1.0) var debug_surface_labels_max_distance: float = 2500.0
+@export_range(-10.0, 10.0, 0.01) var debug_cell_labels_y_offset: float = 0.35
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -186,6 +197,11 @@ var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
 var _grid_debug_flat_enabled: bool = false
 var _grid_debug_saved_overrides: Dictionary = {} # int instance_id -> Material
+var _debug_labels_root: Node3D
+var _debug_ui_layer: CanvasLayer
+var _debug_menu_panel: PanelContainer
+var _debug_surface_checkbox: CheckBox
+var _debug_cell_checkbox: CheckBox
 
 func _quantize_y_to_grid(y: float) -> float:
 	if height_step <= 0.0:
@@ -533,6 +549,195 @@ func grid_cell_world_aabb(cell: Vector2i, y_min: float = NAN, y_max: float = NAN
 		max_v.z = maxf(max_v.z, w.z)
 	return AABB(min_v, max_v - min_v)
 
+
+func _ensure_debug_labels_root() -> void:
+	if _debug_labels_root != null and is_instance_valid(_debug_labels_root):
+		return
+	var parent: Node = null
+	if mesh_instance != null and is_instance_valid(mesh_instance):
+		parent = mesh_instance
+	else:
+		parent = self
+	_debug_labels_root = Node3D.new()
+	_debug_labels_root.name = "DebugSurfaceLabels"
+	parent.add_child(_debug_labels_root)
+
+func _clear_debug_labels() -> void:
+	if _debug_labels_root == null or not is_instance_valid(_debug_labels_root):
+		return
+	for c in _debug_labels_root.get_children():
+		c.queue_free()
+
+func _surface_kind_short(kind: int) -> String:
+	match kind:
+		SurfaceKind.FLOOR:
+			return "F"
+		SurfaceKind.RAMP:
+			return "R"
+		SurfaceKind.WALL:
+			return "W"
+		SurfaceKind.TUNNEL_FLOOR:
+			return "TF"
+		SurfaceKind.TUNNEL_WALL:
+			return "TW"
+		SurfaceKind.TUNNEL_CEIL:
+			return "TC"
+		_:
+			return "S"
+
+func _surface_side_short(side: int) -> String:
+	match side:
+		SurfaceSide.N:
+			return "N"
+		SurfaceSide.S:
+			return "S"
+		SurfaceSide.E:
+			return "E"
+		SurfaceSide.W:
+			return "W"
+		_:
+			return "-"
+
+func _surface_label_text(srec: Dictionary) -> String:
+	var kind: int = int(srec.get("kind", -1))
+	var sid: int = int(srec.get("id", -1))
+	var cell_a: Vector2i = srec.get("cell_a", Vector2i(-1, -1))
+	var base := "%s#%d C%04d" % [_surface_kind_short(kind), sid, grid_cell_id(cell_a.x, cell_a.y, _grid_n)]
+	var extra: Dictionary = srec.get("extra", {})
+	if kind == SurfaceKind.RAMP:
+		base += " L%d D%d" % [int(extra.get("floor_level", 0)), int(extra.get("ramp_dir", -1))]
+	elif kind == SurfaceKind.WALL or kind == SurfaceKind.TUNNEL_WALL:
+		var s0 := _surface_side_short(int(srec.get("side_a", SurfaceSide.NONE)))
+		var y0 := int(extra.get("y0_level", 0))
+		var y1 := int(extra.get("y1_level", 0))
+		var cell_b: Vector2i = srec.get("cell_b", Vector2i(-1, -1))
+		if _grid_is_valid_cell(cell_b):
+			var s1 := _surface_side_short(int(srec.get("side_b", SurfaceSide.NONE)))
+			base += "%s|C%04d%s L%d-%d" % [s0, grid_cell_id(cell_b.x, cell_b.y, _grid_n), s1, y0, y1]
+		else:
+			base += "%s L%d-%d" % [s0, y0, y1]
+	elif extra.has("floor_level"):
+		base += " L%d" % int(extra.get("floor_level", 0))
+	elif extra.has("level"):
+		base += " L%d" % int(extra.get("level", 0))
+	return base
+
+func _surface_label_pos_local(srec: Dictionary) -> Vector3:
+	var verts: PackedVector3Array = srec.get("verts_local", PackedVector3Array())
+	if verts.is_empty():
+		return Vector3.ZERO
+	var sum := Vector3.ZERO
+	for v in verts:
+		sum += v
+	var center := sum / float(verts.size())
+	var nrm: Vector3 = srec.get("normal_local", Vector3.UP)
+	if nrm.length_squared() <= 1e-8:
+		nrm = Vector3.UP
+	return center + nrm.normalized() * debug_surface_labels_normal_offset
+
+func _add_debug_label(text: String, local_pos: Vector3, color: Color) -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam != null and debug_surface_labels_max_distance > 0.0:
+		var world_pos: Vector3 = _grid_local_to_world * local_pos
+		if world_pos.distance_to(cam.global_position) > debug_surface_labels_max_distance:
+			return
+	var l := Label3D.new()
+	l.text = text
+	l.font_size = debug_surface_labels_font_size
+	l.pixel_size = debug_surface_labels_pixel_size
+	l.modulate = color
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.position = local_pos
+	_debug_labels_root.add_child(l)
+
+func _rebuild_debug_labels() -> void:
+	_ensure_debug_labels_root()
+	_clear_debug_labels()
+	if not debug_surface_labels_enabled and not debug_cell_labels_enabled:
+		return
+
+	if debug_cell_labels_enabled and _grid_n > 0:
+		for z in range(_grid_n):
+			for x in range(_grid_n):
+				var txt := "C%04d" % grid_cell_id(x, z, _grid_n)
+				var pos := Vector3(
+					_ox + (float(x) + 0.5) * _cell_size,
+					grid_y0 + debug_cell_labels_y_offset,
+					_oz + (float(z) + 0.5) * _cell_size
+				)
+				_add_debug_label(txt, pos, Color(0.55, 0.95, 0.55, 1.0))
+
+	if debug_surface_labels_enabled:
+		for srec in _surfaces:
+			_add_debug_label(_surface_label_text(srec), _surface_label_pos_local(srec), Color(1.0, 0.95, 0.35, 1.0))
+
+func _on_debug_surface_labels_toggled(toggled: bool) -> void:
+	debug_surface_labels_enabled = toggled
+	_rebuild_debug_labels()
+
+func _on_debug_cell_labels_toggled(toggled: bool) -> void:
+	debug_cell_labels_enabled = toggled
+	_rebuild_debug_labels()
+
+func _ensure_debug_menu() -> void:
+	if not debug_menu_enabled:
+		return
+	if _debug_ui_layer != null and is_instance_valid(_debug_ui_layer):
+		return
+	_debug_ui_layer = CanvasLayer.new()
+	_debug_ui_layer.name = "DebugMenu"
+	add_child(_debug_ui_layer)
+
+	_debug_menu_panel = PanelContainer.new()
+	_debug_menu_panel.name = "Panel"
+	_debug_menu_panel.visible = false
+	_debug_menu_panel.offset_left = 14
+	_debug_menu_panel.offset_top = 14
+	_debug_menu_panel.offset_right = 280
+	_debug_menu_panel.offset_bottom = 180
+	_debug_ui_layer.add_child(_debug_menu_panel)
+
+	var vb := VBoxContainer.new()
+	_debug_menu_panel.add_child(vb)
+
+	var title := Label.new()
+	title.text = "Arena Debug"
+	vb.add_child(title)
+
+	var hint := Label.new()
+	hint.text = "F1 menu | 1 wire | F2 flat | F3 surf | F4 cells | R regen"
+	vb.add_child(hint)
+
+	_debug_surface_checkbox = CheckBox.new()
+	_debug_surface_checkbox.text = "Surface labels (F3)"
+	_debug_surface_checkbox.button_pressed = debug_surface_labels_enabled
+	_debug_surface_checkbox.toggled.connect(_on_debug_surface_labels_toggled)
+	vb.add_child(_debug_surface_checkbox)
+
+	_debug_cell_checkbox = CheckBox.new()
+	_debug_cell_checkbox.text = "Cell labels (F4)"
+	_debug_cell_checkbox.button_pressed = debug_cell_labels_enabled
+	_debug_cell_checkbox.toggled.connect(_on_debug_cell_labels_toggled)
+	vb.add_child(_debug_cell_checkbox)
+
+func _toggle_debug_menu() -> void:
+	if not debug_menu_enabled:
+		return
+	_ensure_debug_menu()
+	if _debug_menu_panel != null and is_instance_valid(_debug_menu_panel):
+		_debug_menu_panel.visible = not _debug_menu_panel.visible
+
+func _toggle_surface_labels() -> void:
+	debug_surface_labels_enabled = not debug_surface_labels_enabled
+	if _debug_surface_checkbox != null and is_instance_valid(_debug_surface_checkbox):
+		_debug_surface_checkbox.button_pressed = debug_surface_labels_enabled
+	_rebuild_debug_labels()
+
+func _toggle_cell_labels() -> void:
+	debug_cell_labels_enabled = not debug_cell_labels_enabled
+	if _debug_cell_checkbox != null and is_instance_valid(_debug_cell_checkbox):
+		_debug_cell_checkbox.button_pressed = debug_cell_labels_enabled
+	_rebuild_debug_labels()
 
 # -----------------------------
 # Grid wireframe visualization
@@ -1350,6 +1555,8 @@ func _ready() -> void:
 	_grid_refresh_space_xforms()
 	_ensure_grid_wire_node()
 	_grid_wire_set_visible(false)
+	_ensure_debug_menu()
+	_rebuild_debug_labels()
 
 	if randomize_seed_on_start:
 		var rng := RandomNumberGenerator.new()
@@ -1367,9 +1574,21 @@ func _unhandled_input(e: InputEvent) -> void:
 			_toggle_grid_wireframe()
 			return
 
+		if e.keycode == debug_menu_toggle_key:
+			_toggle_debug_menu()
+			return
+
 		if e.keycode == grid_wire_flat_material_toggle_key:
 			grid_debug_force_flat_material = not grid_debug_force_flat_material
 			_apply_grid_debug_flat_material(grid_debug_force_flat_material)
+			return
+
+		if e.keycode == debug_surface_labels_toggle_key:
+			_toggle_surface_labels()
+			return
+
+		if e.keycode == debug_cell_labels_toggle_key:
+			_toggle_cell_labels()
 			return
 
 		if e.keycode == KEY_R:
@@ -1454,6 +1673,7 @@ func generate() -> void:
 	print("Ramp slots:", _count_ramps())
 	_print_grid_contract()
 	_sync_sun()
+	_rebuild_debug_labels()
 
 # -----------------------------
 # Height generation (14x14)
