@@ -1257,7 +1257,7 @@ func _ramp_front_is_blocking(cell: Vector2i, n: int, high_lvl: int, allow_up: in
 		return true
 	return false
 
-func _apply_ramp_clearance(n: int, want: int, levels: PackedInt32Array) -> int:
+func _apply_ramp_clearance(n: int, _want: int, levels: PackedInt32Array) -> int:
 	if not ramp_clearance_enabled:
 		return FIX_NONE
 	if ramp_clearance_radius != 1:
