@@ -202,6 +202,8 @@ var _grid_world_to_local: Transform3D = Transform3D.IDENTITY
 var _grid_wire_visible: bool = false
 var _grid_wire_instance: MeshInstance3D
 var _grid_wire_material: StandardMaterial3D
+var _debug_tag_material: ShaderMaterial
+var _debug_tag_saved_overrides: Dictionary = {} # int instance_id -> Material
 var _grid_debug_flat_enabled: bool = false
 var _grid_debug_saved_overrides: Dictionary = {} # int instance_id -> Material
 var _debug_labels_root: Node3D
@@ -753,7 +755,41 @@ func _set_debug_tag_colors_enabled(v: bool) -> void:
 func _set_debug_tag_color_any(_v: Variant) -> void:
 	_apply_debug_tag_colors()
 
+func _ensure_debug_tag_material() -> ShaderMaterial:
+	if _debug_tag_material != null and is_instance_valid(_debug_tag_material):
+		return _debug_tag_material
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/debug_tag_colors.gdshader")
+	_debug_tag_material = sm
+	return _debug_tag_material
+
+func _set_debug_tag_override(mi: MeshInstance3D, enabled: bool, mat: ShaderMaterial) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+	var id := mi.get_instance_id()
+	if enabled:
+		if not _debug_tag_saved_overrides.has(id):
+			_debug_tag_saved_overrides[id] = mi.material_override
+		mi.material_override = mat
+		return
+	if _debug_tag_saved_overrides.has(id):
+		mi.material_override = _debug_tag_saved_overrides[id]
+		_debug_tag_saved_overrides.erase(id)
+
 func _apply_debug_tag_colors() -> void:
+	var debug_mat: ShaderMaterial = null
+	if debug_tag_colors_enabled:
+		debug_mat = _ensure_debug_tag_material()
+		if debug_mat != null:
+			debug_mat.set_shader_parameter("debug_floor_color", debug_floor_color)
+			debug_mat.set_shader_parameter("debug_wall_color", debug_wall_color)
+			debug_mat.set_shader_parameter("debug_ramp_color", debug_ramp_color)
+			debug_mat.set_shader_parameter("debug_box_color", debug_box_color)
+			debug_mat.set_shader_parameter("debug_tag_emission", debug_tag_emission)
+
+	for mi in _grid_debug_collect_mesh_instances():
+		_set_debug_tag_override(mi, debug_tag_colors_enabled, debug_mat)
+
 	for sm in _grid_wire_collect_shader_materials():
 		if sm.get_shader_parameter("debug_show_tag_colors") != null:
 			sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
