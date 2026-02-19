@@ -63,6 +63,11 @@ extends Node3D
 @export_range(0, 8, 1) var ramp_clearance_max_fixes_per_ramp: int = 2
 @export var ramp_clearance_lower_instead_of_remove: bool = true
 @export var ramp_clearance_remove_conflicting_ramps: bool = true
+@export var ramp_jump_detector_enabled: bool = true
+@export_range(1, 6, 1) var ramp_jump_detector_radius: int = 3
+@export_range(0, 8, 1) var ramp_jump_detector_max_fixes_per_ramp: int = 2
+@export var ramp_jump_detector_check_inside_corners: bool = true
+@export var ramp_jump_detector_debug_print: bool = false
 
 # -----------------------------
 # Tunnels (separate mesh under the terrain shell)
@@ -1336,6 +1341,205 @@ func _apply_ramp_clearance(n: int, _want: int, levels: PackedInt32Array) -> int:
 					_ramp_up_dir[low_idx] = RAMP_NONE
 					flags |= FIX_PLACED
 					changed = true
+
+	if flags != FIX_NONE:
+		_prune_ramps_strict()
+	return flags
+
+func _dir_off(dir: int) -> Vector2i:
+	match dir:
+		RAMP_EAST:
+			return Vector2i(1, 0)
+		RAMP_WEST:
+			return Vector2i(-1, 0)
+		RAMP_SOUTH:
+			return Vector2i(0, 1)
+		RAMP_NORTH:
+			return Vector2i(0, -1)
+		_:
+			return Vector2i.ZERO
+
+func _is_perp_dir(a: int, b: int) -> bool:
+	var ax: bool = a == RAMP_EAST or a == RAMP_WEST
+	var bx: bool = b == RAMP_EAST or b == RAMP_WEST
+	return ax != bx
+
+func _inside_corner_blocked(x: int, z: int, dir_in: int, dir_out: int, levels: PackedInt32Array, n: int) -> bool:
+	if dir_in == dir_out:
+		return false
+	if not _is_perp_dir(dir_in, dir_out):
+		return false
+	var a: Vector2i = _dir_off(dir_in)
+	var b: Vector2i = _dir_off(dir_out)
+	var cx: int = x + a.x + b.x
+	var cz: int = z + a.y + b.y
+	if not _in_bounds(cx, cz, n):
+		return true
+	var nx: int = x + b.x
+	var nz: int = z + b.y
+	if not _in_bounds(nx, nz, n):
+		return true
+	var cur_i: int = _idx2(x, z, n)
+	var nxt_i: int = _idx2(nx, nz, n)
+	var c_i: int = _idx2(cx, cz, n)
+	var floor_lvl: int = mini(levels[cur_i], levels[nxt_i])
+	return levels[c_i] > floor_lvl
+
+func _edge_is_jump(ax: int, az: int, dir: int, want: int, levels: PackedInt32Array, n: int) -> bool:
+	var a_i: int = _idx2(ax, az, n)
+	var off: Vector2i = _dir_off(dir)
+	var bx: int = ax + off.x
+	var bz: int = az + off.y
+	if not _in_bounds(bx, bz, n):
+		return true
+	var b_i: int = _idx2(bx, bz, n)
+	if levels[a_i] == levels[b_i]:
+		return false
+	if abs(levels[b_i] - levels[a_i]) <= want and _is_ramp_bridge(a_i, b_i, dir, want, levels):
+		return false
+	return true
+
+func _local_min_jumps(center_x: int, center_z: int, start_i: int, goals: PackedInt32Array, radius: int, want: int, levels: PackedInt32Array, n: int) -> int:
+	var inf: int = 1_000_000_000
+	var dist: PackedInt32Array = PackedInt32Array()
+	dist.resize(n * n * 4)
+	for i in range(dist.size()):
+		dist[i] = inf
+
+	var goal_set: Dictionary = {}
+	for gi in goals:
+		goal_set[int(gi)] = true
+
+	var dq: Array[int] = []
+	for d in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+		var s: int = start_i * 4 + d
+		dist[s] = 0
+		dq.push_back(s)
+
+	while not dq.is_empty():
+		var s: int = int(dq.pop_front())
+		var cell_i: int = int(float(s) / 4.0)
+		var dir_in: int = s % 4
+		var x: int = cell_i % n
+		var z: int = int(float(cell_i) / float(n))
+
+		if abs(x - center_x) > radius or abs(z - center_z) > radius:
+			continue
+
+		if goal_set.has(cell_i):
+			return dist[s]
+
+		for dir_out in [RAMP_EAST, RAMP_WEST, RAMP_SOUTH, RAMP_NORTH]:
+			var off: Vector2i = _dir_off(dir_out)
+			var nx: int = x + off.x
+			var nz: int = z + off.y
+			if not _in_bounds(nx, nz, n):
+				continue
+			if abs(nx - center_x) > radius or abs(nz - center_z) > radius:
+				continue
+			var ni: int = _idx2(nx, nz, n)
+			if not _can_move_edge(cell_i, ni, dir_out, want, levels):
+				continue
+
+			var jump: bool = _edge_is_jump(x, z, dir_out, want, levels, n)
+			if not jump and ramp_jump_detector_check_inside_corners:
+				jump = _inside_corner_blocked(x, z, dir_in, dir_out, levels, n)
+
+			var add: int = 1 if jump else 0
+			var ns: int = ni * 4 + dir_out
+			var nd: int = dist[s] + add
+			if nd < dist[ns]:
+				dist[ns] = nd
+				if add == 0:
+					dq.push_front(ns)
+				else:
+					dq.push_back(ns)
+
+	return inf
+
+func _apply_ramp_jump_detector(n: int, want: int, levels: PackedInt32Array) -> int:
+	if not ramp_jump_detector_enabled:
+		return FIX_NONE
+
+	var flags: int = FIX_NONE
+	var allow_up: int = maxi(0, walk_up_steps_without_ramp)
+	var max_fixes: int = maxi(0, ramp_jump_detector_max_fixes_per_ramp)
+
+	for low_idx in range(n * n):
+		var dir_up: int = _ramp_up_dir[low_idx]
+		if dir_up == RAMP_NONE:
+			continue
+		var lx: int = low_idx % n
+		var lz: int = int(float(low_idx) / float(n))
+		var high: Vector2i = _neighbor_of(lx, lz, dir_up)
+		if not _in_bounds(high.x, high.y, n):
+			continue
+
+		var high_idx: int = _idx2(high.x, high.y, n)
+		var high_lvl: int = levels[high_idx]
+		var off_f: Vector2i = _dir_off(dir_up)
+		var fwd: Vector2i = high + off_f
+		var perp: Array[int] = _perp_dirs(dir_up)
+		var left: Vector2i = high + _dir_off(perp[0])
+		var right: Vector2i = high + _dir_off(perp[1])
+		var goals: PackedInt32Array = PackedInt32Array()
+		goals.append(high_idx)
+		if _in_bounds(fwd.x, fwd.y, n):
+			goals.append(_idx2(fwd.x, fwd.y, n))
+		if _in_bounds(left.x, left.y, n):
+			goals.append(_idx2(left.x, left.y, n))
+		if _in_bounds(right.x, right.y, n):
+			goals.append(_idx2(right.x, right.y, n))
+
+		var min_jumps: int = _local_min_jumps(high.x, high.y, low_idx, goals, ramp_jump_detector_radius, want, levels, n)
+		if min_jumps <= 0:
+			continue
+
+		if ramp_jump_detector_debug_print:
+			print("Ramp jump detector: low=", Vector2i(lx, lz), " dir=", dir_up, " min_jumps=", min_jumps)
+
+		var fixes_used: int = 0
+		var fix_cells: Array[Vector2i] = [left, right, fwd, fwd + _dir_off(perp[0]), fwd + _dir_off(perp[1])]
+		for c in fix_cells:
+			if fixes_used >= max_fixes:
+				break
+			if not _in_bounds(c.x, c.y, n):
+				continue
+			var ci: int = _idx2(c.x, c.y, n)
+			if levels[ci] > high_lvl + allow_up:
+				levels[ci] = high_lvl + allow_up
+				flags |= FIX_LEVELS
+				fixes_used += 1
+			elif ramp_clearance_remove_conflicting_ramps and _ramp_up_dir[ci] != RAMP_NONE and _ramp_up_dir[ci] != dir_up:
+				_ramp_up_dir[ci] = RAMP_NONE
+				flags |= FIX_PLACED
+				fixes_used += 1
+
+		if ramp_jump_detector_check_inside_corners:
+			for turn_dir in perp:
+				if fixes_used >= max_fixes:
+					break
+				var diag: Vector2i = high + off_f + _dir_off(turn_dir)
+				if not _in_bounds(diag.x, diag.y, n):
+					continue
+				var di: int = _idx2(diag.x, diag.y, n)
+				if levels[di] > high_lvl + allow_up:
+					levels[di] = high_lvl + allow_up
+					flags |= FIX_LEVELS
+					fixes_used += 1
+
+		if fixes_used < max_fixes and _in_bounds(fwd.x, fwd.y, n):
+			var fwd_idx: int = _idx2(fwd.x, fwd.y, n)
+			var rise: int = levels[fwd_idx] - levels[high_idx]
+			if rise >= 1 and rise <= want and _ramp_up_dir[high_idx] == RAMP_NONE:
+				if _try_place_ramp_candidate(high_idx, dir_up, n, levels, want):
+					flags |= FIX_PLACED
+					fixes_used += 1
+
+		var min_jumps_after: int = _local_min_jumps(high.x, high.y, low_idx, goals, ramp_jump_detector_radius, want, levels, n)
+		if min_jumps_after > 0:
+			_ramp_up_dir[low_idx] = RAMP_NONE
+			flags |= FIX_PLACED
 
 	if flags != FIX_NONE:
 		_prune_ramps_strict()
@@ -2618,6 +2822,20 @@ func _generate_ramps() -> void:
 			_ramps_need_regen = true
 			return
 		elif (post_flags & FIX_PLACED) != 0:
+			_prune_ramps_strict()
+
+	var jump_flags: int = _apply_ramp_jump_detector(n, want_levels, levels)
+	if (jump_flags & FIX_LEVELS) != 0:
+		_apply_levels_to_heights(n, levels)
+	if jump_flags != FIX_NONE:
+		var post_jump_flags: int = _ensure_global_accessibility(n, want_levels, levels, rng)
+		if (post_jump_flags & FIX_LEVELS) != 0:
+			_apply_levels_to_heights(n, levels)
+			_limit_neighbor_cliffs()
+			_fill_pits()
+			_ramps_need_regen = true
+			return
+		elif (post_jump_flags & FIX_PLACED) != 0:
 			_prune_ramps_strict()
 
 	if auto_lower_unreachable_peaks:
