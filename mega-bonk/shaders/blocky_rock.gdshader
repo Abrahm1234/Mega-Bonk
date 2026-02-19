@@ -37,6 +37,13 @@ uniform float grid_y_max = 100000.0;
 
 uniform bool debug_disable_side_disp = false;
 uniform bool debug_show_vertex_color = false;
+uniform bool debug_show_tag_colors = false;
+
+uniform vec4 debug_floor_color : source_color = vec4(0.10, 1.00, 0.10, 1.0);
+uniform vec4 debug_wall_color  : source_color = vec4(0.20, 0.55, 1.00, 1.0);
+uniform vec4 debug_ramp_color  : source_color = vec4(1.00, 0.20, 0.20, 1.0);
+uniform vec4 debug_box_color   : source_color = vec4(0.25, 0.25, 0.25, 1.0);
+uniform float debug_tag_emission = 0.0;
 
 const float TAG_TOP  = 0.00;
 const float TAG_WALL = 0.55;
@@ -189,22 +196,35 @@ void vertex() {
 }
 
 void fragment() {
+	float is_top  = decode_is(v_tag, TAG_TOP);
+	float is_wall = decode_is(v_tag, TAG_WALL);
+	float is_ramp = decode_is(v_tag, TAG_RAMP);
+	float is_box  = decode_is(v_tag, TAG_BOX);
+
 	if (debug_show_vertex_color) {
 		ALBEDO = COLOR.rgb;
+		EMISSION = vec3(0.0);
+		METALLIC = 0.0;
+		ROUGHNESS = 1.0;
+	} else if (debug_show_tag_colors) {
+		vec3 tag_col =
+			debug_floor_color.rgb * is_top +
+			debug_wall_color.rgb  * is_wall +
+			debug_ramp_color.rgb  * is_ramp;
+		tag_col = mix(tag_col, debug_box_color.rgb, is_box);
+
+		ALBEDO = tag_col;
+		EMISSION = tag_col * debug_tag_emission;
 		METALLIC = 0.0;
 		ROUGHNESS = 1.0;
 	} else {
-		float is_top  = decode_is(v_tag, TAG_TOP);
-		float is_wall = decode_is(v_tag, TAG_WALL);
-		float is_ramp = decode_is(v_tag, TAG_RAMP);
-		float is_box  = decode_is(v_tag, TAG_BOX);
-
 		vec3 a_top  = texture(albedo_top,  UV).rgb;
 		vec3 a_wall = texture(albedo_wall, UV).rgb;
 		vec3 a_ramp = texture(albedo_ramp, UV).rgb;
 
 		vec3 albedo = a_top * is_top + a_wall * is_wall + a_ramp * is_ramp;
 		ALBEDO = mix(albedo, vec3(0.08), is_box);
+		EMISSION = vec3(0.0);
 
 		vec3 P = (VIEW_MATRIX * vec4(v_world_pos, 1.0)).xyz;
 		vec3 dpx = dFdx(P);

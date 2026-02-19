@@ -120,6 +120,13 @@ class_name ArenaBlockyTerrain
 @export_range(0.0, 2.0, 0.01) var debug_surface_labels_normal_offset: float = 0.18
 @export_range(1.0, 10000.0, 1.0) var debug_surface_labels_max_distance: float = 2500.0
 @export_range(-10.0, 10.0, 0.01) var debug_cell_labels_y_offset: float = 0.35
+@export var debug_tag_colors_enabled: bool = false : set = _set_debug_tag_colors_enabled
+@export var debug_floor_color: Color = Color(0.10, 1.00, 0.10, 1.0) : set = _set_debug_tag_color_any
+@export var debug_wall_color: Color = Color(0.20, 0.55, 1.00, 1.0) : set = _set_debug_tag_color_any
+@export var debug_ramp_color: Color = Color(1.00, 0.20, 0.20, 1.0) : set = _set_debug_tag_color_any
+@export var debug_box_color: Color = Color(0.25, 0.25, 0.25, 1.0) : set = _set_debug_tag_color_any
+@export_range(0.0, 5.0, 0.1) var debug_tag_emission: float = 0.0 : set = _set_debug_tag_color_any
+@export var debug_tag_color_toggle_key: Key = KEY_F5
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -739,6 +746,28 @@ func _toggle_cell_labels() -> void:
 		_debug_cell_checkbox.button_pressed = debug_cell_labels_enabled
 	_rebuild_debug_labels()
 
+func _set_debug_tag_colors_enabled(v: bool) -> void:
+	debug_tag_colors_enabled = v
+	_apply_debug_tag_colors()
+
+func _set_debug_tag_color_any(_v: Variant) -> void:
+	_apply_debug_tag_colors()
+
+func _apply_debug_tag_colors() -> void:
+	for sm in _grid_wire_collect_shader_materials():
+		if sm.get_shader_parameter("debug_show_tag_colors") != null:
+			sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
+		if sm.get_shader_parameter("debug_floor_color") != null:
+			sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		if sm.get_shader_parameter("debug_wall_color") != null:
+			sm.set_shader_parameter("debug_wall_color", debug_wall_color)
+		if sm.get_shader_parameter("debug_ramp_color") != null:
+			sm.set_shader_parameter("debug_ramp_color", debug_ramp_color)
+		if sm.get_shader_parameter("debug_box_color") != null:
+			sm.set_shader_parameter("debug_box_color", debug_box_color)
+		if sm.get_shader_parameter("debug_tag_emission") != null:
+			sm.set_shader_parameter("debug_tag_emission", debug_tag_emission)
+
 # -----------------------------
 # Grid wireframe visualization
 # -----------------------------
@@ -798,7 +827,7 @@ func _grid_wire_collect_from_mesh_instance(mi: MeshInstance3D, seen: Dictionary,
 		return
 
 	for si in range(mesh.get_surface_count()):
-		var sm := mesh.surface_get_material(si) as ShaderMaterial
+		var sm := mi.get_active_material(si) as ShaderMaterial
 		if sm == null:
 			continue
 		var id_surface := sm.get_instance_id()
@@ -1532,6 +1561,12 @@ func _ready() -> void:
 		sm.set_shader_parameter("disp_scale_ramp", disp_scale_ramp)
 		sm.set_shader_parameter("normal_strength", normal_strength)
 		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
+		sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
+		sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		sm.set_shader_parameter("debug_wall_color", debug_wall_color)
+		sm.set_shader_parameter("debug_ramp_color", debug_ramp_color)
+		sm.set_shader_parameter("debug_box_color", debug_box_color)
+		sm.set_shader_parameter("debug_tag_emission", debug_tag_emission)
 		sm.set_shader_parameter("debug_disable_side_disp", false)
 		sm.set_shader_parameter("seam_lock_use_world_cell", false)
 		sm.set_shader_parameter("grid_origin_xz", Vector2(0.0, 0.0))
@@ -1556,6 +1591,7 @@ func _ready() -> void:
 	_ensure_grid_wire_node()
 	_grid_wire_set_visible(false)
 	_ensure_debug_menu()
+	_apply_debug_tag_colors()
 	_rebuild_debug_labels()
 
 	if randomize_seed_on_start:
@@ -1589,6 +1625,11 @@ func _unhandled_input(e: InputEvent) -> void:
 
 		if e.keycode == debug_cell_labels_toggle_key:
 			_toggle_cell_labels()
+			return
+
+		if e.keycode == debug_tag_color_toggle_key:
+			debug_tag_colors_enabled = not debug_tag_colors_enabled
+			_apply_debug_tag_colors()
 			return
 
 		if e.keycode == KEY_R:
@@ -1637,6 +1678,18 @@ func generate() -> void:
 			sm.set_shader_parameter("height_step", height_step)
 		if sm.get_shader_parameter("snap_y_strength") != null:
 			sm.set_shader_parameter("snap_y_strength", shader_snap_y_strength)
+		if sm.get_shader_parameter("debug_show_tag_colors") != null:
+			sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
+		if sm.get_shader_parameter("debug_floor_color") != null:
+			sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		if sm.get_shader_parameter("debug_wall_color") != null:
+			sm.set_shader_parameter("debug_wall_color", debug_wall_color)
+		if sm.get_shader_parameter("debug_ramp_color") != null:
+			sm.set_shader_parameter("debug_ramp_color", debug_ramp_color)
+		if sm.get_shader_parameter("debug_box_color") != null:
+			sm.set_shader_parameter("debug_box_color", debug_box_color)
+		if sm.get_shader_parameter("debug_tag_emission") != null:
+			sm.set_shader_parameter("debug_tag_emission", debug_tag_emission)
 		if sm.get_shader_parameter("grid_y_min") != null:
 			sm.set_shader_parameter("grid_y_min", grid_y0)
 		if sm.get_shader_parameter("grid_y_max") != null:
@@ -1673,6 +1726,7 @@ func generate() -> void:
 	print("Ramp slots:", _count_ramps())
 	_print_grid_contract()
 	_sync_sun()
+	_apply_debug_tag_colors()
 	_rebuild_debug_labels()
 
 # -----------------------------
