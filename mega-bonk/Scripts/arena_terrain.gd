@@ -1050,6 +1050,10 @@ const SURF_TOP := 0.0
 const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
+const C_NW := 0
+const C_NE := 1
+const C_SE := 2
+const C_SW := 3
 const _NEG_INF := -1.0e20
 const TUNNEL_FLOOR_LEVEL := 0
 const TUNNEL_HEIGHT_LEVELS := 1
@@ -1395,7 +1399,30 @@ func _is_perp_dir(a: int, b: int) -> bool:
 	var bx: bool = b == RAMP_EAST or b == RAMP_WEST
 	return ax != bx
 
-func _inside_corner_blocked(x: int, z: int, dir_in: int, dir_out: int, levels: PackedInt32Array, n: int) -> bool:
+func _corner_id_from_sign(sx: int, sz: int) -> int:
+	if sx < 0 and sz < 0:
+		return C_NW
+	if sx > 0 and sz < 0:
+		return C_NE
+	if sx > 0 and sz > 0:
+		return C_SE
+	return C_SW
+
+func _corner_height_at_cell(x: int, z: int, corner: int) -> int:
+	var c: Vector4 = _cell_corners(x, z)
+	match corner:
+		C_NW:
+			return _h_to_level(c.x)
+		C_NE:
+			return _h_to_level(c.y)
+		C_SE:
+			return _h_to_level(c.z)
+		C_SW:
+			return _h_to_level(c.w)
+		_:
+			return _h_to_level(c.x)
+
+func _inside_corner_blocked(x: int, z: int, dir_in: int, dir_out: int, _levels: PackedInt32Array, n: int) -> bool:
 	if dir_in == dir_out:
 		return false
 	if not _is_perp_dir(dir_in, dir_out):
@@ -1410,11 +1437,13 @@ func _inside_corner_blocked(x: int, z: int, dir_in: int, dir_out: int, levels: P
 	var nz: int = z + b.y
 	if not _in_bounds(nx, nz, n):
 		return true
-	var cur_i: int = _idx2(x, z, n)
-	var nxt_i: int = _idx2(nx, nz, n)
-	var c_i: int = _idx2(cx, cz, n)
-	var floor_lvl: int = mini(levels[cur_i], levels[nxt_i])
-	return levels[c_i] > floor_lvl
+
+	# Compare the exact turning corner height with the diagonal cell's facing corner height.
+	var turn_corner: int = _corner_id_from_sign(a.x + b.x, a.y + b.y)
+	var floor_lvl: int = _corner_height_at_cell(x, z, turn_corner)
+	var diag_corner: int = _corner_id_from_sign(x - cx, z - cz)
+	var diag_lvl: int = _corner_height_at_cell(cx, cz, diag_corner)
+	return diag_lvl > floor_lvl + maxi(0, walk_up_steps_without_ramp)
 
 func _edge_is_jump(ax: int, az: int, dir: int, want: int, levels: PackedInt32Array, n: int) -> bool:
 	var a_i: int = _idx2(ax, az, n)
@@ -1424,11 +1453,19 @@ func _edge_is_jump(ax: int, az: int, dir: int, want: int, levels: PackedInt32Arr
 	if not _in_bounds(bx, bz, n):
 		return true
 	var b_i: int = _idx2(bx, bz, n)
-	if levels[a_i] == levels[b_i]:
-		return false
+
+	# Explicit ramp bridge is always smooth.
 	if abs(levels[b_i] - levels[a_i]) <= want and _is_ramp_bridge(a_i, b_i, dir, want, levels):
 		return false
-	return true
+
+	# Corner-aware edge delta: compare both edge corners across the shared border.
+	var edge_a: Vector2 = _cell_edge_dir(ax, az, dir)
+	var edge_b: Vector2 = _cell_edge_dir(bx, bz, _opposite_dir(dir))
+	var rise0: int = _h_to_level(edge_b.x) - _h_to_level(edge_a.x)
+	var rise1: int = _h_to_level(edge_b.y) - _h_to_level(edge_a.y)
+	var max_up: int = maxi(rise0, rise1)
+	var max_down: int = maxi(-rise0, -rise1)
+	return max_up > maxi(0, walk_up_steps_without_ramp) or max_down > maxi(0, walk_down_steps_without_ramp)
 
 func _local_min_jumps(center_x: int, center_z: int, start_i: int, goals: PackedInt32Array, radius: int, want: int, levels: PackedInt32Array, n: int) -> int:
 	var inf: int = 1_000_000_000
