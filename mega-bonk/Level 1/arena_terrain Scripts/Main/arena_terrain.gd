@@ -3160,6 +3160,28 @@ func _emit_overhang_corner_quad(st: SurfaceTool, x0: float, x1: float, z0: float
 		col
 	)
 
+func _overhang_support_bottom_y(sample_x: float, sample_z: float, y_top: float) -> float:
+	var y: float = _sample_top_surface_y(sample_x, sample_z)
+	if y <= _NEG_INF:
+		y = outer_floor_height
+	return minf(y, y_top - 0.001)
+
+func _emit_overhang_support_wall(st: SurfaceTool, anchor_cell: Vector2i, a_top: Vector3, b_top: Vector3, a_bot_y: float, b_bot_y: float, uv_scale: float) -> void:
+	var eps: float = 0.0005
+	var a_bot := Vector3(a_top.x, a_bot_y, a_top.z)
+	var b_bot := Vector3(b_top.x, b_bot_y, b_top.z)
+	if (a_top.y - a_bot.y) <= eps and (b_top.y - b_bot.y) <= eps:
+		return
+
+	var wall_col := terrain_color
+	wall_col.a = SURF_WALL
+	var ua := Vector2(0.0, 1.0 * uv_scale)
+	var ub := Vector2(1.0 * uv_scale, 1.0 * uv_scale)
+	var uc := Vector2(1.0 * uv_scale, 0.0)
+	var ud := Vector2(0.0, 0.0)
+	_register_surface(SurfaceKind.WALL, anchor_cell, SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, PackedVector3Array([a_top, b_top, b_bot, a_bot]), Vector3.ZERO, {"overhang_support": true})
+	_emit_vertical_face(st, a_top, b_top, b_bot, a_bot, ua, ub, uc, ud, wall_col, eps)
+
 func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: PackedInt32Array) -> int:
 	if not overhang_enable:
 		return 0
@@ -3188,10 +3210,10 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 			var zh2: float = z1 - h
 
 			var corners := [
-				{"ca": Vector2i(0, -1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, -1), "rect": Rect2(Vector2(xh0, zh0), Vector2(h, h))}, # UL
-				{"ca": Vector2i(0, -1), "cb": Vector2i(1, 0), "dg": Vector2i(1, -1), "rect": Rect2(Vector2(xh2, zh0), Vector2(h, h))},  # UR
-				{"ca": Vector2i(0, 1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, 1), "rect": Rect2(Vector2(xh0, zh2), Vector2(h, h))},  # DL
-				{"ca": Vector2i(0, 1), "cb": Vector2i(1, 0), "dg": Vector2i(1, 1), "rect": Rect2(Vector2(xh2, zh2), Vector2(h, h))}   # DR
+				{"id": 0, "ca": Vector2i(0, -1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, -1), "rect": Rect2(Vector2(xh0, zh0), Vector2(h, h))}, # UL
+				{"id": 1, "ca": Vector2i(0, -1), "cb": Vector2i(1, 0), "dg": Vector2i(1, -1), "rect": Rect2(Vector2(xh2, zh0), Vector2(h, h))},  # UR
+				{"id": 2, "ca": Vector2i(0, 1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, 1), "rect": Rect2(Vector2(xh0, zh2), Vector2(h, h))},  # DL
+				{"id": 3, "ca": Vector2i(0, 1), "cb": Vector2i(1, 0), "dg": Vector2i(1, 1), "rect": Rect2(Vector2(xh2, zh2), Vector2(h, h))}   # DR
 			]
 
 			for rec in corners:
@@ -3226,6 +3248,34 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 					Vector3(rect.position.x, y, rect.position.y + rect.size.y)
 				])
 				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "overhang": true})
+
+				var corner_id: int = int(rec["id"])
+				var out: float = maxf(0.02, _cell_size * 0.02)
+				if corner_id == 0:
+					var nw := Vector3(rect.position.x, y, rect.position.y)
+					var ne := Vector3(rect.position.x + rect.size.x, y, rect.position.y)
+					var sw := Vector3(rect.position.x, y, rect.position.y + rect.size.y)
+					_emit_overhang_support_wall(st, Vector2i(x, z), nw, ne, _overhang_support_bottom_y(nw.x, nw.z - out, y), _overhang_support_bottom_y(ne.x, ne.z - out, y), uv_scale_top)
+					_emit_overhang_support_wall(st, Vector2i(x, z), sw, nw, _overhang_support_bottom_y(sw.x - out, sw.z, y), _overhang_support_bottom_y(nw.x - out, nw.z, y), uv_scale_top)
+				elif corner_id == 1:
+					var nw1 := Vector3(rect.position.x, y, rect.position.y)
+					var ne1 := Vector3(rect.position.x + rect.size.x, y, rect.position.y)
+					var se1 := Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y)
+					_emit_overhang_support_wall(st, Vector2i(x, z), nw1, ne1, _overhang_support_bottom_y(nw1.x, nw1.z - out, y), _overhang_support_bottom_y(ne1.x, ne1.z - out, y), uv_scale_top)
+					_emit_overhang_support_wall(st, Vector2i(x, z), ne1, se1, _overhang_support_bottom_y(ne1.x + out, ne1.z, y), _overhang_support_bottom_y(se1.x + out, se1.z, y), uv_scale_top)
+				elif corner_id == 2:
+					var sw2 := Vector3(rect.position.x, y, rect.position.y + rect.size.y)
+					var se2 := Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y)
+					var nw2 := Vector3(rect.position.x, y, rect.position.y)
+					_emit_overhang_support_wall(st, Vector2i(x, z), sw2, se2, _overhang_support_bottom_y(sw2.x, sw2.z + out, y), _overhang_support_bottom_y(se2.x, se2.z + out, y), uv_scale_top)
+					_emit_overhang_support_wall(st, Vector2i(x, z), sw2, nw2, _overhang_support_bottom_y(sw2.x - out, sw2.z, y), _overhang_support_bottom_y(nw2.x - out, nw2.z, y), uv_scale_top)
+				else:
+					var sw3 := Vector3(rect.position.x, y, rect.position.y + rect.size.y)
+					var se3 := Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y)
+					var ne3 := Vector3(rect.position.x + rect.size.x, y, rect.position.y)
+					_emit_overhang_support_wall(st, Vector2i(x, z), sw3, se3, _overhang_support_bottom_y(sw3.x, sw3.z + out, y), _overhang_support_bottom_y(se3.x, se3.z + out, y), uv_scale_top)
+					_emit_overhang_support_wall(st, Vector2i(x, z), se3, ne3, _overhang_support_bottom_y(se3.x + out, se3.z, y), _overhang_support_bottom_y(ne3.x + out, ne3.z, y), uv_scale_top)
+
 				_overhang_mask[anchor] = 1
 				emitted += 1
 
