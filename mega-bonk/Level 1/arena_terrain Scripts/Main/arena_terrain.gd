@@ -138,6 +138,7 @@ extends Node3D
 @export_range(-10.0, 10.0, 0.01) var debug_cell_labels_y_offset: float = 0.35
 @export var debug_tag_colors_enabled: bool = false : set = _set_debug_tag_colors_enabled
 @export var debug_floor_color: Color = Color(0.10, 1.00, 0.10, 1.0) : set = _set_debug_tag_color_any
+@export var debug_overhang_color: Color = Color(1.0, 0.2, 0.8, 1.0) : set = _set_debug_tag_color_any
 @export var debug_wall_color: Color = Color(0.20, 0.55, 1.00, 1.0) : set = _set_debug_tag_color_any
 @export var debug_ramp_color: Color = Color(1.00, 0.20, 0.20, 1.0) : set = _set_debug_tag_color_any
 @export var debug_box_color: Color = Color(0.25, 0.25, 0.25, 1.0) : set = _set_debug_tag_color_any
@@ -803,6 +804,7 @@ func _apply_debug_tag_colors() -> void:
 		debug_mat = _ensure_debug_tag_material()
 		if debug_mat != null:
 			debug_mat.set_shader_parameter("debug_floor_color", debug_floor_color)
+			debug_mat.set_shader_parameter("debug_overhang_color", debug_overhang_color)
 			debug_mat.set_shader_parameter("debug_wall_color", debug_wall_color)
 			debug_mat.set_shader_parameter("debug_ramp_color", debug_ramp_color)
 			debug_mat.set_shader_parameter("debug_box_color", debug_box_color)
@@ -816,6 +818,8 @@ func _apply_debug_tag_colors() -> void:
 			sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
 		if sm.get_shader_parameter("debug_floor_color") != null:
 			sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		if sm.get_shader_parameter("debug_overhang_color") != null:
+			sm.set_shader_parameter("debug_overhang_color", debug_overhang_color)
 		if sm.get_shader_parameter("debug_wall_color") != null:
 			sm.set_shader_parameter("debug_wall_color", debug_wall_color)
 		if sm.get_shader_parameter("debug_ramp_color") != null:
@@ -1058,6 +1062,7 @@ const RAMP_WEST := 1
 const RAMP_SOUTH := 2
 const RAMP_NORTH := 3
 const SURF_TOP := 0.0
+const SURF_OVERHANG := 0.15
 const SURF_WALL := 0.55
 const SURF_RAMP := 0.8
 const SURF_BOX := 1.0
@@ -2027,6 +2032,7 @@ func _ready() -> void:
 		sm.set_shader_parameter("debug_show_vertex_color", debug_vertex_colors)
 		sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
 		sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		sm.set_shader_parameter("debug_overhang_color", debug_overhang_color)
 		sm.set_shader_parameter("debug_wall_color", debug_wall_color)
 		sm.set_shader_parameter("debug_ramp_color", debug_ramp_color)
 		sm.set_shader_parameter("debug_box_color", debug_box_color)
@@ -2146,6 +2152,8 @@ func generate() -> void:
 			sm.set_shader_parameter("debug_show_tag_colors", debug_tag_colors_enabled)
 		if sm.get_shader_parameter("debug_floor_color") != null:
 			sm.set_shader_parameter("debug_floor_color", debug_floor_color)
+		if sm.get_shader_parameter("debug_overhang_color") != null:
+			sm.set_shader_parameter("debug_overhang_color", debug_overhang_color)
 		if sm.get_shader_parameter("debug_wall_color") != null:
 			sm.set_shader_parameter("debug_wall_color", debug_wall_color)
 		if sm.get_shader_parameter("debug_ramp_color") != null:
@@ -3156,19 +3164,17 @@ func _rebuild_overhang_walkways(n: int) -> void:
 	for z in range(n):
 		for x in range(n):
 			var i: int = _idx2(x, z, n)
-			if _is_walkable_floor_idx(i, n):
-				continue
 			if _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[i] != 0:
 				continue
 			var base_y: float = _cell_walk_y(i)
 			var best_y: float = inf_y
 
-			best_y = _overhang_consider_pair(x, z, dirs[0], dirs[1], n, base_y, best_y)
-			best_y = _overhang_consider_pair(x, z, dirs[1], dirs[2], n, base_y, best_y)
-			best_y = _overhang_consider_pair(x, z, dirs[2], dirs[3], n, base_y, best_y)
-			best_y = _overhang_consider_pair(x, z, dirs[3], dirs[0], n, base_y, best_y)
+			# Opposite cardinal neighbors (W/E and N/S).
+			best_y = _overhang_consider_pair(x, z, dirs[3], dirs[1], n, base_y, best_y)
 			best_y = _overhang_consider_pair(x, z, dirs[0], dirs[2], n, base_y, best_y)
-			best_y = _overhang_consider_pair(x, z, dirs[1], dirs[3], n, base_y, best_y)
+			# Optional diagonal bridging catches corner gap artifacts.
+			best_y = _overhang_consider_pair(x, z, Vector2i(-1, -1), Vector2i(1, 1), n, base_y, best_y)
+			best_y = _overhang_consider_pair(x, z, Vector2i(1, -1), Vector2i(-1, 1), n, base_y, best_y)
 
 			if best_y < inf_y:
 				_overhang_mask[i] = 1
@@ -3189,7 +3195,7 @@ func _add_overhang_platforms(st: SurfaceTool, n: int, uv_scale_top: float) -> vo
 			var z1: float = z0 + _cell_size
 			var y: float = _overhang_y[i] + overhang_zfight_epsilon
 			var col: Color = terrain_color
-			col.a = SURF_TOP
+			col.a = SURF_OVERHANG
 			_add_quad_uv2(
 				st,
 				Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1),
