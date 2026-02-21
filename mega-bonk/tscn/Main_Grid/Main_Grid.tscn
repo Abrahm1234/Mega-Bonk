@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3 uid="uid://c1hf67vwcqxau"]
+
+[ext_resource type="Script" uid="uid://n5mybvgbaiqd" path="res://Main Grid/Grid/GD Script/main.gd" id="1_e543a"]
+[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Player Scripts/free_camera/free_camera.gd" id="2_r3s2w"]
+
+[node name="Node3D" type="Node3D"]
+script = ExtResource("1_e543a")
+grid_size = 4
+min_cube_size = 1.0
+max_cube_size = 3.0
+cube_spacing = 10.0
+
+[node name="Camera3D" type="Camera3D" parent="."]
+script = ExtResource("2_r3s2w")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="Camera3D"]

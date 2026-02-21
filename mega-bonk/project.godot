@@ -13,16 +13,88 @@ config_version=5
 config/name="MegaBonk"
 run/main_scene="uid://cyo3li77q1lbt"
 config/features=PackedStringArray("4.5", "Forward Plus")
-config/icon="res://icon.svg"
+config/icon="res://tscn/icon.svg"
+
+[autoload]
+
+DelaunayTriangulation="*res://Level 2/GD Script/DelaunayTriangulation.gd"
+Grid="*res://Level 2/GD Script/Grid.gd"
+KruskalMST="*res://Level 2/GD Script/kruskal_mst.gd"
+MarkPotentialPathways="*res://Level 2/GD Script/MarkPotentialPathways.gd"
+Pathfinder="*res://Level 2/GD Script/Pathfinding.gd"
+CorridorCreator="*res://Level 2/GD Script/CreateCorridors.gd"
+QueuePriority="*res://Level 2/GD Script/PriorityQueue.gd"
+Visualize="*res://Level 2/GD Script/Visualize.gd"
 
 [file_customization]
 
 folder_colors={
-"res://Mesh/": "gray",
-"res://Mesh/Enemy-Meshs/": "orange",
-"res://Mesh/Weapons/": "red",
-"res://Scripts/": "pink",
-"res://shaders/": "purple"
+"res://Level 1/": "red",
+"res://Level 1/arena_terrain Scripts/": "red",
+"res://Level 1/arena_terrain Shaders/": "orange",
+"res://Level 2/": "orange",
+"res://Level 2/Compute Shader/": "red",
+"res://Level 2/GD Script/": "orange",
+"res://Level 2/Maching Cube Scripts/": "yellow",
+"res://Main Grid/": "yellow",
+"res://Main Grid/Grid/": "red",
+"res://Mesh/": "green",
+"res://Mesh/Enemy-Meshs/": "red",
+"res://Mesh/Enemy-Meshs/Behemoth/": "orange",
+"res://Mesh/Enemy-Meshs/Claw/": "yellow",
+"res://Mesh/Enemy-Meshs/Crystal Beast/": "green",
+"res://Mesh/Enemy-Meshs/Desert Behemoth/": "teal",
+"res://Mesh/Enemy-Meshs/Howlglass Chorister/": "blue",
+"res://Mesh/Enemy-Meshs/Parhelion Archon/": "purple",
+"res://Mesh/Tiles/": "orange",
+"res://Mesh/Tiles/floor_decor_meshes/": "red",
+"res://Mesh/Tiles/floor_decor_meshes/Floor 5 Down/": "green",
+"res://Mesh/Tiles/floor_decor_meshes/Floor 5 Up/": "yellow",
+"res://Mesh/Tiles/floor_decor_meshes/Floor 5/": "teal",
+"res://Mesh/Tiles/floor_decor_meshes/GREEN FLOOR/": "orange",
+"res://Mesh/Tiles/tunnel_elevator_top_mesh/": "orange",
+"res://Mesh/Tiles/tunnel_elevator_top_mesh/Elevator 1/": "red",
+"res://Mesh/Tiles/wall_decor_meshes/": "yellow",
+"res://Mesh/Tiles/wall_decor_meshes/Wall 3/": "yellow",
+"res://Mesh/Tiles/wall_decor_meshes/Wall 4/": "green",
+"res://Mesh/Tiles/wall_decor_meshes/Wall1/": "red",
+"res://Mesh/Tiles/wall_decor_meshes/Wall2/": "orange",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/": "green",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/LEFT WEDGE/": "green",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Left Left/": "orange",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Left Over Hang/": "yellow",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Left/": "red",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/RIGHT Down/": "teal",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Right Left/": "blue",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Right Over Hang 2/": "pink",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Right Over Hang/": "purple",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Right Right/": "gray",
+"res://Mesh/Tiles/wall_wedge_decor_meshes/Right Up/": "red",
+"res://Mesh/Weapons/": "yellow",
+"res://Mesh/Weapons/Constellation Refractor Riflea/": "red",
+"res://Mesh/Weapons/Prism Coil Disrutptor High Poly/": "orange",
+"res://Player Scripts/": "teal",
+"res://Player Scripts/free_camera/": "red",
+"res://VFX/": "purple",
+"res://VFX/Gun effects/": "red",
+"res://VFX/Gun effects/Noise Textures/": "red",
+"res://VFX/Laser Beam/": "orange",
+"res://VFX/Laser Beam/Mesh/": "red",
+"res://VFX/Laser Beam/Scripts/": "orange",
+"res://VFX/Muzzle Flashs/": "yellow",
+"res://VFX/Muzzle Flashs/Meshs/": "red",
+"res://VFX/Muzzle Flashs/Muzzle FlashTextures/": "orange",
+"res://VFX/Muzzle Flashs/Muzzle FlashTextures/Beam Flash/": "red",
+"res://VFX/Muzzle Flashs/Muzzle FlashTextures/Cones/": "orange",
+"res://VFX/Muzzle Flashs/Muzzle FlashTextures/Planes/": "yellow",
+"res://VFX/Muzzle Flashs/Scripts/": "yellow",
+"res://tscn/": "blue",
+"res://tscn/Guns/": "red",
+"res://tscn/Guns/Muzzle Flash tscn/": "red",
+"res://tscn/Level 1/": "orange",
+"res://tscn/Level 2/": "yellow",
+"res://tscn/Main_Grid/": "green",
+"res://tscn/Player Attacks/": "teal"
 }
 
 [input]
@@ -57,3 +129,27 @@ move_down={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":32,"key_label":0,"unicode":32,"location":0,"echo":false,"script":null)
 ]
 }
+fire_alt={
+"deadzone": 0.2,
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":1,"position":Vector2(310, 60),"global_position":Vector2(329, 156),"factor":1.0,"button_index":1,"canceled":false,"pressed":true,"double_click":false,"script":null)
+]
+}
+grid_wire_flat_material_toggle_key={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194333,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+
+[rendering]
+
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality.mobile=3
+lights_and_shadows/positional_shadow/soft_shadow_filter_quality=3
+lights_and_shadows/positional_shadow/soft_shadow_filter_quality.mobile=3
+anti_aliasing/quality/msaa_2d=3
+anti_aliasing/quality/msaa_3d=3
+scaling_3d/mode=1
+scaling_3d/mode.ios=1
+scaling_3d/mode.macos=1
+global_illumination/sdfgi/probe_ray_count=2
+anti_aliasing/quality/screen_space_aa=2

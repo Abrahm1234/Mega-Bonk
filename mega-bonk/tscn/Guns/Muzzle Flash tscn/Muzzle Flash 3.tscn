@@ -1,0 +1,362 @@
+[gd_scene load_steps=52 format=4 uid="uid://ctb115sw5nyem"]
+
+[ext_resource type="Script" uid="uid://cubg43kcpfupv" path="res://VFX/Muzzle Flashs/Scripts/muzzle_flash.gd" id="1_6tfom"]
+[ext_resource type="Texture2D" uid="uid://b10rppwfhjhwp" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Planes/Fractured plasma streak (pairs with Fractured corona ring).png" id="2_dyeaq"]
+[ext_resource type="Texture2D" uid="uid://xymrhv0teve0" path="res://VFX/Gun effects/Noise Textures/T_fire_flipbook4_sm.png" id="2_l1y0k"]
+[ext_resource type="ArrayMesh" uid="uid://fqsxvh7iqis5" path="res://VFX/Muzzle Flashs/Meshs/Muzzle Plane/Muzzle Cylinder.mtl.obj" id="3_dyeaq"]
+[ext_resource type="Texture2D" uid="uid://dtu26b761s08l" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Cones/ChatGPT Image Feb 13, 2026, 11_48_41 AM.png" id="4_l1y0k"]
+[ext_resource type="Texture2D" uid="uid://bdbh2okplt71h" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Cones/ChatGPT Image Feb 6, 2026, 01_09_44 AM.png" id="5_dyeaq"]
+[ext_resource type="Texture2D" uid="uid://be7kbtw8xl7yb" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Beam Flash/orb_transparent.png" id="6_qgs0m"]
+[ext_resource type="ArrayMesh" uid="uid://biyl2pax3pyvg" path="res://Mesh/Weapons/Prism Coil Disrutptor High Poly/PCD.res" id="7_1jjen"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1jjen"]
+transparency = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("2_l1y0k")
+albedo_texture_force_srgb = true
+roughness = 0.4
+billboard_mode = 3
+billboard_keep_scale = true
+particles_anim_h_frames = 5
+particles_anim_v_frames = 5
+particles_anim_loop = true
+proximity_fade_enabled = true
+proximity_fade_distance = 0.05
+
+[sub_resource type="Gradient" id="Gradient_u7win"]
+offsets = PackedFloat32Array(0.087878786, 0.4522727)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_qgs0m"]
+gradient = SubResource("Gradient_u7win")
+use_hdr = true
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_55qe1"]
+emission_shape = 3
+emission_box_extents = Vector3(0.015, 0.15, 0.005)
+angle_min = -179.99998
+angle_max = 180.00002
+orbit_velocity_min = 9.49949e-08
+orbit_velocity_max = 9.49949e-08
+radial_velocity_min = 0.059977647
+radial_velocity_max = 0.059977647
+gravity = Vector3(0, 0, 0)
+color = Color(0.8338923, 1.3017604, 1.2783672, 1)
+color_ramp = SubResource("GradientTexture1D_qgs0m")
+hue_variation_min = 0.99999994
+hue_variation_max = 0.99999994
+anim_speed_min = 1.0
+anim_speed_max = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_usbpk"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fl57e"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("2_dyeaq")
+distance_fade_min_distance = 24.19
+
+[sub_resource type="Curve" id="Curve_u7win"]
+_data = [Vector2(0, 1), 0.0, -3.3868587, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_qgs0m"]
+curve = SubResource("Curve_u7win")
+
+[sub_resource type="Curve" id="Curve_1jjen"]
+_data = [Vector2(0, 0), 0.0, 2.2866223, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_u7win"]
+curve = SubResource("Curve_1jjen")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_qgs0m"]
+gravity = Vector3(0, 0, 0)
+scale_min = 0.01
+scale_max = 0.01
+scale_curve = SubResource("CurveTexture_u7win")
+color = Color(1.1359947, 1.748, 1.7170626, 1)
+alpha_curve = SubResource("CurveTexture_qgs0m")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_l1y0k"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("4_l1y0k")
+
+[sub_resource type="Curve" id="Curve_ny0fv"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_7kpwe"]
+curve = SubResource("Curve_ny0fv")
+
+[sub_resource type="Curve" id="Curve_tq80h"]
+_limits = [-1.0, 1.0, 0.0, 1.0]
+_data = [Vector2(0, 1), 0.0, -7.462705, 0, 0, Vector2(1, -1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_gljxv"]
+curve = SubResource("Curve_tq80h")
+
+[sub_resource type="Curve" id="Curve_f2dbk"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_gclgx"]
+curve = SubResource("Curve_f2dbk")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_swkvg"]
+angle_min = 1.0728835e-05
+angle_max = 90.000015
+gravity = Vector3(0, 0, 0)
+scale_min = 0.01
+scale_max = 0.01
+scale_curve = SubResource("CurveTexture_gclgx")
+color = Color(0, 1.1031209, 1.066278, 1)
+alpha_curve = SubResource("CurveTexture_7kpwe")
+hue_variation_min = -0.07000002
+hue_variation_max = 0.06999998
+hue_variation_curve = SubResource("CurveTexture_gljxv")
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_4lwp4"]
+_surfaces = [{
+"aabb": AABB(-1, -1, 0.000108, 2, 2, 0.392882),
+"format": 34896613377,
+"index_count": 384,
+"index_data": PackedByteArray("QAABAEEAQQABAAMAQAAEAAEAAgBAAEEAAgBBAAUAAABAAAIAQQADAEIABQBBAEIAQgADAAcABQBCAAkAQwAEAEAAAABDAEAAQwAIAAQABgBDAAAARAAIAEMABgBEAEMARAAMAAgACgBEAAYARQAMAEQACgBFAEQARQAQAAwADgBFAAoARgAQAEUADgBGAEUARgAUABAAEgBGAA4ARwAUAEYAEgBHAEYARwAYABQAFgBHABIASAAYAEcAFgBIAEcASAAcABgAGgBIABYASQAcAEgAGgBJAEgASQAgABwAHgBJABoASgAgAEkAHgBKAEkASgAkACAAIgBKAB4ASwAkAEoAIgBLAEoASwAoACQAJgBLACIATAAoAEsAJgBMAEsATAAsACgAKgBMACYATQAsAEwAKgBNAEwATQAwACwALgBNACoATgAwAE0ALgBOAE0ATgA0ADAAMgBOAC4ATwA0AE4AMgBPAE4ATwA4ADQANgBPADIAUAA4AE8ANgBQAE8AUAA8ADgAOgBQADYAUQA8AFAAOgBRAFAAUQA/ADwAPgBRADoAUgA/AFEAPgBSAFEAUgA7AD8APQBSAD4AUwA7AFIAPQBTAFIAUwA3ADsAOQBTAD0AVAA3AFMAOQBUAFMAVAAzADcANQBUADkAVQAzAFQANQBVAFQAVQAvADMAMQBVADUAVgAvAFUAMQBWAFUAVgArAC8ALQBWADEAVwArAFYALQBXAFYAVwAnACsAKQBXAC0AWAAnAFcAKQBYAFcAWAAjACcAJQBYACkAWQAjAFgAJQBZAFgAWQAfACMAIQBZACUAWgAfAFkAIQBaAFkAWgAbAB8AHQBaACEAWwAbAFoAHQBbAFoAWwAXABsAGQBbAB0AXAAXAFsAGQBcAFsAXAATABcAFQBcABkAXQATAFwAFQBdAFwAXQAPABMAEQBdABUAXgAPAF0AEQBeAF0AXgALAA8ADQBeABEAXwALAF4ADQBfAF4AXwAHAAsACQBfAA0AQgAHAF8ACQBCAF8A"),
+"lods": [0.015567956, PackedByteArray("AAABAAIAAgABAAMAAAAEAAEAAgADAAUABgAEAAAABQADAAcABgAIAAQABQAHAAkACgAIAAYACQAHAAsACgAMAAgACQALAA0ADgAMAAoADQALAA8ADgAQAAwADQAPABEAEgAQAA4AEQAPABMAEgAUABAAEQATABUAFgAUABIAFQATABcAFgAYABQAFQAXABkAGgAYABYAGQAXABsAGgAcABgAGQAbAB0AHgAcABoAHQAbAB8AHgAgABwAHQAfACEAIgAgAB4AIQAfACMAIgAkACAAIQAjACUAJgAkACIAJQAjACcAJgAoACQAJQAnACkAKgAoACYAKQAnACsAKgAsACgAKQArAC0ALgAsACoALQArAC8ALgAwACwALQAvADEAMgAwAC4AMQAvADMAMgA0ADAAMQAzADUANgA0ADIANQAzADcANgA4ADQANQA3ADkAOgA4ADYAOQA3ADsAOgA8ADgAOQA7AD0APgA8ADoAPQA7AD8APgA/ADwAPQA/AD4A")],
+"name": "Cylinder",
+"primitive": 3,
+"uv_scale": Vector4(0, 0, 0, 0),
+"vertex_count": 96,
+"vertex_data": PackedByteArray("wH2zdAAAAAAGZ3UC//8AAP9/enQAAAAA/38AAP//AAADT74J//8AAD6Cs3QAAAAAlntadQAAAAD4mHUC//8AAOI4khX//wAAaIRadQAAAACZeWt2AAAAAPuwvgn//wAAfSV9Jf//AABlhmt2AAAAANp32ncAAAAAHMeSFf//AACSFeI4//8AACSI2ncAAAAAa3aZeQAAAACB2n0l//8AAL4JA0///wAAk4mZeQAAAABadZZ7AAAAAGzq4jj//wAAdQIGZ///AACkipZ7AAAAALN0wH0AAAAAQPYDT///AAAAAP9///8AAEuLwH0AAAAAenT/fwAAAACJ/QZn//8AAHUC+Jj//wAAhIv/fwAAAACzdD6CAAAAAP///3///wAAvgn7sP//AABLiz6CAAAAAFp1aIQAAAAAif34mP//AACSFRzH//8AAKSKaIQAAAAAa3ZlhgAAAABA9vuw//8AAH0lgdr//wAAk4llhgAAAADadySIAAAAAGzqHMf//wAA4jhs6v//AAAkiCSIAAAAAJl5k4kAAAAAgdqB2v//AAADT0D2//8AAGWGk4kAAAAAlnukigAAAAAcx2zq//8AAAZnif3//wAAaISkigAAAADAfUuLAAAAAPuwQPb//wAA/3//////AAA+gkuLAAAAAP9/hIsAAAAA+JiJ/f//AACDczpBSXYAAP9//z9JdgAAe4w6QUl2AACBZ95ESXYAAHFcyEpJdgAAvlK+Ukl2AADISnFcSXYAAN5EgWdJdgAAOkGDc0l2AAD/P/9/SXYAADpBe4xJdgAA3kR9mEl2AADISo2jSXYAAL5SQK1JdgAAcVw2tUl2AACBZyC7SXYAAINzxL5JdgAA/3//v0l2AAB7jMS+SXYAAH2YILtJdgAAjaM2tUl2AABArUCtSXYAADa1jaNJdgAAILt9mEl2AADEvnuMSXYAAP+//39JdgAAxL6Dc0l2AAAgu4FnSXYAADa1cVxJdgAAQK2+Ukl2AACNo8hKSXYAAH2Y3kRJdgAA")
+}]
+blend_shape_mode = 0
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_l1y0k"]
+_surfaces = [{
+"aabb": AABB(-1, -1, 0.000108, 2, 2, 0.392882),
+"attribute_data": PackedByteArray("wH2zdAZndQL/f3p0/38AAANPvgk+grN0lntadfiYdQLiOJIVaIRadZl5a3b7sL4JfSV9JWWGa3bad9p3HMeSFZIV4jgkiNp3a3aZeYHafSW+CQNPk4mZeVp1lnts6uI4dQIGZ6SKlnuzdMB9QPYDTwAA/39Li8B9enT/f4n9Bmd1AviYhIv/f7N0PoL///9/vgn7sEuLPoJadWiEif34mJIVHMekimiEa3ZlhkD2+7B9JYHak4llhtp3JIhs6hzH4jhs6iSIJIiZeZOJgdqB2gNPQPZlhpOJlnukihzHbOoGZ4n9aISkisB9S4v7sED2/3///z6CS4v/f4SL+JiJ/YNzOkH/f/8/e4w6QYFn3kRxXMhKvlK+UshKcVzeRIFnOkGDc/8//386QXuM3kR9mMhKjaO+UkCtcVw2tYFnILuDc8S+/3//v3uMxL59mCC7jaM2tUCtQK02tY2jILt9mMS+e4z/v/9/xL6DcyC7gWc2tXFcQK2+Uo2jyEp9mN5E"),
+"format": 34896613399,
+"index_count": 384,
+"index_data": PackedByteArray("QAABAEEAQQABAAMAQAAEAAEAAgBAAEEAAgBBAAUAAABAAAIAQQADAEIABQBBAEIAQgADAAcABQBCAAkAQwAEAEAAAABDAEAAQwAIAAQABgBDAAAARAAIAEMABgBEAEMARAAMAAgACgBEAAYARQAMAEQACgBFAEQARQAQAAwADgBFAAoARgAQAEUADgBGAEUARgAUABAAEgBGAA4ARwAUAEYAEgBHAEYARwAYABQAFgBHABIASAAYAEcAFgBIAEcASAAcABgAGgBIABYASQAcAEgAGgBJAEgASQAgABwAHgBJABoASgAgAEkAHgBKAEkASgAkACAAIgBKAB4ASwAkAEoAIgBLAEoASwAoACQAJgBLACIATAAoAEsAJgBMAEsATAAsACgAKgBMACYATQAsAEwAKgBNAEwATQAwACwALgBNACoATgAwAE0ALgBOAE0ATgA0ADAAMgBOAC4ATwA0AE4AMgBPAE4ATwA4ADQANgBPADIAUAA4AE8ANgBQAE8AUAA8ADgAOgBQADYAUQA8AFAAOgBRAFAAUQA/ADwAPgBRADoAUgA/AFEAPgBSAFEAUgA7AD8APQBSAD4AUwA7AFIAPQBTAFIAUwA3ADsAOQBTAD0AVAA3AFMAOQBUAFMAVAAzADcANQBUADkAVQAzAFQANQBVAFQAVQAvADMAMQBVADUAVgAvAFUAMQBWAFUAVgArAC8ALQBWADEAVwArAFYALQBXAFYAVwAnACsAKQBXAC0AWAAnAFcAKQBYAFcAWAAjACcAJQBYACkAWQAjAFgAJQBZAFgAWQAfACMAIQBZACUAWgAfAFkAIQBaAFkAWgAbAB8AHQBaACEAWwAbAFoAHQBbAFoAWwAXABsAGQBbAB0AXAAXAFsAGQBcAFsAXAATABcAFQBcABkAXQATAFwAFQBdAFwAXQAPABMAEQBdABUAXgAPAF0AEQBeAF0AXgALAA8ADQBeABEAXwALAF4ADQBfAF4AXwAHAAsACQBfAA0AQgAHAF8ACQBCAF8A"),
+"lods": [0.015567956, PackedByteArray("AAABAAIAAgABAAMAAAAEAAEAAgADAAUABgAEAAAABQADAAcABgAIAAQABQAHAAkACgAIAAYACQAHAAsACgAMAAgACQALAA0ADgAMAAoADQALAA8ADgAQAAwADQAPABEAEgAQAA4AEQAPABMAEgAUABAAEQATABUAFgAUABIAFQATABcAFgAYABQAFQAXABkAGgAYABYAGQAXABsAGgAcABgAGQAbAB0AHgAcABoAHQAbAB8AHgAgABwAHQAfACEAIgAgAB4AIQAfACMAIgAkACAAIQAjACUAJgAkACIAJQAjACcAJgAoACQAJQAnACkAKgAoACYAKQAnACsAKgAsACgAKQArAC0ALgAsACoALQArAC8ALgAwACwALQAvADEAMgAwAC4AMQAvADMAMgA0ADAAMQAzADUANgA0ADIANQAzADcANgA4ADQANQA3ADkAOgA4ADYAOQA3ADsAOgA8ADgAOQA7AD0APgA8ADoAPQA7AD8APgA/ADwAPQA/AD4A")],
+"name": "Cylinder",
+"primitive": 3,
+"uv_scale": Vector4(0, 0, 0, 0),
+"vertex_count": 96,
+"vertex_data": PackedByteArray("wH2zdAAAX+8GZ3UC//8L8P9/enQAAAPv/38AAP//tO8DT74J//8N8T6Cs3QAAF/vlntadQAAb/D4mHUC//8L8OI4khX//6fyaIRadQAAb/CZeWt2AAAc8vuwvgn//w3xfSV9Jf//wPRlhmt2AAAc8tp32ncAAE30HMeSFf//p/KSFeI4//899ySI2ncAAE30a3aZeQAA5faB2n0l///A9L4JA0///wL6k4mZeQAA5fZadZZ7AADH+Wzq4jj//z33dQIGZ///9PykipZ7AADH+bN0wH0AANf8QPYDT///AvoAAP9//////0uLwH0AANf8enT/fwAA//+J/QZn///0/HUC+Jj///T8hIv/fwAA//+zdD6CAADX/P///3//////vgn7sP//AvpLiz6CAADX/Fp1aIQAAMf5if34mP//9PySFRzH//8996SKaIQAAMf5a3ZlhgAA5fZA9vuw//8C+n0lgdr//8D0k4llhgAA5fbadySIAABN9GzqHMf//z334jhs6v//p/IkiCSIAABN9Jl5k4kAABzygdqB2v//wPQDT0D2//8N8WWGk4kAABzylnukigAAb/Acx2zq//+n8gZnif3//wvwaISkigAAb/DAfUuLAABf7/uwQPb//w3x/3//////tO8+gkuLAABf7/9/hIsAAAPv+JiJ/f//C/CDczpBSXa77/9//z9JdmDve4w6QUl2u++BZ95ESXbC8HFcyEpJdmbyvlK+Ukl2ivTISnFcSXYT995EgWdJdub5OkGDc0l25/z/P/9/SXb//zpBe4xJduf83kR9mEl25vnISo2jSXYT975SQK1Jdor0cVw2tUl2ZvKBZyC7SXbC8INzxL5Jdrvv/3//v0l2YO97jMS+SXa7732YILtJdsLwjaM2tUl2ZvJArUCtSXaK9Da1jaNJdhP3ILt9mEl25vnEvnuMSXbn/P+//39Jdv//xL6Dc0l25/wgu4FnSXbm+Ta1cVxJdhP3QK2+Ukl2ivSNo8hKSXZm8n2Y3kRJdsLwUwbrfgQGAX8AAP9/AAD/fyILQX4UAVKGrAsafv4AA4Y6D9R95AGsi+0PpX2+ASGLShK/fVkC7Y8VE5B9KwI6j14U/X1uAhWTMhXUfT8CSpKMFX9+KgIylWEWYX4CAl6U7BUxf50BYZa8FiJ/gAGMlf7/kJXdALuW/v9Xls0A65Ux/xNqpun/fyH/Q2lt6v9/fv5yakLp3IBh/p1pEurNgPz9oGud6Z2B1P3ManLqf4G//bRtzOoqgpD96Wyg6wGC0/3EcOnsboKl/RFwtO0/gkD+3XQR8FmCGv5SdMTwKoIA//t5UvTkger+rHnc9L2B/v//f6v5E4H+//9/+vn9gCkG9n4AAP9/CAEohmMLL36PD759qhKqfcIU6n3xFXF+TRYqf/7/D2op/7JpcP4Naun9PGup/VVtvv1wcC7+nHT2/tZ5/v//f9X5CIGb9M+Bb/BAglXtVII86xSCDeqNgbHp1IAP6v9/1QBMlo4B8ZUVAsKUVQKpkkACjo/QAWKL")
+}]
+blend_shape_mode = 0
+shadow_mesh = SubResource("ArrayMesh_4lwp4")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_k2ibx"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("5_dyeaq")
+
+[sub_resource type="Curve" id="Curve_qgs0m"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_55qe1"]
+curve = SubResource("Curve_qgs0m")
+
+[sub_resource type="Curve" id="Curve_usbpk"]
+_limits = [-1.0, 1.0, 0.0, 1.0]
+_data = [Vector2(0, 1), 0.0, -7.462705, 0, 0, Vector2(1, -1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_xyaed"]
+curve = SubResource("Curve_usbpk")
+
+[sub_resource type="Curve" id="Curve_n57qk"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_mn4em"]
+curve = SubResource("Curve_n57qk")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_hbvam"]
+angle_min = 1.0728835e-05
+angle_max = 90.000015
+gravity = Vector3(0, 0, 0)
+scale_min = 0.01
+scale_max = 0.01
+scale_curve = SubResource("CurveTexture_mn4em")
+color = Color(0.886, 1.374, 1.35, 1)
+alpha_curve = SubResource("CurveTexture_55qe1")
+hue_variation_min = -0.07000002
+hue_variation_max = 0.06999998
+hue_variation_curve = SubResource("CurveTexture_xyaed")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8qoqx"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("6_qgs0m")
+billboard_mode = 3
+billboard_keep_scale = true
+particles_anim_h_frames = 1
+particles_anim_v_frames = 1
+particles_anim_loop = false
+
+[sub_resource type="Curve" id="Curve_0njgo"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_x1o4j"]
+curve = SubResource("Curve_0njgo")
+
+[sub_resource type="Curve" id="Curve_hpe7e"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_d6ba0"]
+curve = SubResource("Curve_hpe7e")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_xjxqg"]
+gravity = Vector3(0, 0, 0)
+scale_curve = SubResource("CurveTexture_d6ba0")
+color = Color(0.817157, 0.8106731, 0.40219146, 1)
+alpha_curve = SubResource("CurveTexture_x1o4j")
+
+[sub_resource type="QuadMesh" id="QuadMesh_g1wj1"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_5ov63"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("6_qgs0m")
+
+[sub_resource type="Curve" id="Curve_etgom"]
+_data = [Vector2(0, 1), 0.0, -4.3820233, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_t5uap"]
+curve = SubResource("Curve_etgom")
+
+[sub_resource type="Curve" id="Curve_lyncv"]
+_limits = [0.0, 100.0, 0.0, 1.0]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 100), 339.45004, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_io0fs"]
+curve = SubResource("Curve_lyncv")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_k3cdb"]
+lifetime_randomness = 1.0
+particle_flag_align_y = true
+emission_shape_scale = Vector3(0.2, 0.2, 0.2)
+emission_shape = 1
+emission_sphere_radius = 0.2
+velocity_pivot = Vector3(0, 0, 1)
+direction = Vector3(0, 0, 0)
+spread = 10.0
+initial_velocity_min = 5.0
+initial_velocity_max = 10.0
+gravity = Vector3(0, 0, 0)
+damping_min = 0.5
+damping_max = 0.8
+damping_curve = SubResource("CurveTexture_io0fs")
+scale_min = 0.03
+scale_max = 0.08
+color = Color(0, 2.772107, 1.4269912, 1)
+alpha_curve = SubResource("CurveTexture_t5uap")
+
+[sub_resource type="QuadMesh" id="QuadMesh_cmvmp"]
+size = Vector2(0.2, 1)
+
+[node name="World" type="Node3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.49468458, 0)
+
+[node name="Pcd" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 1.6139383, -0.20625931, -2.427114)
+mesh = ExtResource("7_1jjen")
+skeleton = NodePath("Fractured plasma streak")
+
+[node name="GPUParticles3D" type="GPUParticles3D" parent="Pcd"]
+transform = Transform3D(2, 0, 0, 0, -8.742278e-08, 2, 0, -2, -8.742278e-08, 2.0077572, -0.032975435, 4.7525063)
+visible = false
+material_override = SubResource("StandardMaterial3D_1jjen")
+amount = 30
+local_coords = true
+process_material = SubResource("ParticleProcessMaterial_55qe1")
+draw_pass_1 = SubResource("QuadMesh_usbpk")
+
+[node name="Fractured plasma streak" type="Node3D" parent="Pcd"]
+transform = Transform3D(20, 0, 0, 0, 20, 0, 0, 0, 20, 2.003306, 0.017820358, 6.6021233)
+script = ExtResource("1_6tfom")
+
+[node name="Muzzle Planes" type="GPUParticles3D" parent="Pcd/Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0.001091376, 0, -0.014189631)
+material_override = SubResource("StandardMaterial3D_fl57e")
+amount = 1
+lifetime = 0.15000000000000002
+randomness = 1.0
+fixed_fps = 60
+local_coords = true
+process_material = SubResource("ParticleProcessMaterial_qgs0m")
+draw_pass_1 = ExtResource("3_dyeaq")
+
+[node name="Muzzle Cone Slow" type="GPUParticles3D" parent="Pcd/Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_l1y0k")
+amount = 1
+randomness = 1.0
+fixed_fps = 60
+local_coords = true
+process_material = SubResource("ParticleProcessMaterial_swkvg")
+draw_pass_1 = SubResource("ArrayMesh_l1y0k")
+
+[node name="Muzzle Cone Fast" type="GPUParticles3D" parent="Pcd/Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_k2ibx")
+amount = 1
+lifetime = 0.2
+randomness = 1.0
+fixed_fps = 60
+local_coords = true
+process_material = SubResource("ParticleProcessMaterial_hbvam")
+draw_pass_1 = SubResource("ArrayMesh_l1y0k")
+
+[node name="Beam Flash" type="GPUParticles3D" parent="Pcd/Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_8qoqx")
+emitting = false
+amount = 1
+lifetime = 0.1
+one_shot = true
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_xjxqg")
+draw_pass_1 = SubResource("QuadMesh_g1wj1")
+
+[node name="Sparks" type="GPUParticles3D" parent="Pcd/Fractured plasma streak"]
+material_override = SubResource("StandardMaterial3D_5ov63")
+emitting = false
+amount = 20
+lifetime = 0.3
+one_shot = true
+explosiveness = 0.7
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_k3cdb")
+draw_pass_1 = SubResource("QuadMesh_cmvmp")
+
+[node name="ReflectionProbe" type="ReflectionProbe" parent="Pcd"]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 1.7052994, 5.125535)

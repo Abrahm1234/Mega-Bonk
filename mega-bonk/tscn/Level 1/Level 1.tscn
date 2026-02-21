@@ -1,0 +1,178 @@
+[gd_scene load_steps=17 format=3 uid="uid://cyo3li77q1lbt"]
+
+[ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://Level 1/arena_terrain Scripts/Main/arena_terrain.gd" id="1_54soq"]
+[ext_resource type="Script" uid="uid://chnj5d7l4n5a2" path="res://Level 1/arena_terrain Scripts/2nd/debug_rays_3d.gd" id="2_mj4ip"]
+[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Player Scripts/free_camera/free_camera.gd" id="3_0hmru"]
+[ext_resource type="ArrayMesh" uid="uid://dol5vtkcruooj" path="res://Mesh/Enemy-Meshs/Crystal Beast/CB.res" id="4_6stp5"]
+[ext_resource type="Shader" uid="uid://bxql8nmnesa4d" path="res://Level 1/arena_terrain Shaders/flipbook.gdshader" id="5_neint"]
+[ext_resource type="Texture2D" uid="uid://bm6ssg1t8xclw" path="res://VFX/Gun effects/Noise Textures/w.png" id="6_c54l7"]
+[ext_resource type="Script" uid="uid://coorj38ldx2pk" path="res://Level 1/arena_terrain Scripts/2nd/Y-Billboard.gd" id="7_g7d3h"]
+[ext_resource type="Texture2D" uid="uid://xymrhv0teve0" path="res://VFX/Gun effects/Noise Textures/T_fire_flipbook4_sm.png" id="8_64ptx"]
+
+[sub_resource type="Environment" id="Environment_u45fm"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_pp5uu"]
+render_priority = 0
+shader = ExtResource("5_neint")
+shader_parameter/flipbook = ExtResource("6_c54l7")
+shader_parameter/hframes = 5
+shader_parameter/vframes = 5
+shader_parameter/fps = 14.0
+shader_parameter/fade_start = 0.2
+shader_parameter/fade_end = 1.0
+shader_parameter/soft_alpha = 0.12
+
+[sub_resource type="QuadMesh" id="QuadMesh_anvdn"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_axocn"]
+transparency = 1
+cull_mode = 2
+shading_mode = 0
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("8_64ptx")
+billboard_mode = 3
+billboard_keep_scale = true
+particles_anim_h_frames = 5
+particles_anim_v_frames = 5
+particles_anim_loop = true
+proximity_fade_enabled = true
+proximity_fade_distance = 0.05
+
+[sub_resource type="Gradient" id="Gradient_pi6y6"]
+offsets = PackedFloat32Array(0.087878786, 0.4522727)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_286w4"]
+gradient = SubResource("Gradient_pi6y6")
+use_hdr = true
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_j2f4b"]
+emission_shape = 3
+emission_box_extents = Vector3(0.015, 0.15, 0.005)
+angle_min = -179.99998
+angle_max = 180.00002
+orbit_velocity_min = 9.49949e-08
+orbit_velocity_max = 9.49949e-08
+radial_velocity_min = 0.059977647
+radial_velocity_max = 0.059977647
+gravity = Vector3(0, 0, 0)
+color_ramp = SubResource("GradientTexture1D_286w4")
+hue_variation_min = 0.99999994
+hue_variation_max = 0.99999994
+anim_speed_min = 1.0
+anim_speed_max = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_il6ca"]
+
+[node name="Arena" type="Node3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.9783936, 0)
+script = ExtResource("1_54soq")
+world_size_m = 6000.0
+height_scale = 8000.0
+height_step = 400.0
+min_height = 400.0
+max_height = 8000.0
+center_flat_radius_m = 100.0
+outer_floor_height = 0.0
+box_height = 6000.0
+build_ceiling = true
+extra_ramps_per_component = 8
+pit_fill_passes = 4
+per_level_ramp_budget = 512
+ramp_color = Color(0.35494238, 0, 0.35494238, 1)
+ramp_regen_guard = 16
+peak_max_cells = 64
+ramp_clearance_radius = 2
+ramp_clearance_max_fixes_per_ramp = 8
+ramp_jump_detector_radius = 6
+ramp_jump_detector_max_fixes_per_ramp = 8
+ramp_jump_detector_debug_print = true
+overhang_min_drop = 8.0
+overhang_max_neighbor_delta = 4.0
+overhang_zfight_epsilon = 0.1
+tunnel_floor_y = 0.0
+tunnel_height = 400.0
+tunnel_height_steps = 1
+tunnel_floor_clearance_from_box = 1.0
+tunnel_extra_outpoints = 0
+tunnel_color = Color(0.07080782, 0.16906857, 0.34768933, 1)
+tunnel_occluder_enabled = false
+tunnel_occluder_y = 0.0
+terrain_color = Color(0.18458205, 0.35035378, 0.89357436, 1)
+box_color = Color(0.46, 0.14444001, 0.07360002, 1)
+debug_vertex_colors = true
+sun_height = 6000.0
+debug_surface_labels_enabled = true
+debug_cell_labels_enabled = true
+debug_surface_labels_font_size = 128
+debug_surface_labels_pixel_size = 0.05
+debug_surface_labels_max_distance = 10000.0
+debug_tag_colors_enabled = true
+debug_box_color = Color(4.3943375e-05, 0.1973514, 0.60743827, 1)
+debug_tag_emission = 5.0
+grid_wire_alpha = 0.77
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_u45fm")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.99999684, -0.00010691206, -0.0025112333, 0.0025134087, -0.04283459, -0.999079, -7.501959e-07, -0.99908215, 0.04283472, 0, 0, 0)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.005235962, 0.9999863, 0, -0.9999863, 0.005235962, 0, 0, 0)
+
+[node name="DebugRays" type="Node3D" parent="."]
+script = ExtResource("2_mj4ip")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="DebugRays"]
+transform = Transform3D(1, 0, 0, 0, 0.8129178, 0.5823784, 0, -0.5823784, 0.8129178, -42.141945, 2299.234, 212.96431)
+
+[node name="TerrainBody" type="StaticBody3D" parent="."]
+
+[node name="TerrainMesh" type="MeshInstance3D" parent="TerrainBody"]
+
+[node name="TerrainCollision" type="CollisionShape3D" parent="TerrainBody"]
+debug_color = Color(0.7136055, 0.1201274, 0.37301746, 0.41960785)
+
+[node name="DebugCamera" type="Camera3D" parent="TerrainBody"]
+transform = Transform3D(0.99767137, -0.007002533, 0.067844264, 0.010073306, 0.99893504, -0.045026265, -0.067456715, 0.04560483, 0.9966794, -44.69645, 2276.0254, 200.3118)
+current = true
+fov = 82.2
+far = 1000000.0
+script = ExtResource("3_0hmru")
+move_speed = 300.0
+sprint_multiplier = 2.0
+accel = 30.0
+enable_fly_vertical = false
+
+[node name="BaseVisuals" type="Node3D" parent="TerrainBody"]
+
+[node name="BaseFloor" type="MeshInstance3D" parent="TerrainBody/BaseVisuals"]
+
+[node name="BaseWalls" type="MeshInstance3D" parent="TerrainBody/BaseVisuals"]
+
+[node name="BaseRamps" type="MeshInstance3D" parent="TerrainBody/BaseVisuals"]
+
+[node name="Player" type="MeshInstance3D" parent="TerrainBody"]
+transform = Transform3D(-159.20972, -1.7613424e-05, -15.882865, -1.374881e-05, 160, -3.9615246e-05, 15.882865, -3.8054764e-05, -159.20972, -51.842934, 2923.0757, 198.64146)
+mesh = ExtResource("4_6stp5")
+skeleton = NodePath("../..")
+
+[node name="ReflectionProbe" type="ReflectionProbe" parent="TerrainBody/Player"]
+transform = Transform3D(0.016666675, 9.6741254e-11, 1.7462298e-09, -2.7755576e-16, 0.01666666, 2.4441915e-10, 3.4924597e-10, 0, 0.016666668, 0, 1.4777565, -2.3841858e-07)
+
+[node name="Pcd" type="MeshInstance3D" parent="."]
+transform = Transform3D(-10, 0, -1.509958e-06, 0, 10, 0, 1.509958e-06, 0, -10, 56.217438, 2266.995, 221.04411)
+visible = false
+material_override = SubResource("ShaderMaterial_pp5uu")
+mesh = SubResource("QuadMesh_anvdn")
+script = ExtResource("7_g7d3h")
+
+[node name="GPUParticles3D" type="GPUParticles3D" parent="."]
+transform = Transform3D(30, 0, 0, 0, -1.3113416e-06, 30, 0, -30, -1.3113416e-06, 2.0077572, 2359.0952, 4.7525063)
+visible = false
+material_override = SubResource("StandardMaterial3D_axocn")
+amount = 30
+local_coords = true
+process_material = SubResource("ParticleProcessMaterial_j2f4b")
+draw_pass_1 = SubResource("QuadMesh_il6ca")
