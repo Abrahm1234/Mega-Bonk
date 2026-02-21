@@ -3104,18 +3104,26 @@ func _cell_walk_y(i: int) -> float:
 		return _NEG_INF
 	return _heights[i]
 
-func _is_walkable_floor_idx(i: int, n: int) -> bool:
+func _is_base_walkable_floor_idx(i: int, n: int) -> bool:
 	if i < 0 or i >= n * n:
 		return false
-	if _overhang_mask.size() == n * n and _overhang_mask[i] != 0:
-		return true
 	if _grid_tags.size() != n * n:
 		return false
 	var t: int = int(_grid_tags[i])
 	if (t & TAG_SURFACE_HOLE) != 0:
 		return false
-	if (t & TAG_OVERHANG) != 0:
+	if (t & TAG_RAMP) != 0:
 		return true
+	return (t & TAG_FLAT_SURFACE) != 0
+
+func _is_walkable_floor_idx(i: int, n: int) -> bool:
+	if i < 0 or i >= n * n:
+		return false
+	if _grid_tags.size() != n * n:
+		return false
+	var t: int = int(_grid_tags[i])
+	if (t & TAG_SURFACE_HOLE) != 0:
+		return false
 	if (t & TAG_RAMP) != 0:
 		return overhang_allow_on_ramp_neighbors
 	return (t & TAG_FLAT_SURFACE) != 0
@@ -3218,7 +3226,7 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 					Vector3(rect.position.x, y, rect.position.y + rect.size.y)
 				])
 				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "overhang": true})
-				_grid_tags[anchor] = int(_grid_tags[anchor]) | TAG_OVERHANG
+				_overhang_mask[anchor] = 1
 				emitted += 1
 
 	return emitted
@@ -3275,6 +3283,11 @@ func _build_mesh_and_collision(n: int) -> void:
 					uv_scale_top,
 					top_col
 				)
+
+	if _overhang_mask.size() != n * n:
+		_overhang_mask = PackedByteArray()
+		_overhang_mask.resize(n * n)
+	_overhang_mask.fill(0)
 
 	_last_overhang_quad_count = _emit_overhangs(st, n, uv_scale_top, levels)
 
