@@ -3,6 +3,7 @@ extends Node3D
 @export var width: int = 30
 @export var height: int = 30
 @export var depth: int = 30
+@export_range(0.1, 100000.0, 0.1, "or_greater") var cell_size: float = 1.0
 @export var num_points: int = 12
 @export var additional_pathway_chance: float = 0.1
 @export var max_additional_pathways: int = 5
@@ -25,6 +26,7 @@ var room_mesh_instances: Array = []
 
 
 func _ready():
+	Grid.set_step_size(Vector3.ONE * max(0.0001, cell_size))
 	print("Grid setup with step size:", Grid.STEP_SIZE)
 	if not check_dependencies():
 		push_error("Required singleton(s) not found.")
@@ -52,16 +54,20 @@ func generate_dungeon():
 
 func generate_random_points():
 	random_points.clear()
-	var min_distance = Grid.STEP_SIZE.x * 8
-	var margin = Grid.STEP_SIZE.x * 6
+
+	var min_distance_cells := 8
+	var margin_cells := 6
+	var step := Grid.STEP_SIZE.x
+	var min_distance_world := float(min_distance_cells) * step
 
 	while random_points.size() < num_points:
-		var new_point = Vector3(
-			_random.randi_range(margin, width * Grid.STEP_SIZE.x - margin - 1),
-			_random.randi_range(margin, height * Grid.STEP_SIZE.y - margin - 1),
-			_random.randi_range(margin, depth * Grid.STEP_SIZE.z - margin - 1)
-		)
-		if Grid.is_within_bounds(new_point) and random_points.all(func(p): return p.distance_to(new_point) > min_distance):
+		var x_cell = _random.randi_range(margin_cells, max(margin_cells, width - margin_cells - 1))
+		var y_cell = _random.randi_range(margin_cells, max(margin_cells, height - margin_cells - 1))
+		var z_cell = _random.randi_range(margin_cells, max(margin_cells, depth - margin_cells - 1))
+
+		var new_point = Vector3(x_cell * step, y_cell * step, z_cell * step)
+
+		if Grid.is_within_bounds(new_point) and random_points.all(func(p): return p.distance_to(new_point) > min_distance_world):
 			random_points.append(new_point)
 
 	if debug_mode:
