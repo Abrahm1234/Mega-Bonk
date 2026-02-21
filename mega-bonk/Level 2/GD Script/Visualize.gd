@@ -241,7 +241,7 @@ func visualize_cubes(cubes, color, instances):
 func visualize_data_points():
 	for point in input_points:
 		var sphere_mesh = SphereMesh.new()
-		sphere_mesh.radius = sphere_size
+		sphere_mesh.radius = max(0.01, Grid.STEP_SIZE.x * sphere_size)
 
 		var material = StandardMaterial3D.new()
 		material.albedo_color = Color(1, 1, 0)  # Yellow for points
@@ -343,6 +343,9 @@ func create_wire_mesh():
 		print("Invalid grid dimensions: width=", grid_width, ", height=", grid_height, ", depth=", grid_depth)
 		return
 
+	var step := Grid.STEP_SIZE
+	var max_y := grid_height * step.y
+
 	var wire_material = StandardMaterial3D.new()
 	wire_material.flags_transparent = true
 	wire_material.flags_unshaded = true
@@ -356,8 +359,8 @@ func create_wire_mesh():
 	# Add vertical lines
 	for x in range(grid_width + 1):
 		for z in range(grid_depth + 1):
-			vertices.append(Vector3(x, 0, z))
-			vertices.append(Vector3(x, grid_height, z))
+			vertices.append(Vector3(x * step.x, 0, z * step.z))
+			vertices.append(Vector3(x * step.x, max_y, z * step.z))
 			indices.append(index)
 			indices.append(index + 1)
 			index += 2
@@ -365,8 +368,8 @@ func create_wire_mesh():
 	# Add horizontal lines
 	for y in range(grid_height + 1):
 		for z in range(grid_depth + 1):
-			vertices.append(Vector3(0, y, z))
-			vertices.append(Vector3(grid_width, y, z))
+			vertices.append(Vector3(0, y * step.y, z * step.z))
+			vertices.append(Vector3(grid_width * step.x, y * step.y, z * step.z))
 			indices.append(index)
 			indices.append(index + 1)
 			index += 2
@@ -374,8 +377,8 @@ func create_wire_mesh():
 	# Add depth lines
 	for x in range(grid_width + 1):
 		for y in range(grid_height + 1):
-			vertices.append(Vector3(x, y, 0))
-			vertices.append(Vector3(x, y, grid_depth))
+			vertices.append(Vector3(x * step.x, y * step.y, 0))
+			vertices.append(Vector3(x * step.x, y * step.y, grid_depth * step.z))
 			indices.append(index)
 			indices.append(index + 1)
 			index += 2

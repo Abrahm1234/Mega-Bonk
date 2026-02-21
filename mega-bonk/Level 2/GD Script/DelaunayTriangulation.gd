@@ -9,7 +9,7 @@ func delaunay_triangulation(input_points: Array) -> Array:
 
 	# Ensure input points are snapped to the grid
 	for i in range(input_points.size()):
-		input_points[i] = input_points[i].snapped(Vector3(1, 1, 1))
+		input_points[i] = input_points[i].snapped(Grid.STEP_SIZE)
 
 	print("Normalized and snapped points: " + str(input_points))
 

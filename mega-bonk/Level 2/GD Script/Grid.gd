@@ -7,13 +7,19 @@ var grid_height: int
 var grid_depth: int
 var grid = []
 
-# Fixed step size for the grid
-const STEP_SIZE: Vector3 = Vector3(1, 1, 1)
+var STEP_SIZE: Vector3 = Vector3(1, 1, 1)
+
+func set_step_size(new_step_size: Vector3) -> void:
+	STEP_SIZE = Vector3(
+		max(0.0001, new_step_size.x),
+		max(0.0001, new_step_size.y),
+		max(0.0001, new_step_size.z)
+	)
 
 func initialize(_width: int, _height: int, _depth: int):
-	grid_width = int(ceil(_width / STEP_SIZE.x))
-	grid_height = int(ceil(_height / STEP_SIZE.y))
-	grid_depth = int(ceil(_depth / STEP_SIZE.z))
+	grid_width = max(1, _width)
+	grid_height = max(1, _height)
+	grid_depth = max(1, _depth)
 
 	grid.resize(grid_width)
 	for x in range(grid_width):
