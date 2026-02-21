@@ -40,13 +40,15 @@ uniform bool debug_show_vertex_color = false;
 uniform bool debug_show_tag_colors = false;
 
 uniform vec4 debug_floor_color : source_color = vec4(0.10, 1.00, 0.10, 1.0);
+uniform vec4 debug_overhang_color : source_color = vec4(1.00, 0.20, 0.80, 1.0);
 uniform vec4 debug_wall_color  : source_color = vec4(0.20, 0.55, 1.00, 1.0);
 uniform vec4 debug_ramp_color  : source_color = vec4(1.00, 0.20, 0.20, 1.0);
 uniform vec4 debug_box_color   : source_color = vec4(0.25, 0.25, 0.25, 1.0);
 uniform float debug_tag_emission = 0.0;
 
-const float TAG_TOP  = 0.00;
-const float TAG_WALL = 0.55;
+const float TAG_TOP      = 0.00;
+const float TAG_OVERHANG = 0.15;
+const float TAG_WALL     = 0.55;
 const float TAG_RAMP = 0.80;
 const float TAG_BOX  = 1.00;
 
@@ -108,6 +110,7 @@ void vertex() {
 	v_tag = COLOR.a;
 
 	float is_top  = decode_is(v_tag, TAG_TOP);
+	float is_overhang = decode_is(v_tag, TAG_OVERHANG);
 	float is_wall = decode_is(v_tag, TAG_WALL);
 	float is_ramp = decode_is(v_tag, TAG_RAMP);
 	float is_box  = decode_is(v_tag, TAG_BOX);
@@ -117,11 +120,11 @@ void vertex() {
 		is_ramp = 0.0;
 	}
 
-	float disp_strength = disp_strength_top * is_top
+	float disp_strength = disp_strength_top * (is_top + is_overhang)
 	                    + disp_strength_wall * is_wall
 	                    + disp_strength_ramp * is_ramp;
 
-	float disp_scale = disp_scale_top * is_top
+	float disp_scale = disp_scale_top * (is_top + is_overhang)
 	                 + disp_scale_wall * is_wall
 	                 + disp_scale_ramp * is_ramp;
 
@@ -147,7 +150,7 @@ void vertex() {
 	float seam = seam_lock_use_world_cell ? seam_uv2 : seam_local;
 	disp *= seam * (1.0 - is_box);
 
-	if (is_top > 0.5 || is_ramp > 0.5) {
+	if (is_top > 0.5 || is_overhang > 0.5 || is_ramp > 0.5) {
 		disp = -abs(disp);
 	}
 
@@ -156,7 +159,7 @@ void vertex() {
 	vec3 dir_top = vec3(0.0, -1.0, 0.0);
 	vec3 dir_wall = normalize(vec3(to_center_xz.x, 0.0, to_center_xz.y) + vec3(1e-6, 0.0, 1e-6));
 	vec3 dir_ramp = normalize(mix(normalize(NORMAL), dir_top, 0.65));
-	vec3 local_dir = dir_top * is_top + dir_wall * is_wall + dir_ramp * is_ramp;
+	vec3 local_dir = dir_top * (is_top + is_overhang) + dir_wall * is_wall + dir_ramp * is_ramp;
 	local_dir = normalize(local_dir + vec3(1e-6));
 
 	VERTEX += local_dir * disp;
@@ -197,6 +200,7 @@ void vertex() {
 
 void fragment() {
 	float is_top  = decode_is(v_tag, TAG_TOP);
+	float is_overhang = decode_is(v_tag, TAG_OVERHANG);
 	float is_wall = decode_is(v_tag, TAG_WALL);
 	float is_ramp = decode_is(v_tag, TAG_RAMP);
 	float is_box  = decode_is(v_tag, TAG_BOX);
@@ -209,6 +213,7 @@ void fragment() {
 	} else if (debug_show_tag_colors) {
 		vec3 tag_col =
 			debug_floor_color.rgb * is_top +
+			debug_overhang_color.rgb * is_overhang +
 			debug_wall_color.rgb  * is_wall +
 			debug_ramp_color.rgb  * is_ramp;
 		tag_col = mix(tag_col, debug_box_color.rgb, is_box);
@@ -222,7 +227,7 @@ void fragment() {
 		vec3 a_wall = texture(albedo_wall, UV).rgb;
 		vec3 a_ramp = texture(albedo_ramp, UV).rgb;
 
-		vec3 albedo = a_top * is_top + a_wall * is_wall + a_ramp * is_ramp;
+		vec3 albedo = a_top * (is_top + is_overhang) + a_wall * is_wall + a_ramp * is_ramp;
 		ALBEDO = mix(albedo, vec3(0.08), is_box);
 		EMISSION = vec3(0.0);
 
@@ -233,7 +238,7 @@ void fragment() {
 		NORMAL = n_view;
 
 		if (normal_strength > 0.001) {
-			vec3 nt = (texture(normal_top,  UV).rgb * 2.0 - 1.0) * is_top;
+			vec3 nt = (texture(normal_top,  UV).rgb * 2.0 - 1.0) * (is_top + is_overhang);
 			vec3 nw = (texture(normal_wall, UV).rgb * 2.0 - 1.0) * is_wall;
 			vec3 nr = (texture(normal_ramp, UV).rgb * 2.0 - 1.0) * is_ramp;
 			vec3 nm = normalize(nt + nw + nr);
