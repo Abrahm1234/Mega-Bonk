@@ -3427,9 +3427,14 @@ func _is_walkable_top_cell(x: int, z: int, n: int) -> bool:
 	if not _in_bounds(x, z, n):
 		return false
 	var idx: int = _idx2(x, z, n)
-	if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0:
+	if idx < 0 or idx >= _grid_tags.size():
 		return false
-	return true
+	var tags: int = int(_grid_tags[idx])
+	if (tags & TAG_SURFACE_HOLE) != 0:
+		return false
+	if (tags & TAG_RAMP) != 0:
+		return true
+	return (tags & TAG_FLAT_SURFACE) != 0
 
 func _adjacency_mask_nesw(x: int, z: int, n: int) -> int:
 	var mask := 0
@@ -3462,12 +3467,14 @@ func _surface_module_key(kind: int, x: int, z: int, extra: Dictionary, n: int) -
 func _warn_if_mesh_collision_scale_mismatch() -> void:
 	if not warn_on_mesh_collision_scale_mismatch:
 		return
-	var mesh_parent := mesh_instance.get_parent_node_3d() if mesh_instance != null else null
-	var col_parent := collision_shape.get_parent_node_3d() if collision_shape != null else null
-	if mesh_parent == null or col_parent == null:
+	if mesh_instance == null or collision_shape == null:
 		return
-	if mesh_parent.global_basis.get_scale().distance_to(col_parent.global_basis.get_scale()) > 0.001:
-		push_warning("TerrainMesh and TerrainCollision parent scales differ; debug overlays may appear misaligned.")
+	var mesh_scale: Vector3 = mesh_instance.global_transform.basis.get_scale()
+	var col_scale: Vector3 = collision_shape.global_transform.basis.get_scale()
+	var mesh_pos: Vector3 = mesh_instance.global_transform.origin
+	var col_pos: Vector3 = collision_shape.global_transform.origin
+	if mesh_scale.distance_to(col_scale) > 0.001 or mesh_pos.distance_to(col_pos) > 0.01:
+		push_warning("TerrainMesh and TerrainCollision transforms differ (scale/pos); collision debug may appear misaligned.")
 
 func _build_surface_registry_from_layout(n: int) -> void:
 	var eps := 0.0001
