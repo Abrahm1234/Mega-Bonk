@@ -223,7 +223,9 @@ func _run_pattern_stamping() -> void:
 				if _pattern_matches_at(pattern, x, y):
 					_mark_pattern_occupied(size, x, y)
 					var t: Array = _piece_transforms[pattern["id"]] as Array
-					t.append(Transform3D(Basis.IDENTITY, _pattern_anchor_to_world(x, y, size)))
+					var rot_steps: int = int(pattern.get("rot_steps", 0))
+					var yaw: float = rot_steps * PI * 0.5
+					t.append(Transform3D(Basis(Vector3.UP, yaw), _pattern_anchor_to_world(x, y, size)))
 
 	_build_piece_multimeshes()
 
