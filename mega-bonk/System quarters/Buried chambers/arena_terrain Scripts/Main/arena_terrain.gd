@@ -3769,7 +3769,7 @@ func _instance_surface_module(root: Node3D, surf: Dictionary) -> bool:
 		rot_steps = int(extra.get("out_dir", 0))
 	inst.rotation.y = deg_to_rad(float((rot_steps % 4) * 90))
 	if kind == SurfaceKind.WALL or kind == SurfaceKind.RAMP:
-		var span := max(1, int(extra.get("span", 1)))
+		var span: int = maxi(1, int(extra.get("span", 1)))
 		inst.scale.y = float(span)
 	root.add_child(inst)
 	return true
