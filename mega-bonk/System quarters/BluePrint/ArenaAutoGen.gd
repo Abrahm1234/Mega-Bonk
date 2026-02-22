@@ -23,6 +23,16 @@ const DIRS4: Array[Vector2i] = [
 @export var cell_size: float = 2.0
 @export var floor_thickness: float = 0.25
 
+enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
+
+@export var origin_mode: OriginMode = OriginMode.MIN_CORNER
+@export var origin_offset: Vector3 = Vector3.ZERO
+@export var origin_anchor_path: NodePath
+
+# If TRUE: grid coordinates are *cell centers* at x*cell_size
+# If FALSE: grid coordinates are *cell corners*, centers are (x+0.5)*cell_size
+@export var cell_coords_are_centers: bool = true
+
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
 @export var wall_thickness: float = 0.25
@@ -220,8 +230,31 @@ func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float)
 # -----------------------------
 
 func _cell_to_world_center(x: int, y: int) -> Vector3:
-	var origin: Vector3 = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
-	return origin + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+	var base: Vector3 = Vector3.ZERO
+
+	match origin_mode:
+		OriginMode.MIN_CORNER:
+			base = Vector3.ZERO
+		OriginMode.CENTERED:
+			# Center the whole grid around (0,0,0)
+			if cell_coords_are_centers:
+				# centers span 0..(grid_w-1)
+				base = Vector3(-((grid_w - 1) * cell_size) * 0.5, 0.0, -((grid_h - 1) * cell_size) * 0.5)
+			else:
+				# cells span 0..grid_w (because we use +0.5 centers)
+				base = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
+		OriginMode.CUSTOM_ANCHOR:
+			var a: Node = get_node_or_null(origin_anchor_path)
+			if a is Node3D:
+				base = to_local((a as Node3D).global_position)
+			else:
+				base = Vector3.ZERO
+
+	base += origin_offset
+
+	if cell_coords_are_centers:
+		return base + Vector3(x * cell_size, 0.0, y * cell_size)
+	return base + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
 
 func _idx(x: int, y: int) -> int:
 	return y * grid_w + x
