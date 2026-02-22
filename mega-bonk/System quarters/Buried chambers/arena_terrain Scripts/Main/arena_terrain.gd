@@ -3257,7 +3257,7 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 					Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y),
 					Vector3(rect.position.x, y, rect.position.y + rect.size.y)
 				])
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "overhang": true})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true})
 				_overhang_mask[anchor] = 1
 				emitted += 1
 
@@ -3396,6 +3396,11 @@ func _register_overhangs_from_layout(n: int, levels: PackedInt32Array) -> void:
 				var bridge_level: int = mini(levels[anchor], mini(levels[ia], levels[ib]))
 				var y: float = _quantize_y_to_grid(_level_to_h(bridge_level)) + overhang_zfight_epsilon
 				var pts := _overhang_patch_points(cell_corners, float(rec["u0"]), float(rec["v0"]), float(rec["u1"]), float(rec["v1"]))
+				var cx := (pts[0].x + pts[1].x + pts[2].x + pts[3].x) * 0.25
+				var cz := (pts[0].y + pts[1].y + pts[2].y + pts[3].y) * 0.25
+				var existing_top: float = _sample_top_surface_y(cx, cz)
+				if existing_top > _NEG_INF and existing_top >= y - 0.001:
+					continue
 				_register_surface(
 					SurfaceKind.FLOOR,
 					Vector2i(x, z),
@@ -3409,7 +3414,7 @@ func _register_overhangs_from_layout(n: int, levels: PackedInt32Array) -> void:
 						Vector3(pts[3].x, y, pts[3].y)
 					]),
 					Vector3.UP,
-					{"floor_level": bridge_level, "overhang": true}
+					{"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true}
 				)
 				_overhang_mask[anchor] = 1
 				emitted += 1
@@ -3444,9 +3449,9 @@ func _build_surface_registry_from_layout(n: int) -> void:
 			])
 			var floor_level := grid_y_to_level((c0.x + c0.y + c0.z + c0.w) * 0.25)
 			if is_ramp:
-				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "ramp_dir": ramp_dir})
+				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "ramp_dir": ramp_dir})
 			else:
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w)))})
 
 	_register_overhangs_from_layout(n, levels)
 
@@ -3508,11 +3513,15 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		var saved_surfaces: Array[Dictionary] = _surfaces.duplicate(true)
 		var saved_surface_by_id: Dictionary = _surface_by_id.duplicate(true)
 		var saved_cell_surface_ids: Array = _cell_surface_ids.duplicate(true)
+		var saved_overhang_mask: PackedByteArray = _overhang_mask
+		var saved_last_overhang_quad_count: int = _last_overhang_quad_count
 		_build_mesh_and_collision(n)
 		_surface_next_id = saved_surface_next_id
 		_surfaces = saved_surfaces
 		_surface_by_id = saved_surface_by_id
 		_cell_surface_ids = saved_cell_surface_ids
+		_overhang_mask = saved_overhang_mask
+		_last_overhang_quad_count = saved_last_overhang_quad_count
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
