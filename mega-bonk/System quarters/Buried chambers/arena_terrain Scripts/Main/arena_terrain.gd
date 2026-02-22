@@ -3479,7 +3479,7 @@ func _build_surface_registry_from_layout(n: int) -> void:
 						var v1 := Vector3(pA[2].x, top1, pA[2].y)
 						var v2 := Vector3(pB[3].x, bot1, pB[3].y)
 						var v3 := Vector3(pB[0].x, bot0, pB[0].y)
-						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1))})
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1)), "out_dir": SurfaceSide.E})
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
@@ -3502,7 +3502,7 @@ func _build_surface_registry_from_layout(n: int) -> void:
 						var s1 := Vector3(pA[2].x, top1z, pA[2].y)
 						var s2 := Vector3(pC[1].x, bot1z, pC[1].y)
 						var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
-						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z))})
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z)), "out_dir": SurfaceSide.S})
 
 func _build_modular_visuals_from_surfaces(n: int) -> void:
 	if use_legacy_blocky_renderer:
@@ -3531,12 +3531,17 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		var verts: PackedVector3Array = surf.get("verts_local", PackedVector3Array())
 		if verts.size() < 4:
 			continue
+		var extra: Dictionary = surf.get("extra", {})
+		var is_overhang: bool = bool(extra.get("overhang", false))
 		var col := terrain_color
 		if kind == SurfaceKind.WALL:
 			col.a = SURF_WALL
 		elif kind == SurfaceKind.RAMP:
 			col = ramp_color
 			col.a = SURF_RAMP
+		elif is_overhang:
+			col = overhang_color
+			col.a = SURF_OVERHANG
 		else:
 			col.a = SURF_TOP
 		var uv_scale := tiles_per_cell
@@ -3545,7 +3550,6 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		var uc := Vector2(1, 1) * uv_scale
 		var ud := Vector2(0, 1) * uv_scale
 		if kind == SurfaceKind.RAMP:
-			var extra: Dictionary = surf.get("extra", {})
 			var ramp_dir: int = int(extra.get("ramp_dir", RAMP_NONE))
 			ua = _ramp_uv(0.0, 0.0, ramp_dir) * uv_scale
 			ub = _ramp_uv(1.0, 0.0, ramp_dir) * uv_scale
