@@ -5,6 +5,9 @@
 
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
+origin_mode = 0
+origin_offset = Vector3(0, 0, 0)
+cell_size = 2.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = Environment.new()
@@ -20,6 +23,30 @@ current = true
 [node name="Arena" type="Node3D" parent="."]
 
 [node name="FloorTiles" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Floor_full" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Floor_edge" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Floor_corner" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Floor_inverse_corner" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Floor_checker" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Piece_2x2_full" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Piece_3x1_edge" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+
+[node name="Piece_2x2_bay" type="MultiMeshInstance3D" parent="Arena"]
 visible = true
 
 [node name="WallTiles" type="MultiMeshInstance3D" parent="Arena"]
