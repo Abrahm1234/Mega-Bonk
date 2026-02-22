@@ -1,14 +1,21 @@
-# File: res://System quarters/BluePrint/ArenaAutoGen.gd
 extends Node3D
 class_name ArenaAutoGen
 
-# Typed directions array to avoid Variant inference warnings (warnings treated as errors).
 const DIRS4: Array[Vector2i] = [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
 	Vector2i(0, 1),
 	Vector2i(0, -1),
 ]
+
+# Canonical masks for dual-grid rendering.
+# 0000 empty, 1111 full, and representative masks for edge/corner-like shapes.
+const CANONICAL_EMPTY: int = 0b0000
+const CANONICAL_FULL: int = 0b1111
+const CANONICAL_CORNER: int = 0b0001
+const CANONICAL_EDGE: int = 0b0011
+const CANONICAL_INVERSE_CORNER: int = 0b0111
+const CANONICAL_CHECKER: int = 0b0101
 
 @export var auto_generate: bool = true
 
@@ -25,7 +32,7 @@ const DIRS4: Array[Vector2i] = [
 
 enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 
-@export var origin_mode: OriginMode = OriginMode.MIN_CORNER
+@export var origin_mode: OriginMode = OriginMode.CUSTOM_ANCHOR
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
 
@@ -45,7 +52,11 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
-var _map: PackedByteArray # 1 = floor, 0 = empty
+
+# Corner-point control grid (dual-grid input): 1 = filled, 0 = empty.
+var _corners: PackedByteArray
+# Derived tile occupancy from corners for floor/wall pass: 1 = occupied, 0 = empty.
+var _tiles: PackedByteArray
 
 func _ready() -> void:
 	if floor_mmi == null or wall_mmi == null:
@@ -61,19 +72,27 @@ func _ready() -> void:
 		generate()
 
 func generate() -> void:
-	_map = PackedByteArray()
-	_map.resize(grid_w * grid_h)
+	if grid_w <= 0 or grid_h <= 0:
+		push_error("ArenaAutoGen: grid_w and grid_h must be > 0")
+		return
 
-	_fill_random()
-	_apply_border_empty()
+	_corners = PackedByteArray()
+	_corners.resize(_points_w() * _points_h())
+
+	_tiles = PackedByteArray()
+	_tiles.resize(grid_w * grid_h)
+
+	_fill_corners_random()
+	_apply_corner_border_empty()
 
 	for _i in range(smoothing_steps):
-		_smooth_step()
-		_apply_border_empty()
+		_smooth_corners_step()
+		_apply_corner_border_empty()
 
 	if ensure_connected:
-		_force_single_region_from_center()
+		_force_single_corner_region_from_center()
 
+	_build_tiles_from_corners()
 	_build_floor_multimesh()
 
 	if make_walls:
@@ -82,48 +101,48 @@ func generate() -> void:
 		wall_mmi.multimesh = null
 
 # -----------------------------
-# Generation
+# Corner-grid generation
 # -----------------------------
 
-func _fill_random() -> void:
-	for y in range(grid_h):
-		for x in range(grid_w):
-			_map[_idx(x, y)] = 1 if _rng.randf() < fill_percent else 0
+func _fill_corners_random() -> void:
+	for y in range(_points_h()):
+		for x in range(_points_w()):
+			_corners[_corner_idx(x, y)] = 1 if _rng.randf() < fill_percent else 0
 
-func _apply_border_empty() -> void:
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if x < border or y < border or x >= grid_w - border or y >= grid_h - border:
-				_map[_idx(x, y)] = 0
+func _apply_corner_border_empty() -> void:
+	for y in range(_points_h()):
+		for x in range(_points_w()):
+			if x < border or y < border or x >= _points_w() - border or y >= _points_h() - border:
+				_corners[_corner_idx(x, y)] = 0
 
-func _smooth_step() -> void:
+func _smooth_corners_step() -> void:
 	var next: PackedByteArray = PackedByteArray()
-	next.resize(grid_w * grid_h)
+	next.resize(_points_w() * _points_h())
 
-	for y in range(grid_h):
-		for x in range(grid_w):
-			var neighbor_count: int = _count_neighbors8(x, y)
-			var here: int = _cell_get(x, y)
+	for y in range(_points_h()):
+		for x in range(_points_w()):
+			var neighbor_count: int = _count_corner_neighbors8(x, y)
+			var here: int = _corner_get(x, y)
 
 			if neighbor_count > 4:
-				next[_idx(x, y)] = 1
+				next[_corner_idx(x, y)] = 1
 			elif neighbor_count < 4:
-				next[_idx(x, y)] = 0
+				next[_corner_idx(x, y)] = 0
 			else:
-				next[_idx(x, y)] = here
+				next[_corner_idx(x, y)] = here
 
-	_map = next
+	_corners = next
 
-func _force_single_region_from_center() -> void:
-	var start: Vector2i = Vector2i(int(grid_w / 2), int(grid_h / 2))
+func _force_single_corner_region_from_center() -> void:
+	var start: Vector2i = Vector2i(int(_points_w() / 2), int(_points_h() / 2))
 
-	if _cell_get(start.x, start.y) == 0:
+	if _corner_get(start.x, start.y) == 0:
 		var found: bool = false
-		for r in range(1, max(grid_w, grid_h)):
+		for r in range(1, max(_points_w(), _points_h())):
 			for dy in range(-r, r + 1):
 				for dx in range(-r, r + 1):
 					var p: Vector2i = start + Vector2i(dx, dy)
-					if _in_bounds(p.x, p.y) and _cell_get(p.x, p.y) == 1:
+					if _corner_in_bounds(p.x, p.y) and _corner_get(p.x, p.y) == 1:
 						start = p
 						found = true
 						break
@@ -135,12 +154,11 @@ func _force_single_region_from_center() -> void:
 			return
 
 	var visited: PackedByteArray = PackedByteArray()
-	visited.resize(grid_w * grid_h)
+	visited.resize(_points_w() * _points_h())
 
 	var q: Array[Vector2i] = [start]
-	visited[_idx(start.x, start.y)] = 1
+	visited[_corner_idx(start.x, start.y)] = 1
 
-	# Head-index queue avoids pop_front() Variant inference.
 	var head: int = 0
 	while head < q.size():
 		var p: Vector2i = q[head]
@@ -148,21 +166,27 @@ func _force_single_region_from_center() -> void:
 
 		for d in DIRS4:
 			var n: Vector2i = p + d
-			if _in_bounds(n.x, n.y) and _cell_get(n.x, n.y) == 1:
-				var ii: int = _idx(n.x, n.y)
+			if _corner_in_bounds(n.x, n.y) and _corner_get(n.x, n.y) == 1:
+				var ii: int = _corner_idx(n.x, n.y)
 				if visited[ii] == 0:
 					visited[ii] = 1
 					q.push_back(n)
 
-	for y in range(grid_h):
-		for x in range(grid_w):
-			var ii: int = _idx(x, y)
-			if _map[ii] == 1 and visited[ii] == 0:
-				_map[ii] = 0
+	for y in range(_points_h()):
+		for x in range(_points_w()):
+			var ii: int = _corner_idx(x, y)
+			if _corners[ii] == 1 and visited[ii] == 0:
+				_corners[ii] = 0
 
 # -----------------------------
-# Meshing (MultiMesh)
+# Dual-grid conversion + meshing
 # -----------------------------
+
+func _build_tiles_from_corners() -> void:
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var mask: int = _mask_at_tile(x, y)
+			_tiles[_tile_idx(x, y)] = 1 if _tile_filled_from_mask(mask) else 0
 
 func _build_floor_multimesh() -> void:
 	var mm: MultiMesh = MultiMesh.new()
@@ -176,10 +200,18 @@ func _build_floor_multimesh() -> void:
 
 	for y in range(grid_h):
 		for x in range(grid_w):
-			if _cell_get(x, y) == 1:
-				var pos: Vector3 = _cell_to_world_center(x, y)
-				pos.y = floor_thickness * 0.5
-				transforms.append(Transform3D(Basis.IDENTITY, pos))
+			if _tile_get(x, y) == 0:
+				continue
+
+			var mask: int = _mask_at_tile(x, y)
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
+
+			var pos: Vector3 = _cell_to_world_center(x, y)
+			pos.y = floor_thickness * 0.5
+			var yaw: float = rotation_steps * PI * 0.5
+			var basis: Basis = Basis(Vector3.UP, yaw)
+			transforms.append(Transform3D(basis, pos))
 
 	mm.instance_count = transforms.size()
 	for i in range(transforms.size()):
@@ -199,16 +231,16 @@ func _build_walls_multimesh() -> void:
 
 	for y in range(grid_h):
 		for x in range(grid_w):
-			if _cell_get(x, y) == 0:
+			if _tile_get(x, y) == 0:
 				continue
 
-			if _cell_get(x, y - 1) == 0:
+			if _tile_get(x, y - 1) == 0:
 				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, -0.5), 0.0))
-			if _cell_get(x, y + 1) == 0:
+			if _tile_get(x, y + 1) == 0:
 				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, 0.5), 0.0))
-			if _cell_get(x - 1, y) == 0:
+			if _tile_get(x - 1, y) == 0:
 				transforms.append(_wall_transform_for_edge(x, y, Vector3(-0.5, 0, 0), PI * 0.5))
-			if _cell_get(x + 1, y) == 0:
+			if _tile_get(x + 1, y) == 0:
 				transforms.append(_wall_transform_for_edge(x, y, Vector3(0.5, 0, 0), PI * 0.5))
 
 	mm.instance_count = transforms.size()
@@ -226,7 +258,55 @@ func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float)
 	return Transform3D(basis, pos)
 
 # -----------------------------
-# Helpers
+# Dual-mask helpers
+# -----------------------------
+
+func _mask_at_tile(x: int, y: int) -> int:
+	var tl: int = _corner_get(x, y)
+	var tr: int = _corner_get(x + 1, y)
+	var br: int = _corner_get(x + 1, y + 1)
+	var bl: int = _corner_get(x, y + 1)
+	return _mask_from_corners(tl, tr, br, bl)
+
+func _mask_from_corners(tl: int, tr: int, br: int, bl: int) -> int:
+	return (tl << 0) | (tr << 1) | (br << 2) | (bl << 3)
+
+func _rot90(mask: int) -> int:
+	var tl: int = (mask >> 0) & 1
+	var tr: int = (mask >> 1) & 1
+	var br: int = (mask >> 2) & 1
+	var bl: int = (mask >> 3) & 1
+	# after 90°: TL<-BL, TR<-TL, BR<-TR, BL<-BR
+	return (bl << 0) | (tl << 1) | (tr << 2) | (br << 3)
+
+func _canonicalize_mask(mask: int) -> Dictionary:
+	var rotated: int = mask
+	for steps in range(4):
+		if rotated == CANONICAL_EMPTY:
+			return {"variant_id": "empty", "rotation_steps": steps}
+		if rotated == CANONICAL_FULL:
+			return {"variant_id": "full", "rotation_steps": steps}
+		if rotated == CANONICAL_CORNER:
+			return {"variant_id": "corner", "rotation_steps": steps}
+		if rotated == CANONICAL_EDGE:
+			return {"variant_id": "edge", "rotation_steps": steps}
+		if rotated == CANONICAL_INVERSE_CORNER:
+			return {"variant_id": "inverse_corner", "rotation_steps": steps}
+		if rotated == CANONICAL_CHECKER:
+			return {"variant_id": "checker", "rotation_steps": steps}
+		rotated = _rot90(rotated)
+	return {"variant_id": "unknown", "rotation_steps": 0}
+
+func _tile_filled_from_mask(mask: int) -> bool:
+	# Dual-grid -> tile occupancy heuristic:
+	# keep tiles that have majority (or all) filled corners.
+	return _bit_count4(mask) >= 2
+
+func _bit_count4(mask: int) -> int:
+	return int(mask & 1) + int((mask >> 1) & 1) + int((mask >> 2) & 1) + int((mask >> 3) & 1)
+
+# -----------------------------
+# Position + indexing helpers
 # -----------------------------
 
 func _cell_to_world_center(x: int, y: int) -> Vector3:
@@ -236,12 +316,9 @@ func _cell_to_world_center(x: int, y: int) -> Vector3:
 		OriginMode.MIN_CORNER:
 			base = Vector3.ZERO
 		OriginMode.CENTERED:
-			# Center the whole grid around (0,0,0)
 			if cell_coords_are_centers:
-				# centers span 0..(grid_w-1)
 				base = Vector3(-((grid_w - 1) * cell_size) * 0.5, 0.0, -((grid_h - 1) * cell_size) * 0.5)
 			else:
-				# cells span 0..grid_w (because we use +0.5 centers)
 				base = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
 		OriginMode.CUSTOM_ANCHOR:
 			var a: Node = get_node_or_null(origin_anchor_path)
@@ -256,23 +333,39 @@ func _cell_to_world_center(x: int, y: int) -> Vector3:
 		return base + Vector3(x * cell_size, 0.0, y * cell_size)
 	return base + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
 
-func _idx(x: int, y: int) -> int:
+func _points_w() -> int:
+	return grid_w + 1
+
+func _points_h() -> int:
+	return grid_h + 1
+
+func _tile_idx(x: int, y: int) -> int:
 	return y * grid_w + x
 
-func _in_bounds(x: int, y: int) -> bool:
+func _corner_idx(x: int, y: int) -> int:
+	return y * _points_w() + x
+
+func _tile_in_bounds(x: int, y: int) -> bool:
 	return x >= 0 and y >= 0 and x < grid_w and y < grid_h
 
-# IMPORTANT: do NOT name this _get(), because Node has _get(property: StringName) -> Variant.
-func _cell_get(x: int, y: int) -> int:
-	if not _in_bounds(x, y):
-		return 0
-	return int(_map[_idx(x, y)])
+func _corner_in_bounds(x: int, y: int) -> bool:
+	return x >= 0 and y >= 0 and x < _points_w() and y < _points_h()
 
-func _count_neighbors8(x: int, y: int) -> int:
+func _tile_get(x: int, y: int) -> int:
+	if not _tile_in_bounds(x, y):
+		return 0
+	return int(_tiles[_tile_idx(x, y)])
+
+func _corner_get(x: int, y: int) -> int:
+	if not _corner_in_bounds(x, y):
+		return 0
+	return int(_corners[_corner_idx(x, y)])
+
+func _count_corner_neighbors8(x: int, y: int) -> int:
 	var c: int = 0
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			if dx == 0 and dy == 0:
 				continue
-			c += _cell_get(x + dx, y + dy)
+			c += _corner_get(x + dx, y + dy)
 	return c
