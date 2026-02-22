@@ -145,6 +145,11 @@ extends Node3D
 @export var debug_box_color: Color = Color(0.25, 0.25, 0.25, 1.0) : set = _set_debug_tag_color_any
 @export_range(0.0, 5.0, 0.1) var debug_tag_emission: float = 0.0 : set = _set_debug_tag_color_any
 @export var debug_tag_color_toggle_key: Key = KEY_F5
+@export var use_irregular_visual_grid: bool = true
+@export_range(0.0, 0.49, 0.01) var irregular_jitter_ratio: float = 0.22
+@export_range(1, 40, 1) var irregular_relax_iterations: int = 14
+@export_range(0.0, 0.49, 0.01) var irregular_min_spacing_ratio: float = 0.18
+@export var use_legacy_blocky_renderer: bool = false
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -201,6 +206,7 @@ var _surface_next_id: int = 1
 var _surfaces: Array[Dictionary] = []
 var _surface_by_id: Dictionary = {}
 var _cell_surface_ids: Array = [] # Array[PackedInt32Array] per (x,z) cell
+var _corner_pos_2d: PackedVector2Array = PackedVector2Array() # (n+1) * (n+1), XZ in grid-local space
 
 # Grid space transforms
 # The grid and generated mesh are authored in the *TerrainMesh local space*.
@@ -1016,11 +1022,20 @@ func _grid_wire_rebuild_mesh() -> void:
 	var im := ImmediateMesh.new() # PRIMITIVE_LINES
 	im.surface_begin(Mesh.PRIMITIVE_LINES, _grid_wire_get_material())
 
+	var use_irregular_wire: bool = use_irregular_visual_grid and _corner_pos_2d.size() == (n + 1) * (n + 1)
+
 	# Vertical lines at each grid intersection (Y axis).
 	for zi in range(n + 1):
-		var z := z0 + float(zi) * _cell_size
 		for xi in range(n + 1):
-			var x := x0 + float(xi) * _cell_size
+			var x: float
+			var z: float
+			if use_irregular_wire:
+				var p := _corner_pos_2d[_corner_idx(xi, zi, n)]
+				x = p.x
+				z = p.y
+			else:
+				x = x0 + float(xi) * _cell_size
+				z = z0 + float(zi) * _cell_size
 			var xn := clampf(x, nx0, nx1)
 			var zn := clampf(z, nz0, nz1)
 			im.surface_add_vertex(Vector3(xn, y0 + nudge, zn))
@@ -1032,19 +1047,33 @@ func _grid_wire_rebuild_mesh() -> void:
 		if yi == y_slices:
 			y = y1
 
-		# X lines (vary X, fixed Z).
-		for zi in range(n + 1):
-			var z := z0 + float(zi) * _cell_size
-			var zn := clampf(z, nz0, nz1)
-			im.surface_add_vertex(Vector3(nx0, y, zn))
-			im.surface_add_vertex(Vector3(nx1, y, zn))
+		if use_irregular_wire:
+			for zi in range(n + 1):
+				for xi in range(n):
+					var pa := _corner_pos_2d[_corner_idx(xi, zi, n)]
+					var pb := _corner_pos_2d[_corner_idx(xi + 1, zi, n)]
+					im.surface_add_vertex(Vector3(clampf(pa.x, nx0, nx1), y, clampf(pa.y, nz0, nz1)))
+					im.surface_add_vertex(Vector3(clampf(pb.x, nx0, nx1), y, clampf(pb.y, nz0, nz1)))
+			for xi in range(n + 1):
+				for zi in range(n):
+					var pc := _corner_pos_2d[_corner_idx(xi, zi, n)]
+					var pd := _corner_pos_2d[_corner_idx(xi, zi + 1, n)]
+					im.surface_add_vertex(Vector3(clampf(pc.x, nx0, nx1), y, clampf(pc.y, nz0, nz1)))
+					im.surface_add_vertex(Vector3(clampf(pd.x, nx0, nx1), y, clampf(pd.y, nz0, nz1)))
+		else:
+			# X lines (vary X, fixed Z).
+			for zi in range(n + 1):
+				var z := z0 + float(zi) * _cell_size
+				var zn := clampf(z, nz0, nz1)
+				im.surface_add_vertex(Vector3(nx0, y, zn))
+				im.surface_add_vertex(Vector3(nx1, y, zn))
 
-		# Z lines (vary Z, fixed X).
-		for xi in range(n + 1):
-			var x := x0 + float(xi) * _cell_size
-			var xn := clampf(x, nx0, nx1)
-			im.surface_add_vertex(Vector3(xn, y, nz0))
-			im.surface_add_vertex(Vector3(xn, y, nz1))
+			# Z lines (vary Z, fixed X).
+			for xi in range(n + 1):
+				var x := x0 + float(xi) * _cell_size
+				var xn := clampf(x, nx0, nx1)
+				im.surface_add_vertex(Vector3(xn, y, nz0))
+				im.surface_add_vertex(Vector3(xn, y, nz1))
 
 	im.surface_end()
 	_grid_wire_instance.mesh = im
@@ -2192,10 +2221,12 @@ func generate() -> void:
 	_grid_init(n)
 	_grid_rebuild_tags(n)
 	_surface_registry_reset(n)
+	_build_irregular_corner_lattice(n, rng)
+	_build_surface_registry_from_layout(n)
 	if _grid_wire_visible:
 		_grid_wire_rebuild_mesh()
 
-	_build_mesh_and_collision(n)
+	_build_modular_visuals_from_surfaces(n)
 	_build_tunnel_mesh(n)
 	print("Ramp slots:", _count_ramps())
 	print("Overhang walkways:", _last_overhang_quad_count)
@@ -3230,6 +3261,193 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 				emitted += 1
 
 	return emitted
+
+func _corner_idx(x: int, z: int, n: int) -> int:
+	return z * (n + 1) + x
+
+func _corner_is_boundary(x: int, z: int, n: int) -> bool:
+	return x == 0 or z == 0 or x == n or z == n
+
+func _corner_rect_min(x: int, z: int, n: int, min_spacing: float) -> Vector2:
+	var min_x := _ox + float(maxi(0, x - 1)) * _cell_size + min_spacing
+	var min_z := _oz + float(maxi(0, z - 1)) * _cell_size + min_spacing
+	if x <= 1:
+		min_x = _ox + float(x) * _cell_size
+	if z <= 1:
+		min_z = _oz + float(z) * _cell_size
+	return Vector2(min_x, min_z)
+
+func _corner_rect_max(x: int, z: int, n: int, min_spacing: float) -> Vector2:
+	var max_x := _ox + float(mini(n, x + 1)) * _cell_size - min_spacing
+	var max_z := _oz + float(mini(n, z + 1)) * _cell_size - min_spacing
+	if x >= n - 1:
+		max_x = _ox + float(x) * _cell_size
+	if z >= n - 1:
+		max_z = _oz + float(z) * _cell_size
+	return Vector2(max_x, max_z)
+
+func _build_irregular_corner_lattice(n: int, rng: RandomNumberGenerator) -> void:
+	var corner_n: int = n + 1
+	_corner_pos_2d = PackedVector2Array()
+	_corner_pos_2d.resize(corner_n * corner_n)
+	for z in range(corner_n):
+		for x in range(corner_n):
+			var idx := _corner_idx(x, z, n)
+			_corner_pos_2d[idx] = Vector2(_ox + float(x) * _cell_size, _oz + float(z) * _cell_size)
+
+	if not use_irregular_visual_grid:
+		return
+
+	var jitter: float = _cell_size * clampf(irregular_jitter_ratio, 0.0, 0.49)
+	for z in range(1, n):
+		for x in range(1, n):
+			var idx := _corner_idx(x, z, n)
+			var p := _corner_pos_2d[idx]
+			p.x += rng.randf_range(-jitter, jitter)
+			p.y += rng.randf_range(-jitter, jitter)
+			_corner_pos_2d[idx] = p
+
+	var iters: int = maxi(1, irregular_relax_iterations)
+	var min_spacing: float = _cell_size * clampf(irregular_min_spacing_ratio, 0.0, 0.49)
+	for _iter in range(iters):
+		var next := _corner_pos_2d
+		for z in range(1, n):
+			for x in range(1, n):
+				var idx := _corner_idx(x, z, n)
+				var acc := Vector2.ZERO
+				var count := 0
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var nx: int = x + d.x
+					var nz: int = z + d.y
+					if nx < 0 or nx > n or nz < 0 or nz > n:
+						continue
+					acc += _corner_pos_2d[_corner_idx(nx, nz, n)]
+					count += 1
+				if count <= 0:
+					continue
+				var p := _corner_pos_2d[idx].lerp(acc / float(count), 0.35)
+				var rmin := _corner_rect_min(x, z, n, min_spacing)
+				var rmax := _corner_rect_max(x, z, n, min_spacing)
+				p.x = clampf(p.x, rmin.x, rmax.x)
+				p.y = clampf(p.y, rmin.y, rmax.y)
+				next[idx] = p
+		_corner_pos_2d = next
+
+func _cell_corner_pos2d(x: int, z: int, n: int) -> Array[Vector2]:
+	if _corner_pos_2d.size() != (n + 1) * (n + 1):
+		return [
+			Vector2(_ox + float(x) * _cell_size, _oz + float(z) * _cell_size),
+			Vector2(_ox + float(x + 1) * _cell_size, _oz + float(z) * _cell_size),
+			Vector2(_ox + float(x + 1) * _cell_size, _oz + float(z + 1) * _cell_size),
+			Vector2(_ox + float(x) * _cell_size, _oz + float(z + 1) * _cell_size)
+		]
+	return [
+		_corner_pos_2d[_corner_idx(x, z, n)],
+		_corner_pos_2d[_corner_idx(x + 1, z, n)],
+		_corner_pos_2d[_corner_idx(x + 1, z + 1, n)],
+		_corner_pos_2d[_corner_idx(x, z + 1, n)]
+	]
+
+func _build_surface_registry_from_layout(n: int) -> void:
+	var eps := 0.0001
+	for z in range(n):
+		for x in range(n):
+			var c0 := _cell_corners(x, z)
+			var p := _cell_corner_pos2d(x, z, n)
+			var idx: int = z * n + x
+			var is_ramp: bool = enable_ramps and _ramp_is_effective_idx(idx, n)
+			var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
+			var verts := PackedVector3Array([
+				Vector3(p[0].x, c0.x, p[0].y),
+				Vector3(p[1].x, c0.y, p[1].y),
+				Vector3(p[2].x, c0.z, p[2].y),
+				Vector3(p[3].x, c0.w, p[3].y)
+			])
+			var floor_level := grid_y_to_level((c0.x + c0.y + c0.z + c0.w) * 0.25)
+			if is_ramp:
+				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "ramp_dir": ramp_dir})
+			else:
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level})
+
+	for z in range(n):
+		for x in range(n):
+			var cA := _cell_corners(x, z)
+			var pA := _cell_corner_pos2d(x, z, n)
+			if x + 1 < n:
+				var cB := _cell_corners(x + 1, z)
+				var pB := _cell_corner_pos2d(x + 1, z, n)
+				var a_e := _edge_pair(cA, 0)
+				var b_w := _edge_pair(cB, 1)
+				var top0 := maxf(a_e.x, b_w.x)
+				var top1 := maxf(a_e.y, b_w.y)
+				var bot0 := minf(a_e.x, b_w.x)
+				var bot1 := minf(a_e.y, b_w.y)
+				if (top0 - bot0) > eps or (top1 - bot1) > eps:
+					var v0 := Vector3(pA[1].x, top0, pA[1].y)
+					var v1 := Vector3(pA[2].x, top1, pA[2].y)
+					var v2 := Vector3(pB[3].x, bot1, pB[3].y)
+					var v3 := Vector3(pB[0].x, bot0, pB[0].y)
+					_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(minf(top0, top1))})
+			if z + 1 < n:
+				var cC := _cell_corners(x, z + 1)
+				var pC := _cell_corner_pos2d(x, z + 1, n)
+				var a_s := _edge_pair(cA, 3)
+				var c_n := _edge_pair(cC, 2)
+				var top0z := maxf(a_s.x, c_n.x)
+				var top1z := maxf(a_s.y, c_n.y)
+				var bot0z := minf(a_s.x, c_n.x)
+				var bot1z := minf(a_s.y, c_n.y)
+				if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
+					var s0 := Vector3(pA[3].x, top0z, pA[3].y)
+					var s1 := Vector3(pA[2].x, top1z, pA[2].y)
+					var s2 := Vector3(pC[1].x, bot1z, pC[1].y)
+					var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
+					_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(minf(top0z, top1z))})
+
+func _build_modular_visuals_from_surfaces(n: int) -> void:
+	if use_legacy_blocky_renderer:
+		_build_mesh_and_collision(n)
+		return
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_uv2(Vector2.ZERO)
+	for surf in _surfaces:
+		var kind: int = int(surf.get("kind", SurfaceKind.FLOOR))
+		var verts: PackedVector3Array = surf.get("verts_local", PackedVector3Array())
+		if verts.size() < 4:
+			continue
+		var col := terrain_color
+		if kind == SurfaceKind.WALL:
+			col.a = SURF_WALL
+		elif kind == SurfaceKind.RAMP:
+			col = ramp_color
+			col.a = SURF_RAMP
+		else:
+			col.a = SURF_TOP
+		var uv_scale := tiles_per_cell
+		_add_quad_uv2(
+			st,
+			verts[0], verts[1], verts[2], verts[3],
+			Vector2(0, 0) * uv_scale,
+			Vector2(1, 0) * uv_scale,
+			Vector2(1, 1) * uv_scale,
+			Vector2(0, 1) * uv_scale,
+			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
+			col
+		)
+
+	_add_floor(st, outer_floor_height, tiles_per_cell)
+	_add_box_walls(st, outer_floor_height, box_height, tiles_per_cell)
+	if build_ceiling:
+		_add_ceiling(st, box_height, tiles_per_cell)
+
+	st.generate_normals()
+	st.generate_tangents()
+	var mesh: ArrayMesh = st.commit()
+	mesh_instance.mesh = mesh
+	_validate_mesh_bounds(mesh, "terrain")
+	collision_shape.shape = mesh.create_trimesh_shape()
 
 # -----------------------------
 # Mesh building
