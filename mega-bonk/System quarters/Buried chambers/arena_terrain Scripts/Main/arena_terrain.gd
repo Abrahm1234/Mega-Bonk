@@ -152,6 +152,7 @@ extends Node3D
 @export var use_legacy_blocky_renderer: bool = false
 @export var keep_legacy_collision_with_irregular_visuals: bool = true
 @export var register_boundary_walls_in_surface_registry: bool = true
+@export var warn_on_mesh_collision_scale_mismatch: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -2091,6 +2092,7 @@ func _ready() -> void:
 	_ensure_tunnel_nodes()
 	_apply_grid_debug_flat_material(grid_debug_force_flat_material)
 	_grid_refresh_space_xforms()
+	_warn_if_mesh_collision_scale_mismatch()
 	_ensure_grid_wire_node()
 	_grid_wire_set_visible(false)
 	_ensure_debug_menu()
@@ -3258,7 +3260,7 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 					Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y),
 					Vector3(rect.position.x, y, rect.position.y + rect.size.y)
 				])
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true}, n)})
 				_overhang_mask[anchor] = 1
 				emitted += 1
 
@@ -3415,11 +3417,57 @@ func _register_overhangs_from_layout(n: int, levels: PackedInt32Array) -> void:
 						Vector3(pts[3].x, y, pts[3].y)
 					]),
 					Vector3.UP,
-					{"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true}
+					{"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true}, n)}
 				)
 				_overhang_mask[anchor] = 1
 				emitted += 1
 	_last_overhang_quad_count = emitted
+
+func _is_walkable_top_cell(x: int, z: int, n: int) -> bool:
+	if not _in_bounds(x, z, n):
+		return false
+	var idx: int = _idx2(x, z, n)
+	if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n and _tunnel_hole_mask[idx] != 0:
+		return false
+	return true
+
+func _adjacency_mask_nesw(x: int, z: int, n: int) -> int:
+	var mask := 0
+	if _is_walkable_top_cell(x, z - 1, n):
+		mask |= 1
+	if _is_walkable_top_cell(x + 1, z, n):
+		mask |= 2
+	if _is_walkable_top_cell(x, z + 1, n):
+		mask |= 4
+	if _is_walkable_top_cell(x - 1, z, n):
+		mask |= 8
+	return mask
+
+func _surface_module_key(kind: int, x: int, z: int, extra: Dictionary, n: int) -> String:
+	match kind:
+		SurfaceKind.FLOOR:
+			var adj := _adjacency_mask_nesw(x, z, n)
+			if bool(extra.get("overhang", false)):
+				return "floor_overhang_%d" % adj
+			return "floor_%d" % adj
+		SurfaceKind.RAMP:
+			var rd: int = int(extra.get("ramp_dir", RAMP_NONE))
+			return "ramp_%d_l%d_h%d" % [rd, int(extra.get("low_level", -999)), int(extra.get("high_level", -999))]
+		SurfaceKind.WALL:
+			var od: int = int(extra.get("out_dir", SurfaceSide.NONE))
+			return "wall_%d_%d_%d%s" % [od, int(extra.get("y0_level", -999)), int(extra.get("y1_level", -999)), "_b" if bool(extra.get("boundary", false)) else ""]
+		_:
+			return "kind_%d" % kind
+
+func _warn_if_mesh_collision_scale_mismatch() -> void:
+	if not warn_on_mesh_collision_scale_mismatch:
+		return
+	var mesh_parent := mesh_instance.get_parent_node_3d() if mesh_instance != null else null
+	var col_parent := collision_shape.get_parent_node_3d() if collision_shape != null else null
+	if mesh_parent == null or col_parent == null:
+		return
+	if mesh_parent.global_basis.get_scale().distance_to(col_parent.global_basis.get_scale()) > 0.001:
+		push_warning("TerrainMesh and TerrainCollision parent scales differ; debug overlays may appear misaligned.")
 
 func _build_surface_registry_from_layout(n: int) -> void:
 	var eps := 0.0001
@@ -3450,9 +3498,9 @@ func _build_surface_registry_from_layout(n: int) -> void:
 			])
 			var floor_level := grid_y_to_level((c0.x + c0.y + c0.z + c0.w) * 0.25)
 			if is_ramp:
-				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "ramp_dir": ramp_dir})
+				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "ramp_dir": ramp_dir, "module_key": _surface_module_key(SurfaceKind.RAMP, x, z, {"ramp_dir": ramp_dir, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w)))}, n)})
 			else:
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w)))})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": false}, n)})
 
 	_register_overhangs_from_layout(n, levels)
 
@@ -3480,7 +3528,7 @@ func _build_surface_registry_from_layout(n: int) -> void:
 						var v1 := Vector3(pA[2].x, top1, pA[2].y)
 						var v2 := Vector3(pB[3].x, bot1, pB[3].y)
 						var v3 := Vector3(pB[0].x, bot0, pB[0].y)
-						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1)), "out_dir": SurfaceSide.E})
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1)), "out_dir": SurfaceSide.E, "module_key": _surface_module_key(SurfaceKind.WALL, x, z, {"out_dir": SurfaceSide.E, "y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1))}, n)})
 			if z + 1 < n:
 				var idx_c: int = z * n + x
 				var idx_d: int = (z + 1) * n + x
@@ -3503,7 +3551,7 @@ func _build_surface_registry_from_layout(n: int) -> void:
 						var s1 := Vector3(pA[2].x, top1z, pA[2].y)
 						var s2 := Vector3(pC[1].x, bot1z, pC[1].y)
 						var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
-						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z)), "out_dir": SurfaceSide.S})
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z)), "out_dir": SurfaceSide.S, "module_key": _surface_module_key(SurfaceKind.WALL, x, z, {"out_dir": SurfaceSide.S, "y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z))}, n)})
 
 	_register_boundary_walls_from_layout(n)
 
@@ -3530,7 +3578,7 @@ func _register_boundary_walls_from_layout(n: int) -> void:
 				Vector3(pn[0].x, outer_floor_height, pn[0].y)
 			]),
 			Vector3.ZERO,
-			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.N, "boundary": true}
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.N, "boundary": true, "module_key": _surface_module_key(SurfaceKind.WALL, x, 0, {"out_dir": SurfaceSide.N, "y0_level": floor_level, "y1_level": ceil_level, "boundary": true}, n)}
 		)
 
 		# South boundary (z = n-1)
@@ -3548,7 +3596,7 @@ func _register_boundary_walls_from_layout(n: int) -> void:
 				Vector3(ps[3].x, outer_floor_height, ps[3].y)
 			]),
 			Vector3.ZERO,
-			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.S, "boundary": true}
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.S, "boundary": true, "module_key": _surface_module_key(SurfaceKind.WALL, x, n - 1, {"out_dir": SurfaceSide.S, "y0_level": floor_level, "y1_level": ceil_level, "boundary": true}, n)}
 		)
 
 	for z in range(n):
@@ -3567,7 +3615,7 @@ func _register_boundary_walls_from_layout(n: int) -> void:
 				Vector3(pw[0].x, outer_floor_height, pw[0].y)
 			]),
 			Vector3.ZERO,
-			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.W, "boundary": true}
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.W, "boundary": true, "module_key": _surface_module_key(SurfaceKind.WALL, 0, z, {"out_dir": SurfaceSide.W, "y0_level": floor_level, "y1_level": ceil_level, "boundary": true}, n)}
 		)
 
 		# East boundary (x = n-1)
@@ -3585,7 +3633,7 @@ func _register_boundary_walls_from_layout(n: int) -> void:
 				Vector3(pe[1].x, outer_floor_height, pe[1].y)
 			]),
 			Vector3.ZERO,
-			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.E, "boundary": true}
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.E, "boundary": true, "module_key": _surface_module_key(SurfaceKind.WALL, n - 1, z, {"out_dir": SurfaceSide.E, "y0_level": floor_level, "y1_level": ceil_level, "boundary": true}, n)}
 		)
 
 func _build_modular_visuals_from_surfaces(n: int) -> void:
