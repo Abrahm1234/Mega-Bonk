@@ -150,6 +150,7 @@ extends Node3D
 @export_range(1, 40, 1) var irregular_relax_iterations: int = 14
 @export_range(0.0, 0.49, 0.01) var irregular_min_spacing_ratio: float = 0.18
 @export var use_legacy_blocky_renderer: bool = false
+@export var keep_legacy_collision_with_irregular_visuals: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -3348,13 +3349,91 @@ func _cell_corner_pos2d(x: int, z: int, n: int) -> Array[Vector2]:
 		_corner_pos_2d[_corner_idx(x, z + 1, n)]
 	]
 
-func _build_surface_registry_from_layout(n: int) -> void:
-	var eps := 0.0001
+func _overhang_patch_points(corners: Array[Vector2], u0: float, v0: float, u1: float, v1: float) -> Array[Vector2]:
+	var p00: Vector2 = corners[0]
+	var p10: Vector2 = corners[1]
+	var p11: Vector2 = corners[2]
+	var p01: Vector2 = corners[3]
+	var q00 := p00.lerp(p10, u0).lerp(p01.lerp(p11, u0), v0)
+	var q10 := p00.lerp(p10, u1).lerp(p01.lerp(p11, u1), v0)
+	var q11 := p00.lerp(p10, u1).lerp(p01.lerp(p11, u1), v1)
+	var q01 := p00.lerp(p10, u0).lerp(p01.lerp(p11, u0), v1)
+	return [q00, q10, q11, q01]
+
+func _register_overhangs_from_layout(n: int, levels: PackedInt32Array) -> void:
+	if not overhang_enable:
+		_last_overhang_quad_count = 0
+		return
+	if _overhang_mask.size() != n * n:
+		_overhang_mask = PackedByteArray()
+		_overhang_mask.resize(n * n)
+	_overhang_mask.fill(0)
+	var emitted := 0
 	for z in range(n):
 		for x in range(n):
+			var anchor: int = _idx2(x, z, n)
+			var cell_corners := _cell_corner_pos2d(x, z, n)
+			var recs := [
+				{"ca": Vector2i(0, -1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, -1), "u0": 0.0, "v0": 0.0, "u1": 0.5, "v1": 0.5},
+				{"ca": Vector2i(0, -1), "cb": Vector2i(1, 0), "dg": Vector2i(1, -1), "u0": 0.5, "v0": 0.0, "u1": 1.0, "v1": 0.5},
+				{"ca": Vector2i(0, 1), "cb": Vector2i(-1, 0), "dg": Vector2i(-1, 1), "u0": 0.0, "v0": 0.5, "u1": 0.5, "v1": 1.0},
+				{"ca": Vector2i(0, 1), "cb": Vector2i(1, 0), "dg": Vector2i(1, 1), "u0": 0.5, "v0": 0.5, "u1": 1.0, "v1": 1.0}
+			]
+			for rec in recs:
+				var ax: int = x + int(rec["ca"].x)
+				var az: int = z + int(rec["ca"].y)
+				var bx: int = x + int(rec["cb"].x)
+				var bz: int = z + int(rec["cb"].y)
+				var dx: int = x + int(rec["dg"].x)
+				var dz: int = z + int(rec["dg"].y)
+				if not _in_bounds(ax, az, n) or not _in_bounds(bx, bz, n) or not _in_bounds(dx, dz, n):
+					continue
+				var ia: int = _idx2(ax, az, n)
+				var ib: int = _idx2(bx, bz, n)
+				var idg: int = _idx2(dx, dz, n)
+				if not _overhang_corner_should_emit(anchor, ia, ib, idg, levels, n):
+					continue
+				var bridge_level: int = mini(levels[anchor], mini(levels[ia], levels[ib]))
+				var y: float = _quantize_y_to_grid(_level_to_h(bridge_level)) + overhang_zfight_epsilon
+				var pts := _overhang_patch_points(cell_corners, float(rec["u0"]), float(rec["v0"]), float(rec["u1"]), float(rec["v1"]))
+				_register_surface(
+					SurfaceKind.FLOOR,
+					Vector2i(x, z),
+					SurfaceSide.NONE,
+					Vector2i(-1, -1),
+					SurfaceSide.NONE,
+					PackedVector3Array([
+						Vector3(pts[0].x, y, pts[0].y),
+						Vector3(pts[1].x, y, pts[1].y),
+						Vector3(pts[2].x, y, pts[2].y),
+						Vector3(pts[3].x, y, pts[3].y)
+					]),
+					Vector3.UP,
+					{"floor_level": bridge_level, "overhang": true}
+				)
+				_overhang_mask[anchor] = 1
+				emitted += 1
+	_last_overhang_quad_count = emitted
+
+func _build_surface_registry_from_layout(n: int) -> void:
+	var eps := 0.0001
+	var ramps_openings: bool = enable_ramps
+	var want_levels: int = maxi(1, ramp_step_count)
+	var levels := PackedInt32Array()
+	levels.resize(n * n)
+	for i in range(n * n):
+		levels[i] = _h_to_level(_heights[i])
+
+	for z in range(n):
+		for x in range(n):
+			var idx: int = z * n + x
+			var skip_top := false
+			if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
+				skip_top = _tunnel_hole_mask[idx] != 0
+			if skip_top:
+				continue
 			var c0 := _cell_corners(x, z)
 			var p := _cell_corner_pos2d(x, z, n)
-			var idx: int = z * n + x
 			var is_ramp: bool = enable_ramps and _ramp_is_effective_idx(idx, n)
 			var ramp_dir: int = _ramp_up_dir[idx] if idx < _ramp_up_dir.size() else RAMP_NONE
 			var verts := PackedVector3Array([
@@ -3369,45 +3448,71 @@ func _build_surface_registry_from_layout(n: int) -> void:
 			else:
 				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level})
 
+	_register_overhangs_from_layout(n, levels)
+
 	for z in range(n):
 		for x in range(n):
 			var cA := _cell_corners(x, z)
 			var pA := _cell_corner_pos2d(x, z, n)
 			if x + 1 < n:
-				var cB := _cell_corners(x + 1, z)
-				var pB := _cell_corner_pos2d(x + 1, z, n)
-				var a_e := _edge_pair(cA, 0)
-				var b_w := _edge_pair(cB, 1)
-				var top0 := maxf(a_e.x, b_w.x)
-				var top1 := maxf(a_e.y, b_w.y)
-				var bot0 := minf(a_e.x, b_w.x)
-				var bot1 := minf(a_e.y, b_w.y)
-				if (top0 - bot0) > eps or (top1 - bot1) > eps:
-					var v0 := Vector3(pA[1].x, top0, pA[1].y)
-					var v1 := Vector3(pA[2].x, top1, pA[2].y)
-					var v2 := Vector3(pB[3].x, bot1, pB[3].y)
-					var v3 := Vector3(pB[0].x, bot0, pB[0].y)
-					_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(minf(top0, top1))})
+				var idx_a: int = z * n + x
+				var idx_b: int = z * n + (x + 1)
+				var hole_touches_x_edge := false
+				if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
+					hole_touches_x_edge = _tunnel_hole_mask[idx_a] != 0 or _tunnel_hole_mask[idx_b] != 0
+				if not (ramps_openings and not hole_touches_x_edge and _is_ramp_bridge(idx_a, idx_b, RAMP_EAST, want_levels, levels)):
+					var cB := _cell_corners(x + 1, z)
+					var pB := _cell_corner_pos2d(x + 1, z, n)
+					var a_e := _edge_pair(cA, 0)
+					var b_w := _edge_pair(cB, 1)
+					var top0 := maxf(a_e.x, b_w.x)
+					var top1 := maxf(a_e.y, b_w.y)
+					var bot0 := minf(a_e.x, b_w.x)
+					var bot1 := minf(a_e.y, b_w.y)
+					if (top0 - bot0) > eps or (top1 - bot1) > eps:
+						var v0 := Vector3(pA[1].x, top0, pA[1].y)
+						var v1 := Vector3(pA[2].x, top1, pA[2].y)
+						var v2 := Vector3(pB[3].x, bot1, pB[3].y)
+						var v3 := Vector3(pB[0].x, bot0, pB[0].y)
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.E, Vector2i(x + 1, z), SurfaceSide.W, PackedVector3Array([v0, v1, v2, v3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0, bot1)), "y1_level": grid_y_to_level(maxf(top0, top1))})
 			if z + 1 < n:
-				var cC := _cell_corners(x, z + 1)
-				var pC := _cell_corner_pos2d(x, z + 1, n)
-				var a_s := _edge_pair(cA, 3)
-				var c_n := _edge_pair(cC, 2)
-				var top0z := maxf(a_s.x, c_n.x)
-				var top1z := maxf(a_s.y, c_n.y)
-				var bot0z := minf(a_s.x, c_n.x)
-				var bot1z := minf(a_s.y, c_n.y)
-				if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
-					var s0 := Vector3(pA[3].x, top0z, pA[3].y)
-					var s1 := Vector3(pA[2].x, top1z, pA[2].y)
-					var s2 := Vector3(pC[1].x, bot1z, pC[1].y)
-					var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
-					_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(minf(top0z, top1z))})
+				var idx_c: int = z * n + x
+				var idx_d: int = (z + 1) * n + x
+				var hole_touches_z_edge := false
+				if enable_tunnels and tunnel_carve_surface_holes and _tunnel_hole_mask.size() == n * n:
+					hole_touches_z_edge = _tunnel_hole_mask[idx_c] != 0 or _tunnel_hole_mask[idx_d] != 0
+				if ramps_openings and not hole_touches_z_edge and _is_ramp_bridge(idx_c, idx_d, RAMP_SOUTH, want_levels, levels):
+					pass
+				else:
+					var cC := _cell_corners(x, z + 1)
+					var pC := _cell_corner_pos2d(x, z + 1, n)
+					var a_s := _edge_pair(cA, 3)
+					var c_n := _edge_pair(cC, 2)
+					var top0z := maxf(a_s.x, c_n.x)
+					var top1z := maxf(a_s.y, c_n.y)
+					var bot0z := minf(a_s.x, c_n.x)
+					var bot1z := minf(a_s.y, c_n.y)
+					if (top0z - bot0z) > eps or (top1z - bot1z) > eps:
+						var s0 := Vector3(pA[3].x, top0z, pA[3].y)
+						var s1 := Vector3(pA[2].x, top1z, pA[2].y)
+						var s2 := Vector3(pC[1].x, bot1z, pC[1].y)
+						var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
+						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z))})
 
 func _build_modular_visuals_from_surfaces(n: int) -> void:
 	if use_legacy_blocky_renderer:
 		_build_mesh_and_collision(n)
 		return
+	if keep_legacy_collision_with_irregular_visuals:
+		var saved_surface_next_id: int = _surface_next_id
+		var saved_surfaces: Array[Dictionary] = _surfaces.duplicate(true)
+		var saved_surface_by_id: Dictionary = _surface_by_id.duplicate(true)
+		var saved_cell_surface_ids: Array = _cell_surface_ids.duplicate(true)
+		_build_mesh_and_collision(n)
+		_surface_next_id = saved_surface_next_id
+		_surfaces = saved_surfaces
+		_surface_by_id = saved_surface_by_id
+		_cell_surface_ids = saved_cell_surface_ids
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -3426,13 +3531,21 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		else:
 			col.a = SURF_TOP
 		var uv_scale := tiles_per_cell
+		var ua := Vector2(0, 0) * uv_scale
+		var ub := Vector2(1, 0) * uv_scale
+		var uc := Vector2(1, 1) * uv_scale
+		var ud := Vector2(0, 1) * uv_scale
+		if kind == SurfaceKind.RAMP:
+			var extra: Dictionary = surf.get("extra", {})
+			var ramp_dir: int = int(extra.get("ramp_dir", RAMP_NONE))
+			ua = _ramp_uv(0.0, 0.0, ramp_dir) * uv_scale
+			ub = _ramp_uv(1.0, 0.0, ramp_dir) * uv_scale
+			uc = _ramp_uv(1.0, 1.0, ramp_dir) * uv_scale
+			ud = _ramp_uv(0.0, 1.0, ramp_dir) * uv_scale
 		_add_quad_uv2(
 			st,
 			verts[0], verts[1], verts[2], verts[3],
-			Vector2(0, 0) * uv_scale,
-			Vector2(1, 0) * uv_scale,
-			Vector2(1, 1) * uv_scale,
-			Vector2(0, 1) * uv_scale,
+			ua, ub, uc, ud,
 			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1),
 			col
 		)
@@ -3447,7 +3560,8 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	mesh_instance.mesh = mesh
 	_validate_mesh_bounds(mesh, "terrain")
-	collision_shape.shape = mesh.create_trimesh_shape()
+	if not keep_legacy_collision_with_irregular_visuals:
+		collision_shape.shape = mesh.create_trimesh_shape()
 
 # -----------------------------
 # Mesh building
