@@ -151,6 +151,7 @@ extends Node3D
 @export_range(0.0, 0.49, 0.01) var irregular_min_spacing_ratio: float = 0.18
 @export var use_legacy_blocky_renderer: bool = false
 @export var keep_legacy_collision_with_irregular_visuals: bool = true
+@export var register_boundary_walls_in_surface_registry: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -3504,6 +3505,89 @@ func _build_surface_registry_from_layout(n: int) -> void:
 						var s3 := Vector3(pC[0].x, bot0z, pC[0].y)
 						_register_surface(SurfaceKind.WALL, Vector2i(x, z), SurfaceSide.S, Vector2i(x, z + 1), SurfaceSide.N, PackedVector3Array([s0, s1, s2, s3]), Vector3.ZERO, {"y0_level": grid_y_to_level(minf(bot0z, bot1z)), "y1_level": grid_y_to_level(maxf(top0z, top1z)), "out_dir": SurfaceSide.S})
 
+	_register_boundary_walls_from_layout(n)
+
+
+func _register_boundary_walls_from_layout(n: int) -> void:
+	if not register_boundary_walls_in_surface_registry:
+		return
+	var floor_level: int = grid_y_to_level(outer_floor_height)
+	var ceil_level: int = grid_y_to_level(box_height)
+	for x in range(n):
+		# North boundary (z = 0)
+		var pn := _cell_corner_pos2d(x, 0, n)
+		var cn := _cell_corners(x, 0)
+		_register_surface(
+			SurfaceKind.WALL,
+			Vector2i(x, 0),
+			SurfaceSide.N,
+			Vector2i(-1, -1),
+			SurfaceSide.NONE,
+			PackedVector3Array([
+				Vector3(pn[0].x, box_height, pn[0].y),
+				Vector3(pn[1].x, box_height, pn[1].y),
+				Vector3(pn[1].x, outer_floor_height, pn[1].y),
+				Vector3(pn[0].x, outer_floor_height, pn[0].y)
+			]),
+			Vector3.ZERO,
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.N, "boundary": true}
+		)
+
+		# South boundary (z = n-1)
+		var ps := _cell_corner_pos2d(x, n - 1, n)
+		_register_surface(
+			SurfaceKind.WALL,
+			Vector2i(x, n - 1),
+			SurfaceSide.S,
+			Vector2i(-1, -1),
+			SurfaceSide.NONE,
+			PackedVector3Array([
+				Vector3(ps[3].x, box_height, ps[3].y),
+				Vector3(ps[2].x, box_height, ps[2].y),
+				Vector3(ps[2].x, outer_floor_height, ps[2].y),
+				Vector3(ps[3].x, outer_floor_height, ps[3].y)
+			]),
+			Vector3.ZERO,
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.S, "boundary": true}
+		)
+
+	for z in range(n):
+		# West boundary (x = 0)
+		var pw := _cell_corner_pos2d(0, z, n)
+		_register_surface(
+			SurfaceKind.WALL,
+			Vector2i(0, z),
+			SurfaceSide.W,
+			Vector2i(-1, -1),
+			SurfaceSide.NONE,
+			PackedVector3Array([
+				Vector3(pw[0].x, box_height, pw[0].y),
+				Vector3(pw[3].x, box_height, pw[3].y),
+				Vector3(pw[3].x, outer_floor_height, pw[3].y),
+				Vector3(pw[0].x, outer_floor_height, pw[0].y)
+			]),
+			Vector3.ZERO,
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.W, "boundary": true}
+		)
+
+		# East boundary (x = n-1)
+		var pe := _cell_corner_pos2d(n - 1, z, n)
+		_register_surface(
+			SurfaceKind.WALL,
+			Vector2i(n - 1, z),
+			SurfaceSide.E,
+			Vector2i(-1, -1),
+			SurfaceSide.NONE,
+			PackedVector3Array([
+				Vector3(pe[1].x, box_height, pe[1].y),
+				Vector3(pe[2].x, box_height, pe[2].y),
+				Vector3(pe[2].x, outer_floor_height, pe[2].y),
+				Vector3(pe[1].x, outer_floor_height, pe[1].y)
+			]),
+			Vector3.ZERO,
+			{"y0_level": floor_level, "y1_level": ceil_level, "out_dir": SurfaceSide.E, "boundary": true}
+		)
+
 func _build_modular_visuals_from_surfaces(n: int) -> void:
 	if use_legacy_blocky_renderer:
 		_build_mesh_and_collision(n)
@@ -3564,7 +3648,8 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		)
 
 	_add_floor(st, outer_floor_height, tiles_per_cell)
-	_add_box_walls(st, outer_floor_height, box_height, tiles_per_cell)
+	if not register_boundary_walls_in_surface_registry:
+		_add_box_walls(st, outer_floor_height, box_height, tiles_per_cell)
 	if build_ceiling:
 		_add_ceiling(st, box_height, tiles_per_cell)
 
