@@ -156,6 +156,10 @@ extends Node3D
 @export var auto_match_collision_to_mesh_transform: bool = true
 @export var auto_match_collision_using_global_when_reparented: bool = true
 @export var warn_when_legacy_collision_diverges_from_irregular_visuals: bool = true
+@export var use_module_instancing_renderer: bool = true
+@export var module_instancing_fallback_to_surfacetool: bool = true
+@export var module_root_node_name: StringName = &"TerrainModules"
+@export var module_library: Dictionary = {}
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -3715,6 +3719,61 @@ func _register_boundary_walls_from_layout(n: int) -> void:
 			{"y0_level": floor_level, "y1_level": ceil_level, "span": maxi(0, ceil_level - floor_level), "out_dir": SurfaceSide.E, "boundary": true, "module_key": _surface_module_key(SurfaceKind.WALL, n - 1, z, {"out_dir": SurfaceSide.E, "y0_level": floor_level, "y1_level": ceil_level, "span": maxi(0, ceil_level - floor_level), "boundary": true}, n)}
 		)
 
+func _ensure_modules_root() -> Node3D:
+	var body := get_node_or_null("TerrainBody") as Node3D
+	var host: Node3D = body if body != null else self
+	var root := host.get_node_or_null(String(module_root_node_name)) as Node3D
+	if root == null:
+		root = Node3D.new()
+		root.name = String(module_root_node_name)
+		host.add_child(root)
+	return root
+
+func _clear_modules_root(root: Node3D) -> void:
+	for c in root.get_children():
+		c.queue_free()
+
+func _surface_center(verts: PackedVector3Array) -> Vector3:
+	if verts.is_empty():
+		return Vector3.ZERO
+	var sum := Vector3.ZERO
+	for v in verts:
+		sum += v
+	return sum / float(verts.size())
+
+func _instance_surface_module(root: Node3D, surf: Dictionary) -> bool:
+	var extra: Dictionary = surf.get("extra", {})
+	var key: String = str(extra.get("module_key", ""))
+	if key.is_empty():
+		return false
+	if not module_library.has(key):
+		return false
+	var packed := module_library[key] as PackedScene
+	if packed == null:
+		return false
+	var inst := packed.instantiate() as Node3D
+	if inst == null:
+		return false
+	var verts: PackedVector3Array = surf.get("verts_local", PackedVector3Array())
+	if verts.size() < 4:
+		inst.queue_free()
+		return false
+	inst.position = _surface_center(verts)
+	var rot_steps := 0
+	var kind: int = int(surf.get("kind", SurfaceKind.FLOOR))
+	if kind == SurfaceKind.FLOOR:
+		rot_steps = int(extra.get("floor_place_rot", 0))
+	elif kind == SurfaceKind.RAMP:
+		rot_steps = int(extra.get("ramp_dir", 0))
+	elif kind == SurfaceKind.WALL:
+		rot_steps = int(extra.get("out_dir", 0))
+	inst.rotation.y = deg_to_rad(float((rot_steps % 4) * 90))
+	if kind == SurfaceKind.WALL or kind == SurfaceKind.RAMP:
+		var span := max(1, int(extra.get("span", 1)))
+		inst.scale.y = float(span)
+	root.add_child(inst)
+	return true
+
 func _build_modular_visuals_from_surfaces(n: int) -> void:
 	if use_legacy_blocky_renderer:
 		_build_mesh_and_collision(n)
@@ -3734,10 +3793,18 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 		_overhang_mask = saved_overhang_mask
 		_last_overhang_quad_count = saved_last_overhang_quad_count
 
+	var modules_root := _ensure_modules_root()
+	_clear_modules_root(modules_root)
+
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_uv2(Vector2.ZERO)
+	var emitted_fallback: bool = false
 	for surf in _surfaces:
+		if use_module_instancing_renderer and _instance_surface_module(modules_root, surf):
+			continue
+		if use_module_instancing_renderer and not module_instancing_fallback_to_surfacetool:
+			continue
 		var kind: int = int(surf.get("kind", SurfaceKind.FLOOR))
 		var verts: PackedVector3Array = surf.get("verts_local", PackedVector3Array())
 		if verts.size() < 4:
@@ -3766,6 +3833,7 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 			ub = _ramp_uv(1.0, 0.0, ramp_dir) * uv_scale
 			uc = _ramp_uv(1.0, 1.0, ramp_dir) * uv_scale
 			ud = _ramp_uv(0.0, 1.0, ramp_dir) * uv_scale
+		emitted_fallback = true
 		_add_quad_uv2(
 			st,
 			verts[0], verts[1], verts[2], verts[3],
@@ -3774,20 +3842,24 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 			col
 		)
 
-	_add_floor(st, outer_floor_height, tiles_per_cell)
-	if not register_boundary_walls_in_surface_registry:
-		_add_box_walls(st, outer_floor_height, box_height, tiles_per_cell)
-	if build_ceiling:
-		_add_ceiling(st, box_height, tiles_per_cell)
+	if emitted_fallback or not use_module_instancing_renderer:
+		_add_floor(st, outer_floor_height, tiles_per_cell)
+		if not register_boundary_walls_in_surface_registry:
+			_add_box_walls(st, outer_floor_height, box_height, tiles_per_cell)
+		if build_ceiling:
+			_add_ceiling(st, box_height, tiles_per_cell)
 
 	st.generate_normals()
 	st.generate_tangents()
 	var mesh: ArrayMesh = st.commit()
-	mesh_instance.mesh = mesh
-	_validate_mesh_bounds(mesh, "terrain")
-	if not keep_legacy_collision_with_irregular_visuals:
-		collision_shape.shape = mesh.create_trimesh_shape()
-		_sync_collision_to_mesh_xform()
+	if emitted_fallback or not use_module_instancing_renderer:
+		mesh_instance.mesh = mesh
+		_validate_mesh_bounds(mesh, "terrain")
+		if not keep_legacy_collision_with_irregular_visuals:
+			collision_shape.shape = mesh.create_trimesh_shape()
+			_sync_collision_to_mesh_xform()
+	else:
+		mesh_instance.mesh = null
 
 # -----------------------------
 # Mesh building
