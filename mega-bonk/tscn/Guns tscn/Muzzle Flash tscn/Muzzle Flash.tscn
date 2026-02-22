@@ -1,0 +1,211 @@
+[gd_scene load_steps=35 format=3 uid="uid://kbhbgjuirega"]
+
+[ext_resource type="Script" uid="uid://cubg43kcpfupv" path="res://VFX/Muzzle Flashs/Scripts/muzzle_flash.gd" id="1_fl57e"]
+[ext_resource type="ArrayMesh" uid="uid://dohgpbfd1smwe" path="res://VFX/Muzzle Flashs/Meshs/Muzzle Plane/Prism Coil Disruptor.obj" id="2_5ov63"]
+[ext_resource type="Texture2D" uid="uid://b10rppwfhjhwp" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Planes/Fractured plasma streak (pairs with Fractured corona ring).png" id="2_fl57e"]
+[ext_resource type="ArrayMesh" uid="uid://o6pdpnijnjla" path="res://VFX/Muzzle Flashs/Meshs/Muzzle Plane/Muzzle Cone.obj" id="4_5ov63"]
+[ext_resource type="Texture2D" uid="uid://cym6pfyetp6nr" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Cones/Fractured corona ring.png" id="4_4301d"]
+[ext_resource type="Texture2D" uid="uid://be7kbtw8xl7yb" path="res://VFX/Muzzle Flashs/Muzzle FlashTextures/Beam Flash/orb_transparent.png" id="5_fl57e"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fl57e"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("2_fl57e")
+distance_fade_min_distance = 24.19
+
+[sub_resource type="Curve" id="Curve_bahfj"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_djvfx"]
+curve = SubResource("Curve_bahfj")
+
+[sub_resource type="Curve" id="Curve_mwry1"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_iqbmp"]
+curve = SubResource("Curve_mwry1")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_ga7ys"]
+gravity = Vector3(0, 0, 0)
+scale_min = 0.7
+scale_curve = SubResource("CurveTexture_iqbmp")
+color = Color(1.353, 1.353, 3.621, 1)
+alpha_curve = SubResource("CurveTexture_djvfx")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_4301d"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("4_4301d")
+
+[sub_resource type="Curve" id="Curve_4ytql"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_5x6cl"]
+curve = SubResource("Curve_4ytql")
+
+[sub_resource type="Curve" id="Curve_ms72c"]
+_limits = [-1.0, 1.0, 0.0, 1.0]
+_data = [Vector2(0, 1), 0.0, -7.462705, 0, 0, Vector2(1, -1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_tyh8c"]
+curve = SubResource("Curve_ms72c")
+
+[sub_resource type="Curve" id="Curve_utdm3"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_07tpb"]
+curve = SubResource("Curve_utdm3")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_ywf26"]
+gravity = Vector3(0, 0, 0)
+scale_min = 0.5
+scale_curve = SubResource("CurveTexture_07tpb")
+color = Color(0, 0.5464665, 1.085819, 1)
+alpha_curve = SubResource("CurveTexture_5x6cl")
+hue_variation_min = -0.07000002
+hue_variation_max = 0.06999998
+hue_variation_curve = SubResource("CurveTexture_tyh8c")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8qoqx"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("5_fl57e")
+billboard_mode = 3
+billboard_keep_scale = true
+particles_anim_h_frames = 1
+particles_anim_v_frames = 1
+particles_anim_loop = false
+
+[sub_resource type="Curve" id="Curve_rsccn"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_jli6h"]
+curve = SubResource("Curve_rsccn")
+
+[sub_resource type="Curve" id="Curve_8be76"]
+_data = [Vector2(0, 0), 0.0, 2.1810358, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_bhcj4"]
+curve = SubResource("Curve_8be76")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_1s46t"]
+gravity = Vector3(0, 0, 0)
+scale_curve = SubResource("CurveTexture_bhcj4")
+color = Color(0.5072263, 0.001993054, 0.74369425, 1)
+alpha_curve = SubResource("CurveTexture_jli6h")
+
+[sub_resource type="QuadMesh" id="QuadMesh_g1wj1"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_5ov63"]
+transparency = 1
+blend_mode = 1
+cull_mode = 2
+vertex_color_use_as_albedo = true
+vertex_color_is_srgb = true
+albedo_texture = ExtResource("5_fl57e")
+
+[sub_resource type="Curve" id="Curve_fl57e"]
+_data = [Vector2(0, 1), 0.0, -3.1130335, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_4301d"]
+curve = SubResource("Curve_fl57e")
+
+[sub_resource type="Curve" id="Curve_8qoqx"]
+_limits = [0.0, 100.0, 0.0, 1.0]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 100), 339.45004, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_g1wj1"]
+curve = SubResource("Curve_8qoqx")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_8qoqx"]
+lifetime_randomness = 1.0
+particle_flag_align_y = true
+emission_shape_scale = Vector3(0.2, 0.2, 0.2)
+emission_shape = 1
+emission_sphere_radius = 0.2
+velocity_pivot = Vector3(0, 0, 1)
+direction = Vector3(0, 0, 0)
+spread = 10.0
+initial_velocity_min = 5.0
+initial_velocity_max = 10.0
+gravity = Vector3(0, 0, 0)
+damping_min = 0.5
+damping_max = 0.8
+damping_curve = SubResource("CurveTexture_g1wj1")
+scale_min = 0.049999997
+scale_max = 0.19999999
+color = Color(2.361132, 0.8182181, 0, 1)
+alpha_curve = SubResource("CurveTexture_4301d")
+
+[sub_resource type="QuadMesh" id="QuadMesh_cmvmp"]
+size = Vector2(0.2, 1)
+
+[node name="World" type="Node3D"]
+
+[node name="scene" type="Node" parent="."]
+
+[node name="Braided double-arc halo" type="Node3D" parent="."]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+script = ExtResource("1_fl57e")
+
+[node name="Fractured plasma streak" type="Node3D" parent="."]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 2.1471622, 0, 0)
+script = ExtResource("1_fl57e")
+
+[node name="Muzzle Planes" type="GPUParticles3D" parent="Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_fl57e")
+amount = 1
+lifetime = 0.1
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_ga7ys")
+draw_pass_1 = ExtResource("2_5ov63")
+
+[node name="Muzzle Cone" type="GPUParticles3D" parent="Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_4301d")
+amount = 1
+lifetime = 0.1
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_ywf26")
+draw_pass_1 = ExtResource("4_5ov63")
+
+[node name="Beam Flash" type="GPUParticles3D" parent="Fractured plasma streak"]
+transform = Transform3D(10, 0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0)
+material_override = SubResource("StandardMaterial3D_8qoqx")
+amount = 1
+lifetime = 0.1
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_1s46t")
+draw_pass_1 = SubResource("QuadMesh_g1wj1")
+
+[node name="Sparks" type="GPUParticles3D" parent="Fractured plasma streak"]
+material_override = SubResource("StandardMaterial3D_5ov63")
+amount = 20
+lifetime = 0.3
+explosiveness = 0.7
+randomness = 1.0
+fixed_fps = 60
+process_material = SubResource("ParticleProcessMaterial_8qoqx")
+draw_pass_1 = SubResource("QuadMesh_cmvmp")

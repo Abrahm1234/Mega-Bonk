@@ -1,0 +1,13 @@
+[gd_scene load_steps=3 format=3 uid="uid://dwhmgy1mocs00"]
+
+[ext_resource type="Script" uid="uid://n5mybvgbaiqd" path="res://Orbital webwork/Scripts/GD Script/main.gd" id="1_e543a"]
+[ext_resource type="Script" path="res://Camera/camera_3d.gd" id="2_cjm5a"]
+
+[node name="Node3D" type="Node3D"]
+script = ExtResource("1_e543a")
+grid_size = 4
+
+[node name="Camera3D" type="Camera3D" parent="."]
+script = ExtResource("2_cjm5a")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="Camera3D"]

@@ -1,0 +1,82 @@
+[gd_scene load_steps=5 format=3 uid="uid://cyo3li77q1lbt"]
+
+[ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://System quarters/Buried chambers/arena_terrain Scripts/Main/arena_terrain.gd" id="1_f7om2"]
+[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_5xo5h"]
+[ext_resource type="ArrayMesh" uid="uid://dol5vtkcruooj" path="res://Mesh/Enemy-Meshs/Crystal Beast/CB.res" id="3_h5le1"]
+
+[sub_resource type="Environment" id="Environment_u45fm"]
+
+[node name="Buried chambers" type="Node3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.9783936, 0)
+script = ExtResource("1_f7om2")
+world_size_m = 333.0
+height_scale = 333.0
+height_step = 20.0
+min_height = 10.0
+max_height = 333.0
+center_flat_radius_m = 100.0
+box_height = 333.0
+extra_ramps_per_component = 8
+pit_fill_passes = 4
+per_level_ramp_budget = 512
+ramp_color = Color(0.35494238, 0, 0.35494238, 1)
+ramp_regen_guard = 16
+peak_max_cells = 64
+ramp_clearance_radius = 2
+ramp_clearance_max_fixes_per_ramp = 8
+ramp_jump_detector_radius = 6
+ramp_jump_detector_max_fixes_per_ramp = 8
+ramp_jump_detector_debug_print = true
+overhang_min_drop = 8.0
+overhang_max_neighbor_delta = 4.0
+overhang_zfight_epsilon = 0.1
+tunnel_floor_y = 0.0
+tunnel_height = 20.0
+tunnel_height_steps = 1
+tunnel_floor_clearance_from_box = 1.0
+tunnel_extra_outpoints = 0
+tunnel_color = Color(0.07080782, 0.16906857, 0.34768933, 1)
+tunnel_occluder_enabled = false
+tunnel_occluder_y = 0.0
+terrain_color = Color(0.18458205, 0.35035378, 0.89357436, 1)
+box_color = Color(0.46, 0.14444001, 0.07360002, 1)
+debug_vertex_colors = true
+debug_surface_labels_enabled = true
+debug_cell_labels_enabled = true
+debug_tag_colors_enabled = true
+debug_box_color = Color(4.3943375e-05, 0.1973514, 0.60743827, 1)
+debug_tag_emission = 5.0
+grid_wire_alpha = 0.77
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_u45fm")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.99999684, -0.00010691206, -0.0025112333, 0.0025134087, -0.04283459, -0.999079, -7.501959e-07, -0.99908215, 0.04283472, 0, 0, 0)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.005235962, 0.9999863, 0, -0.9999863, 0.005235962, 0, 0, 0)
+
+[node name="TerrainBody" type="StaticBody3D" parent="."]
+
+[node name="TerrainMesh" type="MeshInstance3D" parent="TerrainBody"]
+
+[node name="TerrainCollision" type="CollisionShape3D" parent="TerrainBody"]
+debug_color = Color(0.7136055, 0.1201274, 0.37301746, 0.41960785)
+
+[node name="DebugCamera" type="Camera3D" parent="TerrainBody"]
+transform = Transform3D(0.99767137, -0.007002533, 0.06784428, 0.010073307, 0.99893504, -0.04502627, -0.06745673, 0.045604832, 0.9966794, -44.69645, 206.7547, 200.3118)
+current = true
+fov = 82.2
+far = 1000000.0
+script = ExtResource("2_5xo5h")
+accel = 30.0
+enable_fly_vertical = false
+
+[node name="Player" type="MeshInstance3D" parent="TerrainBody/DebugCamera"]
+transform = Transform3D(201.21613, 2.518381, 148.34332, -8.705005, 249.7338, 7.568004, -148.1091, -11.256532, 201.08951, 32.405155, -86.49219, -590.7916)
+mesh = ExtResource("3_h5le1")
+skeleton = NodePath("../../..")
+
+[node name="ReflectionProbe" type="ReflectionProbe" parent="TerrainBody/DebugCamera/Player"]
+transform = Transform3D(0.016666675, 9.6741254e-11, 1.7462298e-09, -2.7755576e-16, 0.01666666, 2.4441915e-10, 3.4924597e-10, 0, 0.016666668, 0, 1.4777565, -2.3841858e-07)

@@ -1,0 +1,20 @@
+[gd_scene load_steps=4 format=3 uid="uid://c1hf67vwcqxau"]
+
+[ext_resource type="Script" uid="uid://n5mybvgbaiqd" path="res://Orbital webwork/Scripts/GD Script/main.gd" id="1_717f4"]
+[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_8otdc"]
+[ext_resource type="PackedScene" uid="uid://dctij0wf1tt5f" path="res://tscn/Core chambers tscn/Core chambers.tscn" id="3_8otdc"]
+
+[node name="Orbital webwork" type="Node3D"]
+script = ExtResource("1_717f4")
+grid_size = 3
+min_cube_size = 1500.0
+max_cube_size = 2000.0
+cube_spacing = 3000.0
+
+[node name="Camera3D" type="Camera3D" parent="."]
+far = 400000.0
+script = ExtResource("2_8otdc")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+
+[node name="Core chambers" parent="." instance=ExtResource("3_8otdc")]

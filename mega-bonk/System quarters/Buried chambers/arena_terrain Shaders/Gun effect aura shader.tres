@@ -1,0 +1,130 @@
+[gd_resource type="VisualShader" load_steps=12 format=3 uid="uid://p04f7ehhxj2r"]
+
+[sub_resource type="VisualShaderNodeTexture" id="VisualShaderNodeTexture_oivbf"]
+expanded_output_ports = [0]
+texture_type = 1
+
+[sub_resource type="VisualShaderNodeFloatOp" id="VisualShaderNodeFloatOp_y12fb"]
+operator = 2
+
+[sub_resource type="VisualShaderNodeTexture2DParameter" id="VisualShaderNodeTexture2DParameter_nu7qh"]
+parameter_name = "Texture2DParameter"
+texture_type = 1
+
+[sub_resource type="VisualShaderNodeTexture" id="VisualShaderNodeTexture_g0w5o"]
+source = 5
+texture_type = 1
+
+[sub_resource type="VisualShaderNodeVec2Parameter" id="VisualShaderNodeVec2Parameter_nu7qh"]
+parameter_name = "Vector2Parameter"
+
+[sub_resource type="VisualShaderNodeColorParameter" id="VisualShaderNodeColorParameter_3y0bo"]
+parameter_name = "Aura_Color"
+
+[sub_resource type="VisualShaderNodeFloatParameter" id="VisualShaderNodeFloatParameter_41swf"]
+parameter_name = "Aura_Intensity"
+
+[sub_resource type="VisualShaderNodeVectorOp" id="VisualShaderNodeVectorOp_7bkkr"]
+default_input_values = [0, Vector2(0, 0), 1, Vector2(0, 0)]
+op_type = 0
+operator = 2
+
+[sub_resource type="VisualShaderNodeUVFunc" id="VisualShaderNodeUVFunc_eucdx"]
+
+[sub_resource type="VisualShaderNodeInput" id="VisualShaderNodeInput_y5gyn"]
+input_name = "time"
+
+[sub_resource type="VisualShaderNodeVectorOp" id="VisualShaderNodeVectorOp_r6bsa"]
+default_input_values = [0, Vector2(0, 0), 1, Vector2(0, 0)]
+op_type = 0
+operator = 2
+
+[resource]
+code = "shader_type spatial;
+render_mode blend_mix, depth_draw_opaque, depth_test_default, cull_disabled, diffuse_lambert, specular_schlick_ggx;
+
+uniform vec4 Aura_Color : source_color;
+uniform float Aura_Intensity;
+uniform vec2 Vector2Parameter;
+uniform sampler2D Texture2DParameter : source_color;
+uniform sampler2D tex_frg_10 : source_color;
+
+
+
+void fragment() {
+// ColorParameter:3
+	vec4 n_out3p0 = Aura_Color;
+
+
+// FloatParameter:4
+	float n_out4p0 = Aura_Intensity;
+
+
+// VectorOp:5
+	vec2 n_out5p0 = vec2(n_out3p0.xy) * vec2(n_out4p0);
+
+
+// Input:8
+	float n_out8p0 = TIME;
+
+
+// Vector2Parameter:14
+	vec2 n_out14p0 = Vector2Parameter;
+
+
+// VectorOp:9
+	vec2 n_out9p0 = vec2(n_out8p0) * n_out14p0;
+
+
+// UVFunc:6
+	vec2 n_in6p1 = vec2(1.00000, 1.00000);
+	vec2 n_out6p0 = n_out9p0 * n_in6p1 + UV;
+
+
+	vec4 n_out13p0;
+// Texture2D:13
+	n_out13p0 = texture(Texture2DParameter, n_out6p0);
+
+
+// Texture2D:10
+	vec4 n_out10p0 = texture(tex_frg_10, UV);
+	float n_out10p1 = n_out10p0.r;
+
+
+// FloatOp:11
+	float n_out11p0 = n_out13p0.x * n_out10p1;
+
+
+// Output:0
+	ALBEDO = vec3(n_out5p0, 0.0);
+	ALPHA = n_out11p0;
+
+
+}
+"
+modes/cull = 2
+nodes/vertex/0/position = Vector2(600, 240)
+nodes/fragment/0/position = Vector2(1020, 100)
+nodes/fragment/3/node = SubResource("VisualShaderNodeColorParameter_3y0bo")
+nodes/fragment/3/position = Vector2(-500, -440)
+nodes/fragment/4/node = SubResource("VisualShaderNodeFloatParameter_41swf")
+nodes/fragment/4/position = Vector2(-500, -60)
+nodes/fragment/5/node = SubResource("VisualShaderNodeVectorOp_7bkkr")
+nodes/fragment/5/position = Vector2(40, -240)
+nodes/fragment/6/node = SubResource("VisualShaderNodeUVFunc_eucdx")
+nodes/fragment/6/position = Vector2(-1420, 320)
+nodes/fragment/8/node = SubResource("VisualShaderNodeInput_y5gyn")
+nodes/fragment/8/position = Vector2(-2660, 340)
+nodes/fragment/9/node = SubResource("VisualShaderNodeVectorOp_r6bsa")
+nodes/fragment/9/position = Vector2(-2080, 400)
+nodes/fragment/10/node = SubResource("VisualShaderNodeTexture_oivbf")
+nodes/fragment/10/position = Vector2(-680, 1160)
+nodes/fragment/11/node = SubResource("VisualShaderNodeFloatOp_y12fb")
+nodes/fragment/11/position = Vector2(160, 580)
+nodes/fragment/12/node = SubResource("VisualShaderNodeTexture2DParameter_nu7qh")
+nodes/fragment/12/position = Vector2(-1660, 1200)
+nodes/fragment/13/node = SubResource("VisualShaderNodeTexture_g0w5o")
+nodes/fragment/13/position = Vector2(-700, 680)
+nodes/fragment/14/node = SubResource("VisualShaderNodeVec2Parameter_nu7qh")
+nodes/fragment/14/position = Vector2(-2820, 640)
+nodes/fragment/connections = PackedInt32Array(3, 0, 5, 0, 4, 0, 5, 1, 9, 0, 6, 2, 10, 1, 11, 1, 5, 0, 0, 0, 11, 0, 0, 1, 6, 0, 13, 0, 12, 0, 13, 2, 13, 0, 11, 0, 8, 0, 9, 0, 14, 0, 9, 1)
