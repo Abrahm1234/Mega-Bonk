@@ -9,7 +9,6 @@ const DIRS4: Array[Vector2i] = [
 ]
 
 # Canonical masks for dual-grid rendering.
-# 0000 empty, 1111 full, and representative masks for edge/corner-like shapes.
 const CANONICAL_EMPTY: int = 0b0000
 const CANONICAL_FULL: int = 0b1111
 const CANONICAL_CORNER: int = 0b0001
@@ -36,10 +35,6 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
 
-# If TRUE: grid coordinates are *cell centers* at x*cell_size
-# If FALSE: grid coordinates are *cell corners*, centers are (x+0.5)*cell_size
-@export var cell_coords_are_centers: bool = true
-
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
 @export var wall_thickness: float = 0.25
@@ -48,7 +43,15 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var seed_value: int = 12345
 @export var randomize_on_run: bool = false
 
+# Backward-compatible floor renderer (single multimesh) if variant nodes are not present.
 @onready var floor_mmi: MultiMeshInstance3D = $"Arena/FloorTiles" as MultiMeshInstance3D
+# Variant renderers (recommended): Arena/Floor_full, Floor_edge, Floor_corner, Floor_inverse_corner, Floor_checker.
+@onready var floor_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_full") as MultiMeshInstance3D
+@onready var floor_edge_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_edge") as MultiMeshInstance3D
+@onready var floor_corner_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_corner") as MultiMeshInstance3D
+@onready var floor_inverse_corner_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_inverse_corner") as MultiMeshInstance3D
+@onready var floor_checker_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_checker") as MultiMeshInstance3D
+
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -59,8 +62,12 @@ var _corners: PackedByteArray
 var _tiles: PackedByteArray
 
 func _ready() -> void:
-	if floor_mmi == null or wall_mmi == null:
-		push_error("ArenaAutoGen: Missing MultiMeshInstance3D nodes at Arena/FloorTiles and/or Arena/WallTiles")
+	if wall_mmi == null:
+		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
+		return
+
+	if not _has_variant_floor_nodes() and floor_mmi == null:
+		push_error("ArenaAutoGen: Missing floor renderer. Add Arena/FloorTiles or variant nodes Arena/Floor_*")
 		return
 
 	if use_random_seed or randomize_on_run:
@@ -93,7 +100,7 @@ func generate() -> void:
 		_force_single_corner_region_from_center()
 
 	_build_tiles_from_corners()
-	_build_floor_multimesh()
+	_build_floor_multimeshes()
 
 	if make_walls:
 		_build_walls_multimesh()
@@ -188,7 +195,19 @@ func _build_tiles_from_corners() -> void:
 			var mask: int = _mask_at_tile(x, y)
 			_tiles[_tile_idx(x, y)] = 1 if _tile_filled_from_mask(mask) else 0
 
-func _build_floor_multimesh() -> void:
+func _build_floor_multimeshes() -> void:
+	if _has_variant_floor_nodes():
+		_build_floor_multimeshes_by_variant()
+		if floor_mmi != null:
+			floor_mmi.multimesh = null
+		return
+
+	_build_floor_multimesh_legacy()
+
+func _build_floor_multimesh_legacy() -> void:
+	if floor_mmi == null:
+		return
+
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 
@@ -203,21 +222,78 @@ func _build_floor_multimesh() -> void:
 			if _tile_get(x, y) == 0:
 				continue
 
-			var mask: int = _mask_at_tile(x, y)
-			var canonical: Dictionary = _canonicalize_mask(mask)
-			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
+			var pos: Vector3 = _tile_to_world_center(x, y)
+			pos.y = floor_thickness * 0.5
+			transforms.append(Transform3D(Basis.IDENTITY, pos))
 
-			var pos: Vector3 = _cell_to_world_center(x, y)
+	_assign_multimesh_transforms(mm, transforms)
+	floor_mmi.multimesh = mm
+
+func _build_floor_multimeshes_by_variant() -> void:
+	var buckets: Dictionary = {
+		"full": [],
+		"edge": [],
+		"corner": [],
+		"inverse_corner": [],
+		"checker": [],
+	}
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var mask: int = _mask_at_tile(x, y)
+			if mask == CANONICAL_EMPTY:
+				continue
+
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var variant_id: String = str(canonical.get("variant_id", ""))
+			if not buckets.has(variant_id):
+				continue
+
+			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
+			var pos: Vector3 = _tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			var yaw: float = rotation_steps * PI * 0.5
 			var basis: Basis = Basis(Vector3.UP, yaw)
+			var transforms: Array = buckets[variant_id] as Array
 			transforms.append(Transform3D(basis, pos))
 
-	mm.instance_count = transforms.size()
-	for i in range(transforms.size()):
-		mm.set_instance_transform(i, transforms[i])
+	_assign_variant_multimesh(floor_full_mmi, buckets["full"] as Array, _build_floor_variant_mesh("full"))
+	_assign_variant_multimesh(floor_edge_mmi, buckets["edge"] as Array, _build_floor_variant_mesh("edge"))
+	_assign_variant_multimesh(floor_corner_mmi, buckets["corner"] as Array, _build_floor_variant_mesh("corner"))
+	_assign_variant_multimesh(floor_inverse_corner_mmi, buckets["inverse_corner"] as Array, _build_floor_variant_mesh("inverse_corner"))
+	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, _build_floor_variant_mesh("checker"))
 
-	floor_mmi.multimesh = mm
+func _assign_variant_multimesh(target: MultiMeshInstance3D, transforms_raw: Array, mesh: Mesh) -> void:
+	if target == null:
+		return
+	if transforms_raw.is_empty():
+		target.multimesh = null
+		return
+
+	var transforms: Array[Transform3D] = []
+	for t in transforms_raw:
+		transforms.append(t as Transform3D)
+
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	_assign_multimesh_transforms(mm, transforms)
+	target.multimesh = mm
+
+func _build_floor_variant_mesh(variant_id: String) -> Mesh:
+	var mesh: BoxMesh = BoxMesh.new()
+	match variant_id:
+		"edge":
+			mesh.size = Vector3(cell_size, floor_thickness, cell_size * 0.5)
+		"corner":
+			mesh.size = Vector3(cell_size * 0.5, floor_thickness, cell_size * 0.5)
+		"inverse_corner":
+			mesh.size = Vector3(cell_size, floor_thickness, cell_size)
+		"checker":
+			mesh.size = Vector3(cell_size * 0.75, floor_thickness, cell_size * 0.75)
+		_:
+			mesh.size = Vector3(cell_size, floor_thickness, cell_size)
+	return mesh
 
 func _build_walls_multimesh() -> void:
 	var mm: MultiMesh = MultiMesh.new()
@@ -243,19 +319,21 @@ func _build_walls_multimesh() -> void:
 			if _tile_get(x + 1, y) == 0:
 				transforms.append(_wall_transform_for_edge(x, y, Vector3(0.5, 0, 0), PI * 0.5))
 
-	mm.instance_count = transforms.size()
-	for i in range(transforms.size()):
-		mm.set_instance_transform(i, transforms[i])
-
+	_assign_multimesh_transforms(mm, transforms)
 	wall_mmi.multimesh = mm
 
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
-	var center: Vector3 = _cell_to_world_center(x, y)
+	var center: Vector3 = _tile_to_world_center(x, y)
 	var offset: Vector3 = Vector3(local_offset.x * cell_size, 0.0, local_offset.z * cell_size)
 	var pos: Vector3 = center + offset
 	pos.y = wall_height * 0.5
 	var basis: Basis = Basis(Vector3.UP, yaw)
 	return Transform3D(basis, pos)
+
+func _assign_multimesh_transforms(mm: MultiMesh, transforms: Array[Transform3D]) -> void:
+	mm.instance_count = transforms.size()
+	for i in range(transforms.size()):
+		mm.set_instance_transform(i, transforms[i])
 
 # -----------------------------
 # Dual-mask helpers
@@ -298,28 +376,21 @@ func _canonicalize_mask(mask: int) -> Dictionary:
 	return {"variant_id": "unknown", "rotation_steps": 0}
 
 func _tile_filled_from_mask(mask: int) -> bool:
-	# Dual-grid -> tile occupancy heuristic:
-	# keep tiles that have majority (or all) filled corners.
-	return _bit_count4(mask) >= 2
-
-func _bit_count4(mask: int) -> int:
-	return int(mask & 1) + int((mask >> 1) & 1) + int((mask >> 2) & 1) + int((mask >> 3) & 1)
+	# In dual-grid mode, any non-empty mask contributes geometry.
+	return mask != CANONICAL_EMPTY
 
 # -----------------------------
 # Position + indexing helpers
 # -----------------------------
 
-func _cell_to_world_center(x: int, y: int) -> Vector3:
+func _grid_base_world() -> Vector3:
 	var base: Vector3 = Vector3.ZERO
 
 	match origin_mode:
 		OriginMode.MIN_CORNER:
 			base = Vector3.ZERO
 		OriginMode.CENTERED:
-			if cell_coords_are_centers:
-				base = Vector3(-((grid_w - 1) * cell_size) * 0.5, 0.0, -((grid_h - 1) * cell_size) * 0.5)
-			else:
-				base = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
+			base = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
 		OriginMode.CUSTOM_ANCHOR:
 			var a: Node = get_node_or_null(origin_anchor_path)
 			if a is Node3D:
@@ -327,10 +398,14 @@ func _cell_to_world_center(x: int, y: int) -> Vector3:
 			else:
 				base = Vector3.ZERO
 
-	base += origin_offset
+	return base + origin_offset
 
-	if cell_coords_are_centers:
-		return base + Vector3(x * cell_size, 0.0, y * cell_size)
+func _corner_to_world(x: int, y: int) -> Vector3:
+	var base: Vector3 = _grid_base_world()
+	return base + Vector3(x * cell_size, 0.0, y * cell_size)
+
+func _tile_to_world_center(x: int, y: int) -> Vector3:
+	var base: Vector3 = _grid_base_world()
 	return base + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
 
 func _points_w() -> int:
@@ -369,3 +444,6 @@ func _count_corner_neighbors8(x: int, y: int) -> int:
 				continue
 			c += _corner_get(x + dx, y + dy)
 	return c
+
+func _has_variant_floor_nodes() -> bool:
+	return floor_full_mmi != null and floor_edge_mmi != null and floor_corner_mmi != null and floor_inverse_corner_mmi != null and floor_checker_mmi != null
