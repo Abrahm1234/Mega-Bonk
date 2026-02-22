@@ -153,6 +153,7 @@ extends Node3D
 @export var keep_legacy_collision_with_irregular_visuals: bool = true
 @export var register_boundary_walls_in_surface_registry: bool = true
 @export var warn_on_mesh_collision_scale_mismatch: bool = true
+@export var auto_match_collision_to_mesh_transform: bool = true
 
 @onready var mesh_instance: MeshInstance3D = get_node_or_null("TerrainBody/TerrainMesh")
 @onready var collision_shape: CollisionShape3D = get_node_or_null("TerrainBody/TerrainCollision")
@@ -3260,7 +3261,7 @@ func _emit_overhangs(st: SurfaceTool, n: int, uv_scale_top: float, levels: Packe
 					Vector3(rect.position.x + rect.size.x, y, rect.position.y + rect.size.y),
 					Vector3(rect.position.x, y, rect.position.y + rect.size.y)
 				])
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true}, n)})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "floor_mask": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("mask", 0)), "floor_rot": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("rot", 0)), "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true, "floor_mask": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("mask", 0))}, n)})
 				_overhang_mask[anchor] = 1
 				emitted += 1
 
@@ -3417,7 +3418,7 @@ func _register_overhangs_from_layout(n: int, levels: PackedInt32Array) -> void:
 						Vector3(pts[3].x, y, pts[3].y)
 					]),
 					Vector3.UP,
-					{"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true}, n)}
+					{"floor_level": bridge_level, "low_level": bridge_level, "high_level": bridge_level, "overhang": true, "floor_mask": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("mask", 0)), "floor_rot": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("rot", 0)), "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": true, "floor_mask": int(_canonical_floor_mask(_adjacency_mask_nesw(x, z, n)).get("mask", 0))}, n)}
 				)
 				_overhang_mask[anchor] = 1
 				emitted += 1
@@ -3448,13 +3449,59 @@ func _adjacency_mask_nesw(x: int, z: int, n: int) -> int:
 		mask |= 8
 	return mask
 
+func _rot_mask_90(mask: int) -> int:
+	var n := (mask & 1) != 0
+	var e := (mask & 2) != 0
+	var s := (mask & 4) != 0
+	var w := (mask & 8) != 0
+	var out := 0
+	if w:
+		out |= 1
+	if n:
+		out |= 2
+	if e:
+		out |= 4
+	if s:
+		out |= 8
+	return out
+
+func _canonical_floor_mask(mask: int) -> Dictionary:
+	var best := mask
+	var best_rot := 0
+	var cur := mask
+	for r in range(1, 4):
+		cur = _rot_mask_90(cur)
+		if cur < best:
+			best = cur
+			best_rot = r
+	return {"mask": best, "rot": best_rot}
+
+func _sync_collision_to_mesh_xform() -> void:
+	if not auto_match_collision_to_mesh_transform:
+		return
+	if mesh_instance == null or collision_shape == null:
+		return
+	if collision_shape.get_parent() == mesh_instance.get_parent():
+		collision_shape.transform = mesh_instance.transform
+
+func _sync_tunnel_collision_to_mesh_xform() -> void:
+	if not auto_match_collision_to_mesh_transform:
+		return
+	if _tunnel_mesh_instance == null or _tunnel_collision_shape == null:
+		return
+	if _tunnel_collision_shape.get_parent() == _tunnel_mesh_instance.get_parent():
+		_tunnel_collision_shape.transform = _tunnel_mesh_instance.transform
+
 func _surface_module_key(kind: int, x: int, z: int, extra: Dictionary, n: int) -> String:
 	match kind:
 		SurfaceKind.FLOOR:
-			var adj := _adjacency_mask_nesw(x, z, n)
+			var canonical_mask: int = int(extra.get("floor_mask", -1))
+			if canonical_mask < 0:
+				var adj := _adjacency_mask_nesw(x, z, n)
+				canonical_mask = int(_canonical_floor_mask(adj).get("mask", adj))
 			if bool(extra.get("overhang", false)):
-				return "floor_overhang_%d" % adj
-			return "floor_%d" % adj
+				return "floor_overhang_%d" % canonical_mask
+			return "floor_%d" % canonical_mask
 		SurfaceKind.RAMP:
 			var rd: int = int(extra.get("ramp_dir", RAMP_NONE))
 			return "ramp_%d_l%d_h%d" % [rd, int(extra.get("low_level", -999)), int(extra.get("high_level", -999))]
@@ -3504,10 +3551,16 @@ func _build_surface_registry_from_layout(n: int) -> void:
 				Vector3(p[3].x, c0.w, p[3].y)
 			])
 			var floor_level := grid_y_to_level((c0.x + c0.y + c0.z + c0.w) * 0.25)
+			var low_level := grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w)))
+			var high_level := grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w)))
+			var floor_adj := _adjacency_mask_nesw(x, z, n)
+			var floor_can := _canonical_floor_mask(floor_adj)
+			var floor_mask := int(floor_can.get("mask", floor_adj))
+			var floor_rot := int(floor_can.get("rot", 0))
 			if is_ramp:
-				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "ramp_dir": ramp_dir, "module_key": _surface_module_key(SurfaceKind.RAMP, x, z, {"ramp_dir": ramp_dir, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w)))}, n)})
+				_register_surface(SurfaceKind.RAMP, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.ZERO, {"floor_level": floor_level, "low_level": low_level, "high_level": high_level, "ramp_dir": ramp_dir, "floor_mask": floor_mask, "floor_rot": floor_rot, "module_key": _surface_module_key(SurfaceKind.RAMP, x, z, {"ramp_dir": ramp_dir, "low_level": low_level, "high_level": high_level}, n)})
 			else:
-				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level, "low_level": grid_y_to_level(minf(minf(c0.x, c0.y), minf(c0.z, c0.w))), "high_level": grid_y_to_level(maxf(maxf(c0.x, c0.y), maxf(c0.z, c0.w))), "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": false}, n)})
+				_register_surface(SurfaceKind.FLOOR, Vector2i(x, z), SurfaceSide.NONE, Vector2i(-1, -1), SurfaceSide.NONE, verts, Vector3.UP, {"floor_level": floor_level, "low_level": low_level, "high_level": high_level, "floor_mask": floor_mask, "floor_rot": floor_rot, "module_key": _surface_module_key(SurfaceKind.FLOOR, x, z, {"overhang": false, "floor_mask": floor_mask}, n)})
 
 	_register_overhangs_from_layout(n, levels)
 
@@ -3715,6 +3768,7 @@ func _build_modular_visuals_from_surfaces(n: int) -> void:
 	_validate_mesh_bounds(mesh, "terrain")
 	if not keep_legacy_collision_with_irregular_visuals:
 		collision_shape.shape = mesh.create_trimesh_shape()
+		_sync_collision_to_mesh_xform()
 
 # -----------------------------
 # Mesh building
@@ -3874,6 +3928,7 @@ func _build_mesh_and_collision(n: int) -> void:
 	mesh_instance.mesh = mesh
 	_validate_mesh_bounds(mesh, "terrain")
 	collision_shape.shape = mesh.create_trimesh_shape()
+	_sync_collision_to_mesh_xform()
 func _validate_mesh_bounds(mesh: ArrayMesh, label: String) -> void:
 	if mesh == null:
 		return
@@ -4229,6 +4284,7 @@ func _build_tunnel_mesh(n: int) -> void:
 	var mesh: ArrayMesh = st.commit()
 	_tunnel_mesh_instance.mesh = mesh
 	_tunnel_collision_shape.shape = mesh.create_trimesh_shape()
+	_sync_tunnel_collision_to_mesh_xform()
 
 func _sync_sun() -> void:
 	var sun := get_node_or_null("SUN") as DirectionalLight3D
