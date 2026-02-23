@@ -50,9 +50,15 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var mesh_inverse_corner: Mesh
 @export var mesh_checker: Mesh
 
+@export var piece_mesh_3x3_full: Mesh
+@export var piece_mesh_2x3_full: Mesh
 @export var piece_mesh_2x2_full: Mesh
+@export var piece_mesh_5x1_edge: Mesh
+@export var piece_mesh_4x1_edge: Mesh
 @export var piece_mesh_3x1_edge: Mesh
+@export var piece_mesh_3x2_bay: Mesh
 @export var piece_mesh_2x2_bay: Mesh
+@export var piece_mesh_corner_cluster: Mesh
 
 @onready var floor_mmi: MultiMeshInstance3D = $"Arena/FloorTiles" as MultiMeshInstance3D
 @onready var floor_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_full") as MultiMeshInstance3D
@@ -61,9 +67,15 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var floor_inverse_corner_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_inverse_corner") as MultiMeshInstance3D
 @onready var floor_checker_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Floor_checker") as MultiMeshInstance3D
 
+@onready var piece_3x3_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_3x3_full") as MultiMeshInstance3D
+@onready var piece_2x3_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_2x3_full") as MultiMeshInstance3D
 @onready var piece_2x2_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_2x2_full") as MultiMeshInstance3D
+@onready var piece_5x1_edge_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_5x1_edge") as MultiMeshInstance3D
+@onready var piece_4x1_edge_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_4x1_edge") as MultiMeshInstance3D
 @onready var piece_3x1_edge_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_3x1_edge") as MultiMeshInstance3D
+@onready var piece_3x2_bay_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_3x2_bay") as MultiMeshInstance3D
 @onready var piece_2x2_bay_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_2x2_bay") as MultiMeshInstance3D
+@onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
 
@@ -200,18 +212,19 @@ func _build_tiles_from_corners() -> void:
 			_tiles[_tile_idx(x, y)] = 1 if _tile_filled_from_mask(mask) else 0
 
 func _run_pattern_stamping() -> void:
-	_piece_transforms = {
-		"piece_2x2_full": [],
-		"piece_3x1_edge": [],
-		"piece_2x2_bay": [],
-	}
+	var patterns: Array[Dictionary] = PatternPieces.get_default_patterns()
+	_piece_transforms = {}
+	for pattern in patterns:
+		var pid: String = str(pattern.get("id", ""))
+		if pid != "" and not _piece_transforms.has(pid):
+			_piece_transforms[pid] = []
+
 	_occupied.fill(0)
 
 	if not use_pattern_stamping:
 		_build_piece_multimeshes()
 		return
 
-	var patterns: Array[Dictionary] = PatternPieces.get_default_patterns()
 	patterns.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a.get("priority", 0)) > int(b.get("priority", 0))
 	)
@@ -222,7 +235,10 @@ func _run_pattern_stamping() -> void:
 			for x in range(grid_w - size.x + 1):
 				if _pattern_matches_at(pattern, x, y):
 					_mark_pattern_occupied(size, x, y)
-					var t: Array = _piece_transforms[pattern["id"]] as Array
+					var pid: String = str(pattern.get("id", ""))
+					if not _piece_transforms.has(pid):
+						continue
+					var t: Array = _piece_transforms[pid] as Array
 					var rot_steps: int = int(pattern.get("rot_steps", 0))
 					var yaw: float = rot_steps * PI * 0.5
 					t.append(Transform3D(Basis(Vector3.UP, yaw), _pattern_anchor_to_world(x, y, size)))
@@ -313,20 +329,54 @@ func _build_floor_multimeshes_by_variant() -> void:
 	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, _build_floor_variant_mesh("checker"))
 
 func _build_piece_multimeshes() -> void:
-	_assign_variant_multimesh(piece_2x2_full_mmi, _piece_transforms["piece_2x2_full"] as Array, _build_piece_mesh("piece_2x2_full"))
-	_assign_variant_multimesh(piece_3x1_edge_mmi, _piece_transforms["piece_3x1_edge"] as Array, _build_piece_mesh("piece_3x1_edge"))
-	_assign_variant_multimesh(piece_2x2_bay_mmi, _piece_transforms["piece_2x2_bay"] as Array, _build_piece_mesh("piece_2x2_bay"))
+	_assign_piece_multimesh(piece_3x3_full_mmi, "piece_3x3_full")
+	_assign_piece_multimesh(piece_2x3_full_mmi, "piece_2x3_full")
+	_assign_piece_multimesh(piece_2x2_full_mmi, "piece_2x2_full")
+	_assign_piece_multimesh(piece_5x1_edge_mmi, "piece_5x1_edge")
+	_assign_piece_multimesh(piece_4x1_edge_mmi, "piece_4x1_edge")
+	_assign_piece_multimesh(piece_3x1_edge_mmi, "piece_3x1_edge")
+	_assign_piece_multimesh(piece_3x2_bay_mmi, "piece_3x2_bay")
+	_assign_piece_multimesh(piece_2x2_bay_mmi, "piece_2x2_bay")
+	_assign_piece_multimesh(piece_corner_cluster_mmi, "piece_corner_cluster")
+
+func _assign_piece_multimesh(target: MultiMeshInstance3D, piece_id: String) -> void:
+	var transforms: Array = _piece_transforms.get(piece_id, []) as Array
+	_assign_variant_multimesh(target, transforms, _build_piece_mesh(piece_id))
 
 func _build_piece_mesh(piece_id: String) -> Mesh:
 	match piece_id:
+		"piece_3x3_full":
+			if piece_mesh_3x3_full != null:
+				return piece_mesh_3x3_full
+			var m00: BoxMesh = BoxMesh.new(); m00.size = Vector3(cell_size * 3.0, floor_thickness, cell_size * 3.0); return m00
+		"piece_2x3_full":
+			if piece_mesh_2x3_full != null:
+				return piece_mesh_2x3_full
+			var m01: BoxMesh = BoxMesh.new(); m01.size = Vector3(cell_size * 2.0, floor_thickness, cell_size * 3.0); return m01
 		"piece_2x2_full":
 			if piece_mesh_2x2_full != null:
 				return piece_mesh_2x2_full
 			var m0: BoxMesh = BoxMesh.new(); m0.size = Vector3(cell_size * 2.0, floor_thickness, cell_size * 2.0); return m0
+		"piece_5x1_edge":
+			if piece_mesh_5x1_edge != null:
+				return piece_mesh_5x1_edge
+			var m50: BoxMesh = BoxMesh.new(); m50.size = Vector3(cell_size * 5.0, floor_thickness, cell_size); return m50
+		"piece_4x1_edge":
+			if piece_mesh_4x1_edge != null:
+				return piece_mesh_4x1_edge
+			var m40: BoxMesh = BoxMesh.new(); m40.size = Vector3(cell_size * 4.0, floor_thickness, cell_size); return m40
 		"piece_3x1_edge":
 			if piece_mesh_3x1_edge != null:
 				return piece_mesh_3x1_edge
 			var m1: BoxMesh = BoxMesh.new(); m1.size = Vector3(cell_size * 3.0, floor_thickness, cell_size); return m1
+		"piece_3x2_bay":
+			if piece_mesh_3x2_bay != null:
+				return piece_mesh_3x2_bay
+			var m32: BoxMesh = BoxMesh.new(); m32.size = Vector3(cell_size * 3.0, floor_thickness, cell_size * 2.0); return m32
+		"piece_corner_cluster":
+			if piece_mesh_corner_cluster != null:
+				return piece_mesh_corner_cluster
+			var mcc: BoxMesh = BoxMesh.new(); mcc.size = Vector3(cell_size * 2.0, floor_thickness, cell_size * 2.0); return mcc
 		_:
 			if piece_mesh_2x2_bay != null:
 				return piece_mesh_2x2_bay
@@ -440,7 +490,13 @@ func _variant_at_tile(x: int, y: int) -> String:
 	return str(_canonicalize_mask(mask).get("variant_id", "unknown"))
 
 func _tile_filled_from_mask(mask: int) -> bool:
-	return mask != CANONICAL_EMPTY
+	match mask:
+		CANONICAL_EMPTY:
+			return false
+		CANONICAL_CHECKER:
+			return false
+		_:
+			return true
 
 func _grid_base_world() -> Vector3:
 	var base: Vector3 = Vector3.ZERO
