@@ -43,6 +43,8 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var randomize_on_run: bool = false
 
 @export var use_pattern_stamping: bool = true
+@export var pieces_replace_base_floor: bool = false
+@export var piece_height_epsilon: float = 0.01
 
 @export var mesh_full: Mesh
 @export var mesh_edge: Mesh
@@ -241,7 +243,11 @@ func _run_pattern_stamping() -> void:
 					var t: Array = _piece_transforms[pid] as Array
 					var rot_steps: int = int(pattern.get("rot_steps", 0))
 					var yaw: float = rot_steps * PI * 0.5
-					t.append(Transform3D(Basis(Vector3.UP, yaw), _pattern_anchor_to_world(x, y, size)))
+					var mesh: Mesh = _build_piece_mesh(pid)
+					var desired: Vector3 = _piece_desired_size(size)
+					var pos: Vector3 = _pattern_anchor_to_world(x, y, size)
+					pos.y += piece_height_epsilon
+					t.append(_fit_mesh_transform(mesh, desired, yaw, pos))
 
 	_build_piece_multimeshes()
 
@@ -270,9 +276,9 @@ func _mark_pattern_occupied(size: Vector2i, x: int, y: int) -> void:
 			_occupied[_tile_idx(x + px, y + py)] = 1
 
 func _pattern_anchor_to_world(x: int, y: int, size: Vector2i) -> Vector3:
-	var center: Vector3 = _tile_to_world_center(x, y)
-	center.x += (float(size.x - 1) * 0.5) * cell_size
-	center.z += (float(size.y - 1) * 0.5) * cell_size
+	var cx: float = float(x) + (float(size.x) - 1.0) * 0.5
+	var cy: float = float(y) + (float(size.y) - 1.0) * 0.5
+	var center: Vector3 = _tile_to_world_center_f(cx, cy)
 	center.y = floor_thickness * 0.5
 	return center
 
@@ -293,7 +299,7 @@ func _build_floor_multimesh_legacy() -> void:
 	var transforms: Array[Transform3D] = []
 	for y in range(grid_h):
 		for x in range(grid_w):
-			if _tile_get(x, y) == 0 or _occupied[_tile_idx(x, y)] != 0:
+			if _tile_get(x, y) == 0 or (pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0):
 				continue
 			var pos: Vector3 = _tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
@@ -303,9 +309,18 @@ func _build_floor_multimesh_legacy() -> void:
 
 func _build_floor_multimeshes_by_variant() -> void:
 	var buckets: Dictionary = {"full": [], "edge": [], "corner": [], "inverse_corner": [], "checker": []}
+	var mesh_by_variant: Dictionary = {
+		"full": _build_floor_variant_mesh("full"),
+		"edge": _build_floor_variant_mesh("edge"),
+		"corner": _build_floor_variant_mesh("corner"),
+		"inverse_corner": _build_floor_variant_mesh("inverse_corner"),
+		"checker": _build_floor_variant_mesh("checker"),
+	}
+	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
+
 	for y in range(grid_h):
 		for x in range(grid_w):
-			if _occupied[_tile_idx(x, y)] != 0:
+			if pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0:
 				continue
 			var mask: int = _mask_at_tile(x, y)
 			if mask == CANONICAL_EMPTY:
@@ -318,15 +333,15 @@ func _build_floor_multimeshes_by_variant() -> void:
 			var pos: Vector3 = _tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			var yaw: float = rotation_steps * PI * 0.5
-			var basis: Basis = Basis(Vector3.UP, yaw)
+			var mesh: Mesh = mesh_by_variant[variant_id] as Mesh
 			var transforms: Array = buckets[variant_id] as Array
-			transforms.append(Transform3D(basis, pos))
+			transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
 
-	_assign_variant_multimesh(floor_full_mmi, buckets["full"] as Array, _build_floor_variant_mesh("full"))
-	_assign_variant_multimesh(floor_edge_mmi, buckets["edge"] as Array, _build_floor_variant_mesh("edge"))
-	_assign_variant_multimesh(floor_corner_mmi, buckets["corner"] as Array, _build_floor_variant_mesh("corner"))
-	_assign_variant_multimesh(floor_inverse_corner_mmi, buckets["inverse_corner"] as Array, _build_floor_variant_mesh("inverse_corner"))
-	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, _build_floor_variant_mesh("checker"))
+	_assign_variant_multimesh(floor_full_mmi, buckets["full"] as Array, mesh_by_variant["full"] as Mesh)
+	_assign_variant_multimesh(floor_edge_mmi, buckets["edge"] as Array, mesh_by_variant["edge"] as Mesh)
+	_assign_variant_multimesh(floor_corner_mmi, buckets["corner"] as Array, mesh_by_variant["corner"] as Mesh)
+	_assign_variant_multimesh(floor_inverse_corner_mmi, buckets["inverse_corner"] as Array, mesh_by_variant["inverse_corner"] as Mesh)
+	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, mesh_by_variant["checker"] as Mesh)
 
 func _build_piece_multimeshes() -> void:
 	_assign_piece_multimesh(piece_3x3_full_mmi, "piece_3x3_full")
@@ -498,6 +513,24 @@ func _tile_filled_from_mask(mask: int) -> bool:
 		_:
 			return true
 
+
+func _piece_desired_size(size: Vector2i) -> Vector3:
+	return Vector3(float(size.x) * cell_size, floor_thickness, float(size.y) * cell_size)
+
+func _fit_mesh_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_pos: Vector3) -> Transform3D:
+	if mesh == null:
+		return Transform3D(Basis(Vector3.UP, yaw), world_pos)
+
+	var aabb: AABB = mesh.get_aabb()
+	var sx: float = max(aabb.size.x, 0.0001)
+	var sy: float = max(aabb.size.y, 0.0001)
+	var sz: float = max(aabb.size.z, 0.0001)
+	var scale: Vector3 = Vector3(desired_size.x / sx, desired_size.y / sy, desired_size.z / sz)
+	var basis: Basis = Basis(Vector3.UP, yaw).scaled(scale)
+	var center: Vector3 = aabb.position + aabb.size * 0.5
+	var corrected_pos: Vector3 = world_pos + basis * (-center)
+	return Transform3D(basis, corrected_pos)
+
 func _grid_base_world() -> Vector3:
 	var base: Vector3 = Vector3.ZERO
 	match origin_mode:
@@ -514,6 +547,9 @@ func _corner_to_world(x: int, y: int) -> Vector3:
 
 func _tile_to_world_center(x: int, y: int) -> Vector3:
 	return _grid_base_world() + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+
+func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
+	return _grid_base_world() + Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
 
 func _points_w() -> int:
 	return grid_w + 1
