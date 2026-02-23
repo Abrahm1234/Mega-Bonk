@@ -295,7 +295,9 @@ func _build_floor_multimesh_legacy() -> void:
 		return
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = _build_floor_variant_mesh("full")
+	var mesh: Mesh = _build_floor_variant_mesh("full")
+	mm.mesh = mesh
+	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 	var transforms: Array[Transform3D] = []
 	for y in range(grid_h):
 		for x in range(grid_w):
@@ -303,7 +305,7 @@ func _build_floor_multimesh_legacy() -> void:
 				continue
 			var pos: Vector3 = _tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
-			transforms.append(Transform3D(Basis.IDENTITY, pos))
+			transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
 	_assign_multimesh_transforms(mm, transforms)
 	floor_mmi.multimesh = mm
 
