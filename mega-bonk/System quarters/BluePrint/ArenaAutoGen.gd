@@ -531,25 +531,31 @@ func _fit_mesh_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_po
 	var corrected_pos: Vector3 = world_pos + basis * (-center)
 	return Transform3D(basis, corrected_pos)
 
-func _grid_base_world() -> Vector3:
-	var base: Vector3 = Vector3.ZERO
+func _grid_xform_local() -> Transform3D:
 	match origin_mode:
-		OriginMode.MIN_CORNER: base = Vector3.ZERO
-		OriginMode.CENTERED: base = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
+		OriginMode.MIN_CORNER:
+			return Transform3D(Basis.IDENTITY, origin_offset)
+		OriginMode.CENTERED:
+			var centered_origin: Vector3 = Vector3(-(grid_w * cell_size) * 0.5, 0.0, -(grid_h * cell_size) * 0.5)
+			return Transform3D(Basis.IDENTITY, centered_origin + origin_offset)
 		OriginMode.CUSTOM_ANCHOR:
 			var a: Node = get_node_or_null(origin_anchor_path)
 			if a is Node3D:
-				base = to_local((a as Node3D).global_position)
-	return base + origin_offset
+				var anchor_local: Transform3D = global_transform.affine_inverse() * (a as Node3D).global_transform
+				return Transform3D(anchor_local.basis, anchor_local.origin + origin_offset)
+	return Transform3D(Basis.IDENTITY, origin_offset)
 
 func _corner_to_world(x: int, y: int) -> Vector3:
-	return _grid_base_world() + Vector3(x * cell_size, 0.0, y * cell_size)
+	var grid_xform: Transform3D = _grid_xform_local()
+	return grid_xform * Vector3(x * cell_size, 0.0, y * cell_size)
 
 func _tile_to_world_center(x: int, y: int) -> Vector3:
-	return _grid_base_world() + Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+	var grid_xform: Transform3D = _grid_xform_local()
+	return grid_xform * Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
 
 func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
-	return _grid_base_world() + Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
+	var grid_xform: Transform3D = _grid_xform_local()
+	return grid_xform * Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
 
 func _points_w() -> int:
 	return grid_w + 1
