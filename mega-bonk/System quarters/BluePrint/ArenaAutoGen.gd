@@ -34,6 +34,11 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
 
+@export var bind_to_wire_grid: bool = false
+@export var wire_grid_origin_path: NodePath
+@export var wire_grid_bounds_mesh_path: NodePath
+@export var use_grid_depth_for_h: bool = true
+
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
 @export var wall_thickness: float = 0.25
@@ -102,8 +107,86 @@ func _ready() -> void:
 	else:
 		_rng.seed = seed_value
 
+	if bind_to_wire_grid:
+		call_deferred("_sync_and_generate_if_needed")
+	elif auto_generate:
+		generate()
+
+func _sync_and_generate_if_needed() -> void:
+	await get_tree().process_frame
+	_sync_to_wire_grid()
 	if auto_generate:
 		generate()
+
+func _sync_to_wire_grid() -> void:
+	if not bind_to_wire_grid:
+		return
+
+	var grid_node: Node = get_node_or_null("/root/Grid")
+	if grid_node != null:
+		var step: Variant = grid_node.get("STEP_SIZE")
+		if step is Vector3:
+			var step_x: float = (step as Vector3).x
+			if step_x > 0.0001:
+				cell_size = step_x
+
+		var width_value: Variant = grid_node.get("grid_width")
+		if width_value is int and int(width_value) > 0:
+			grid_w = int(width_value)
+
+		var h_key: String = "grid_depth" if use_grid_depth_for_h else "grid_height"
+		var height_value: Variant = grid_node.get(h_key)
+		if height_value is int and int(height_value) > 0:
+			grid_h = int(height_value)
+
+	var origin_node: Node = get_node_or_null(wire_grid_origin_path)
+	if origin_node is Node3D:
+		origin_mode = OriginMode.CUSTOM_ANCHOR
+		origin_anchor_path = wire_grid_origin_path
+
+	var bounds_node: Node = get_node_or_null(wire_grid_bounds_mesh_path)
+	var bounds_mi: MeshInstance3D = _resolve_bounds_mesh(bounds_node)
+	if bounds_mi != null and bounds_mi.mesh != null:
+		var to_self: Transform3D = global_transform.affine_inverse() * bounds_mi.global_transform
+		var aabb_self: AABB = _transform_aabb(bounds_mi.mesh.get_aabb(), to_self)
+		var w_from_bounds: int = int(floor(aabb_self.size.x / max(cell_size, 0.0001)))
+		var h_from_bounds: int = int(floor(aabb_self.size.z / max(cell_size, 0.0001)))
+		if w_from_bounds > 0:
+			grid_w = w_from_bounds
+		if h_from_bounds > 0:
+			grid_h = h_from_bounds
+		origin_mode = OriginMode.MIN_CORNER
+		origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+
+func _resolve_bounds_mesh(node: Node) -> MeshInstance3D:
+	if node == null:
+		return null
+	if node is MeshInstance3D:
+		return node as MeshInstance3D
+	var meshes: Array[Node] = node.find_children("*", "MeshInstance3D", true, false)
+	if meshes.is_empty():
+		return null
+	return meshes[0] as MeshInstance3D
+
+func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
+	var corners: Array[Vector3] = [
+		xform * aabb.position,
+		xform * (aabb.position + Vector3(aabb.size.x, 0.0, 0.0)),
+		xform * (aabb.position + Vector3(0.0, aabb.size.y, 0.0)),
+		xform * (aabb.position + Vector3(0.0, 0.0, aabb.size.z)),
+		xform * (aabb.position + Vector3(aabb.size.x, aabb.size.y, 0.0)),
+		xform * (aabb.position + Vector3(aabb.size.x, 0.0, aabb.size.z)),
+		xform * (aabb.position + Vector3(0.0, aabb.size.y, aabb.size.z)),
+		xform * (aabb.position + aabb.size),
+	]
+
+	var min_v: Vector3 = corners[0]
+	var max_v: Vector3 = corners[0]
+	for c in corners:
+		min_v = Vector3(min(min_v.x, c.x), min(min_v.y, c.y), min(min_v.z, c.z))
+		max_v = Vector3(max(max_v.x, c.x), max(max_v.y, c.y), max(max_v.z, c.z))
+
+	return AABB(min_v, max_v - min_v)
 
 func generate() -> void:
 	if grid_w <= 0 or grid_h <= 0:
@@ -591,7 +674,7 @@ func _grid_xform_local() -> Transform3D:
 			var a: Node = get_node_or_null(origin_anchor_path)
 			if a is Node3D:
 				var anchor_local: Transform3D = global_transform.affine_inverse() * (a as Node3D).global_transform
-				return Transform3D(anchor_local.basis, anchor_local.origin + origin_offset)
+				return Transform3D(anchor_local.basis, anchor_local.origin + anchor_local.basis * origin_offset)
 	return Transform3D(Basis.IDENTITY, origin_offset)
 
 func _corner_to_world(x: int, y: int) -> Vector3:
