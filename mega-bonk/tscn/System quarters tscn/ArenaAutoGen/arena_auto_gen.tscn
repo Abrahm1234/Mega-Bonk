@@ -158,12 +158,12 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_piece_corner_cluster")
 environment = SubResource("Environment_1")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(Basis(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372), Vector3(0, 12, 0))
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 12, 0)
 light_energy = 1.2
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(Basis(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107), Vector3(0, 40, 40))
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 40, 40)
 
 [node name="Arena" type="Node3D" parent="."]
 
