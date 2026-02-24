@@ -51,8 +51,6 @@ albedo_color = Color(1, 0.9, 0.2, 1)
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_corner_cluster"]
 albedo_color = Color(0.2, 0.85, 0.25, 1)
 
-# --- Placeholder meshes for Inspector slots (optional) ---
-# Note: The generator script will auto-fit any mesh to the grid footprint at runtime.
 [sub_resource type="BoxMesh" id="BoxMesh_floor_full"]
 size = Vector3(8, 0.25, 8)
 material = SubResource("StandardMaterial3D_floor_full")

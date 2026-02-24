@@ -5,7 +5,7 @@
 [ext_resource type="ArrayMesh" uid="uid://ba2lyr6c4n8wd" path="res://Mesh/Bastion Wedge (Military AI core ship)/ (Military AI core ship).res" id="3_f5wgq"]
 [ext_resource type="Texture2D" uid="uid://bqf4qd7pwnjt8" path="res://Mesh/Bastion Wedge (Military AI core ship)/shiiny_texture_pbr_20250901.png" id="4_00eaj"]
 [ext_resource type="Shader" uid="uid://p04f7ehhxj2r" path="res://System quarters/Buried chambers/arena_terrain Shaders/Gun effect aura shader.tres" id="4_o2633"]
-[ext_resource type="Texture2D" uid="uid://b76yu2yviosun" path="res://Mesh/Weapons/Prism Coil Disrutptor High Poly/ComfyUI_00005_.png" id="5_6hqrc"]
+[ext_resource type="Texture2D" uid="uid://cnk23ns5jvyti" path="res://Mesh/Weapons/Prism Coil Disrutptor High Poly/gun_glow_mask_2048.png" id="5_6hqrc"]
 [ext_resource type="Texture2D" uid="uid://d3foj2wqww1lk" path="res://VFX/Gun effects/Noise Textures/T_Noise1_tiled.png" id="5_apn2u"]
 [ext_resource type="Texture2D" uid="uid://cxk6fc8sj7j03" path="res://Mesh/Enemy-Meshs/Claw/new_Image_1.png" id="6_00eaj"]
 
