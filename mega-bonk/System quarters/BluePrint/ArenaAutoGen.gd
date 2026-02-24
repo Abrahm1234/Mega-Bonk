@@ -45,6 +45,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var use_pattern_stamping: bool = true
 @export var pieces_replace_base_floor: bool = false
 @export var piece_height_epsilon: float = 0.01
+@export var checker_is_solid: bool = true
 
 @export var mesh_full: Mesh
 @export var mesh_edge: Mesh
@@ -236,10 +237,12 @@ func _run_pattern_stamping() -> void:
 		for y in range(grid_h - size.y + 1):
 			for x in range(grid_w - size.x + 1):
 				if _pattern_matches_at(pattern, x, y):
-					_mark_pattern_occupied(size, x, y)
 					var pid: String = str(pattern.get("id", ""))
 					if not _piece_transforms.has(pid):
 						continue
+					if not _can_render_piece(pid):
+						continue
+					_mark_pattern_occupied(size, x, y)
 					var t: Array = _piece_transforms[pid] as Array
 					var rot_steps: int = int(pattern.get("rot_steps", 0))
 					var yaw: float = rot_steps * PI * 0.5
@@ -355,6 +358,31 @@ func _build_piece_multimeshes() -> void:
 	_assign_piece_multimesh(piece_3x2_bay_mmi, "piece_3x2_bay")
 	_assign_piece_multimesh(piece_2x2_bay_mmi, "piece_2x2_bay")
 	_assign_piece_multimesh(piece_corner_cluster_mmi, "piece_corner_cluster")
+
+func _piece_target_for_id(piece_id: String) -> MultiMeshInstance3D:
+	match piece_id:
+		"piece_3x3_full":
+			return piece_3x3_full_mmi
+		"piece_2x3_full":
+			return piece_2x3_full_mmi
+		"piece_2x2_full":
+			return piece_2x2_full_mmi
+		"piece_5x1_edge":
+			return piece_5x1_edge_mmi
+		"piece_4x1_edge":
+			return piece_4x1_edge_mmi
+		"piece_3x1_edge":
+			return piece_3x1_edge_mmi
+		"piece_3x2_bay":
+			return piece_3x2_bay_mmi
+		"piece_2x2_bay":
+			return piece_2x2_bay_mmi
+		"piece_corner_cluster":
+			return piece_corner_cluster_mmi
+	return null
+
+func _can_render_piece(piece_id: String) -> bool:
+	return _piece_target_for_id(piece_id) != null and _build_piece_mesh(piece_id) != null
 
 func _assign_piece_multimesh(target: MultiMeshInstance3D, piece_id: String) -> void:
 	var transforms: Array = _piece_transforms.get(piece_id, []) as Array
@@ -511,7 +539,7 @@ func _tile_filled_from_mask(mask: int) -> bool:
 		CANONICAL_EMPTY:
 			return false
 		CANONICAL_CHECKER:
-			return false
+			return checker_is_solid
 		_:
 			return true
 
