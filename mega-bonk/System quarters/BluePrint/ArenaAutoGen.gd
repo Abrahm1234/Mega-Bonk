@@ -94,8 +94,6 @@ var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
 
 func _ready() -> void:
-	_sync_to_wire_grid()
-
 	if wall_mmi == null:
 		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
 		return
@@ -109,6 +107,14 @@ func _ready() -> void:
 	else:
 		_rng.seed = seed_value
 
+	if bind_to_wire_grid:
+		call_deferred("_sync_and_generate_if_needed")
+	elif auto_generate:
+		generate()
+
+func _sync_and_generate_if_needed() -> void:
+	await get_tree().process_frame
+	_sync_to_wire_grid()
 	if auto_generate:
 		generate()
 
@@ -120,33 +126,47 @@ func _sync_to_wire_grid() -> void:
 	if grid_node != null:
 		var step: Variant = grid_node.get("STEP_SIZE")
 		if step is Vector3:
-			cell_size = max(0.0001, (step as Vector3).x)
+			var step_x: float = (step as Vector3).x
+			if step_x > 0.0001:
+				cell_size = step_x
 
 		var width_value: Variant = grid_node.get("grid_width")
-		if width_value is int:
-			grid_w = max(1, int(width_value))
+		if width_value is int and int(width_value) > 0:
+			grid_w = int(width_value)
 
 		var h_key: String = "grid_depth" if use_grid_depth_for_h else "grid_height"
 		var height_value: Variant = grid_node.get(h_key)
-		if height_value is int:
-			grid_h = max(1, int(height_value))
+		if height_value is int and int(height_value) > 0:
+			grid_h = int(height_value)
 
 	var origin_node: Node = get_node_or_null(wire_grid_origin_path)
 	if origin_node is Node3D:
 		origin_mode = OriginMode.CUSTOM_ANCHOR
 		origin_anchor_path = wire_grid_origin_path
-		origin_offset = Vector3.ZERO
 
 	var bounds_node: Node = get_node_or_null(wire_grid_bounds_mesh_path)
-	if bounds_node is MeshInstance3D:
-		var bounds_mi: MeshInstance3D = bounds_node as MeshInstance3D
-		if bounds_mi.mesh != null:
-			var to_self: Transform3D = global_transform.affine_inverse() * bounds_mi.global_transform
-			var aabb_self: AABB = _transform_aabb(bounds_mi.mesh.get_aabb(), to_self)
-			grid_w = max(1, int(floor(aabb_self.size.x / cell_size)))
-			grid_h = max(1, int(floor(aabb_self.size.z / cell_size)))
-			origin_mode = OriginMode.MIN_CORNER
-			origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+	var bounds_mi: MeshInstance3D = _resolve_bounds_mesh(bounds_node)
+	if bounds_mi != null and bounds_mi.mesh != null:
+		var to_self: Transform3D = global_transform.affine_inverse() * bounds_mi.global_transform
+		var aabb_self: AABB = _transform_aabb(bounds_mi.mesh.get_aabb(), to_self)
+		var w_from_bounds: int = int(floor(aabb_self.size.x / max(cell_size, 0.0001)))
+		var h_from_bounds: int = int(floor(aabb_self.size.z / max(cell_size, 0.0001)))
+		if w_from_bounds > 0:
+			grid_w = w_from_bounds
+		if h_from_bounds > 0:
+			grid_h = h_from_bounds
+		origin_mode = OriginMode.MIN_CORNER
+		origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+
+func _resolve_bounds_mesh(node: Node) -> MeshInstance3D:
+	if node == null:
+		return null
+	if node is MeshInstance3D:
+		return node as MeshInstance3D
+	var meshes: Array[Node] = node.find_children("*", "MeshInstance3D", true, false)
+	if meshes.is_empty():
+		return null
+	return meshes[0] as MeshInstance3D
 
 func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 	var corners: Array[Vector3] = [
@@ -654,7 +674,7 @@ func _grid_xform_local() -> Transform3D:
 			var a: Node = get_node_or_null(origin_anchor_path)
 			if a is Node3D:
 				var anchor_local: Transform3D = global_transform.affine_inverse() * (a as Node3D).global_transform
-				return Transform3D(anchor_local.basis, anchor_local.origin + origin_offset)
+				return Transform3D(anchor_local.basis, anchor_local.origin + anchor_local.basis * origin_offset)
 	return Transform3D(Basis.IDENTITY, origin_offset)
 
 func _corner_to_world(x: int, y: int) -> Vector3:
