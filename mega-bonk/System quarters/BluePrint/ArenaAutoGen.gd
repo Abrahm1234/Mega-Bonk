@@ -37,6 +37,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var bind_to_wire_grid: bool = false
 @export var wire_grid_origin_path: NodePath
 @export var wire_grid_bounds_mesh_path: NodePath
+@export var bounds_override_origin: bool = false
 @export var use_grid_depth_for_h: bool = true
 
 @export var make_walls: bool = true
@@ -155,8 +156,10 @@ func _sync_to_wire_grid() -> void:
 			grid_w = w_from_bounds
 		if h_from_bounds > 0:
 			grid_h = h_from_bounds
-		origin_mode = OriginMode.MIN_CORNER
-		origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+
+		if bounds_override_origin:
+			origin_mode = OriginMode.MIN_CORNER
+			origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
 
 func _resolve_bounds_mesh(node: Node) -> MeshInstance3D:
 	if node == null:
