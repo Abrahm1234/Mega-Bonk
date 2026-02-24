@@ -242,7 +242,7 @@ func _run_pattern_stamping() -> void:
 						continue
 					if not _can_render_piece(pid):
 						continue
-					_mark_pattern_occupied(size, x, y)
+					_mark_pattern_occupied(pattern, x, y)
 					var t: Array = _piece_transforms[pid] as Array
 					var rot_steps: int = int(pattern.get("rot_steps", 0))
 					var yaw: float = rot_steps * PI * 0.5
@@ -273,9 +273,18 @@ func _pattern_matches_at(pattern: Dictionary, x: int, y: int) -> bool:
 				return false
 	return true
 
-func _mark_pattern_occupied(size: Vector2i, x: int, y: int) -> void:
+func _mark_pattern_occupied(pattern: Dictionary, x: int, y: int) -> void:
+	var size: Vector2i = pattern.get("size", Vector2i.ONE)
+	var occupy: Array = pattern.get("occupy", pattern.get("required", []))
 	for py in range(size.y):
+		if py >= occupy.size():
+			continue
+		var row: Array = occupy[py] as Array
 		for px in range(size.x):
+			if px >= row.size():
+				continue
+			if str(row[px]) == "0":
+				continue
 			_occupied[_tile_idx(x + px, y + py)] = 1
 
 func _pattern_anchor_to_world(x: int, y: int, size: Vector2i) -> Vector3:
@@ -548,15 +557,25 @@ func _piece_desired_size(size: Vector2i) -> Vector3:
 	return Vector3(float(size.x) * cell_size, floor_thickness, float(size.y) * cell_size)
 
 func _fit_mesh_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_pos: Vector3) -> Transform3D:
+	var rot_steps: int = int(round(yaw / (PI * 0.5))) & 3
+	var snapped_yaw: float = rot_steps * PI * 0.5
+
 	if mesh == null:
-		return Transform3D(Basis(Vector3.UP, yaw), world_pos)
+		return Transform3D(Basis(Vector3.UP, snapped_yaw), world_pos)
 
 	var aabb: AABB = mesh.get_aabb()
+	var desired: Vector3 = desired_size
+	if (rot_steps & 1) == 1:
+		desired = Vector3(desired_size.z, desired_size.y, desired_size.x)
+
 	var sx: float = max(aabb.size.x, 0.0001)
 	var sy: float = max(aabb.size.y, 0.0001)
 	var sz: float = max(aabb.size.z, 0.0001)
-	var scale: Vector3 = Vector3(desired_size.x / sx, desired_size.y / sy, desired_size.z / sz)
-	var basis: Basis = Basis(Vector3.UP, yaw).scaled(scale)
+	var scale: Vector3 = Vector3(desired.x / sx, desired.y / sy, desired.z / sz)
+	if aabb.size.y < 0.001:
+		scale.y = 1.0
+
+	var basis: Basis = Basis(Vector3.UP, snapped_yaw).scaled(scale)
 	var center: Vector3 = aabb.position + aabb.size * 0.5
 	var corrected_pos: Vector3 = world_pos + basis * (-center)
 	return Transform3D(basis, corrected_pos)

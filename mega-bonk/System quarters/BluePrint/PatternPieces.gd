@@ -12,6 +12,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full", "full"],
 			],
 			"priority": 140,
+			"occupy": [["1","1","1"],["1","1","1"],["1","1","1"]],
 		},
 		{
 			"id": "piece_2x3_full",
@@ -22,6 +23,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full"],
 			],
 			"priority": 130,
+			"occupy": [["1","1"],["1","1"],["1","1"]],
 		},
 		{
 			"id": "piece_2x2_full",
@@ -31,6 +33,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full"],
 			],
 			"priority": 120,
+			"occupy": [["1","1"],["1","1"]],
 		},
 		{
 			"id": "piece_5x1_edge",
@@ -39,6 +42,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge", "edge", "edge"],
 			],
 			"priority": 110,
+			"occupy": [["1","1","1","1","1"]],
 		},
 		{
 			"id": "piece_4x1_edge",
@@ -47,6 +51,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge", "edge"],
 			],
 			"priority": 105,
+			"occupy": [["1","1","1","1"]],
 		},
 		{
 			"id": "piece_3x1_edge",
@@ -55,6 +60,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge"],
 			],
 			"priority": 100,
+			"occupy": [["1","1","1"]],
 		},
 		{
 			"id": "piece_3x2_bay",
@@ -64,6 +70,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full", "full"],
 			],
 			"priority": 95,
+			"occupy": [["1","1","0"],["1","1","1"]],
 		},
 		{
 			"id": "piece_2x2_bay",
@@ -73,6 +80,7 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full"],
 			],
 			"priority": 90,
+			"occupy": [["1","1"],["1","0"]],
 		},
 		{
 			"id": "piece_corner_cluster",
@@ -82,27 +90,33 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full"],
 			],
 			"priority": 85,
+			"occupy": [["1","1"],["1","1"]],
 		},
 	]
 
 	var expanded: Array[Dictionary] = []
 	for pattern in base_patterns:
 		var required: Array = pattern["required"]
+		var occupy: Array = pattern.get("occupy", required)
 		var size: Vector2i = pattern["size"]
 		for mirrored in [false, true]:
 			var work_required: Array = _deep_copy_required(required)
+			var work_occupy: Array = _deep_copy_required(occupy)
 			if mirrored:
 				work_required = _mirror_required_x(work_required)
+				work_occupy = _mirror_required_x(work_occupy)
 			for rot_steps in range(4):
 				expanded.append({
 					"id": pattern["id"],
 					"size": size,
 					"required": work_required,
+					"occupy": work_occupy,
 					"priority": pattern["priority"],
 					"rot_steps": rot_steps,
 					"mirrored": mirrored,
 				})
 				work_required = _rotate_required_90(work_required)
+				work_occupy = _rotate_required_90(work_occupy)
 				size = Vector2i(size.y, size.x)
 	return expanded
 
