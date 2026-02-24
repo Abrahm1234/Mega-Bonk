@@ -66,7 +66,7 @@ func create_corridors(start_point: Vector3, end_points: Array, placed_positions:
 			place_corridor_segment(current_position, Vector3(step_size, step_size, step_size), placed_positions)
 
 		# Force place the room at the end point
-		force_place_room_cube(aligned_end, Vector3(step_size * 7, step_size * 7, step_size * 7), placed_positions)
+		force_place_room_cube(aligned_end, Vector3(step_size * 3, step_size * 3, step_size * 3), placed_positions)
 
 	# Remove any red cubes inside blue cubes after corridor creation
 	remove_red_cubes_inside_blue_cubes()
