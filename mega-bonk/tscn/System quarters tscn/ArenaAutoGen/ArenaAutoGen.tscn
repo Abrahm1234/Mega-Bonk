@@ -1,26 +1,201 @@
-; File: res://ArenaAutoGen.tscn
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=30 format=3]
 
 [ext_resource type="Script" path="res://System quarters/BluePrint/ArenaAutoGen.gd" id="1"]
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 1
+background_color = Color(0.12, 0.12, 0.12, 1)
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.25
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_full"]
+albedo_color = Color(0.8, 0.1, 0.1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_edge"]
+albedo_color = Color(0.9, 0.6, 0.6, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_corner"]
+albedo_color = Color(0.2, 0.7, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_inverse"]
+albedo_color = Color(0.2, 0.35, 0.95, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_checker"]
+albedo_color = Color(0.6, 0.2, 0.8, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_3x3"]
+albedo_color = Color(0.1, 0.7, 0.85, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_2x3"]
+albedo_color = Color(0.7, 0.7, 0.95, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_2x2"]
+albedo_color = Color(0.7, 0.7, 0.7, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_5x1"]
+albedo_color = Color(0.1, 0.6, 0.55, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_4x1"]
+albedo_color = Color(0.95, 0.1, 0.85, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_3x1"]
+albedo_color = Color(0.95, 0.25, 0.1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_3x2_bay"]
+albedo_color = Color(0.85, 0.85, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_2x2_bay"]
+albedo_color = Color(1, 0.9, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_corner_cluster"]
+albedo_color = Color(0.2, 0.85, 0.25, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor_full"]
+size = Vector3(8, 0.25, 8)
+material = SubResource("StandardMaterial3D_floor_full")
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor_edge"]
+size = Vector3(8, 0.25, 8)
+material = SubResource("StandardMaterial3D_floor_edge")
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor_corner"]
+size = Vector3(8, 0.25, 8)
+material = SubResource("StandardMaterial3D_floor_corner")
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor_inverse"]
+size = Vector3(8, 0.25, 8)
+material = SubResource("StandardMaterial3D_floor_inverse")
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor_checker"]
+size = Vector3(8, 0.25, 8)
+material = SubResource("StandardMaterial3D_floor_checker")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_3x3_full"]
+size = Vector3(24, 0.25, 24)
+material = SubResource("StandardMaterial3D_piece_3x3")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_2x3_full"]
+size = Vector3(16, 0.25, 24)
+material = SubResource("StandardMaterial3D_piece_2x3")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_2x2_full"]
+size = Vector3(16, 0.25, 16)
+material = SubResource("StandardMaterial3D_piece_2x2")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_5x1_edge"]
+size = Vector3(40, 0.25, 8)
+material = SubResource("StandardMaterial3D_piece_5x1")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_4x1_edge"]
+size = Vector3(32, 0.25, 8)
+material = SubResource("StandardMaterial3D_piece_4x1")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_3x1_edge"]
+size = Vector3(24, 0.25, 8)
+material = SubResource("StandardMaterial3D_piece_3x1")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_3x2_bay"]
+size = Vector3(24, 0.25, 16)
+material = SubResource("StandardMaterial3D_piece_3x2_bay")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_2x2_bay"]
+size = Vector3(16, 0.25, 16)
+material = SubResource("StandardMaterial3D_piece_2x2_bay")
+
+[sub_resource type="BoxMesh" id="BoxMesh_piece_corner_cluster"]
+size = Vector3(16, 0.25, 16)
+material = SubResource("StandardMaterial3D_piece_corner_cluster")
 
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
 
+auto_generate = true
+grid_w = 48
+grid_h = 48
+fill_percent = 0.48
+smoothing_steps = 6
+ensure_connected = true
+border = 1
+cell_size = 8.0
+floor_thickness = 0.25
+
+origin_mode = 2
+origin_offset = Vector3(0, 0, 0)
+origin_anchor_path = NodePath("GridAnchor")
+
+make_walls = true
+wall_height = 5.0
+wall_thickness = 0.75
+
+use_random_seed = true
+seed_value = 12345
+randomize_on_run = true
+
+use_pattern_stamping = true
+pieces_replace_base_floor = false
+piece_height_epsilon = 0.01
+checker_is_solid = true
+
+mesh_full = SubResource("BoxMesh_floor_full")
+mesh_edge = SubResource("BoxMesh_floor_edge")
+mesh_corner = SubResource("BoxMesh_floor_corner")
+mesh_inverse_corner = SubResource("BoxMesh_floor_inverse")
+mesh_checker = SubResource("BoxMesh_floor_checker")
+
+piece_mesh_3x3_full = SubResource("BoxMesh_piece_3x3_full")
+piece_mesh_2x3_full = SubResource("BoxMesh_piece_2x3_full")
+piece_mesh_2x2_full = SubResource("BoxMesh_piece_2x2_full")
+piece_mesh_5x1_edge = SubResource("BoxMesh_piece_5x1_edge")
+piece_mesh_4x1_edge = SubResource("BoxMesh_piece_4x1_edge")
+piece_mesh_3x1_edge = SubResource("BoxMesh_piece_3x1_edge")
+piece_mesh_3x2_bay = SubResource("BoxMesh_piece_3x2_bay")
+piece_mesh_2x2_bay = SubResource("BoxMesh_piece_2x2_bay")
+piece_mesh_corner_cluster = SubResource("BoxMesh_piece_corner_cluster")
+
+[node name="GridAnchor" type="Node3D" parent="."]
+
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = Environment.new()
+environment = SubResource("Environment_1")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D( Basis( 0.965926, 0, -0.258819, 0.12941, 0.866025, 0.482963, 0.224144, -0.5, 0.836516 ), Vector3( 0, 20, 0 ) )
-light_energy = 2.0
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 12, 0)
+light_energy = 1.2
+shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D( Basis( 1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025 ), Vector3( 0, 18, 18 ) )
-current = true
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 40, 40)
 
 [node name="Arena" type="Node3D" parent="."]
 
-[node name="FloorTiles" type="MultiMeshInstance3D" parent="Arena"]
-visible = true
+[node name="FloorTiles" type="MultiMeshInstance3D" parent="./Arena"]
+visible = false
 
-[node name="WallTiles" type="MultiMeshInstance3D" parent="Arena"]
-visible = true
+[node name="WallTiles" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Floor_full" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Floor_edge" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Floor_corner" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Floor_inverse_corner" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Floor_checker" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_3x3_full" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_2x3_full" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_2x2_full" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_5x1_edge" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_4x1_edge" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_3x1_edge" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_3x2_bay" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_2x2_bay" type="MultiMeshInstance3D" parent="./Arena"]
+
+[node name="Piece_corner_cluster" type="MultiMeshInstance3D" parent="./Arena"]

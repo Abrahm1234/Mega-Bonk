@@ -8,7 +8,6 @@ background_color = Color(0.12, 0.12, 0.12, 1)
 ambient_light_color = Color(1, 1, 1, 1)
 ambient_light_energy = 0.25
 
-# --- Debug materials (optional) ---
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor_full"]
 albedo_color = Color(0.8, 0.1, 0.1, 1)
 
@@ -51,8 +50,6 @@ albedo_color = Color(1, 0.9, 0.2, 1)
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_piece_corner_cluster"]
 albedo_color = Color(0.2, 0.85, 0.25, 1)
 
-# --- Placeholder meshes for Inspector slots (optional) ---
-# Note: The generator script will auto-fit any mesh to the grid footprint at runtime.
 [sub_resource type="BoxMesh" id="BoxMesh_floor_full"]
 size = Vector3(8, 0.25, 8)
 material = SubResource("StandardMaterial3D_floor_full")
@@ -112,7 +109,6 @@ material = SubResource("StandardMaterial3D_piece_corner_cluster")
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
 
-# --- Generator defaults ---
 auto_generate = true
 grid_w = 48
 grid_h = 48
@@ -123,7 +119,6 @@ border = 1
 cell_size = 8.0
 floor_thickness = 0.25
 
-# OriginMode: 0=MIN_CORNER, 1=CENTERED, 2=CUSTOM_ANCHOR
 origin_mode = 2
 origin_offset = Vector3(0, 0, 0)
 origin_anchor_path = NodePath("GridAnchor")
@@ -141,7 +136,6 @@ pieces_replace_base_floor = false
 piece_height_epsilon = 0.01
 checker_is_solid = true
 
-# --- Mesh slots (optional; script has fallbacks if left empty) ---
 mesh_full = SubResource("BoxMesh_floor_full")
 mesh_edge = SubResource("BoxMesh_floor_edge")
 mesh_corner = SubResource("BoxMesh_floor_corner")
@@ -164,22 +158,20 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_piece_corner_cluster")
 environment = SubResource("Environment_1")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(Basis(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372), Vector3(0, 12, 0))
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 12, 0)
 light_energy = 1.2
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(Basis(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107), Vector3(0, 40, 40))
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 40, 40)
 
 [node name="Arena" type="Node3D" parent="."]
 
-# --- Legacy fallback output (kept for compatibility) ---
 [node name="FloorTiles" type="MultiMeshInstance3D" parent="./Arena"]
 visible = false
 
 [node name="WallTiles" type="MultiMeshInstance3D" parent="./Arena"]
 
-# --- Variant floor outputs (required for the modern renderer) ---
 [node name="Floor_full" type="MultiMeshInstance3D" parent="./Arena"]
 
 [node name="Floor_edge" type="MultiMeshInstance3D" parent="./Arena"]
@@ -190,7 +182,6 @@ visible = false
 
 [node name="Floor_checker" type="MultiMeshInstance3D" parent="./Arena"]
 
-# --- Pattern stamping outputs (one node per piece id) ---
 [node name="Piece_3x3_full" type="MultiMeshInstance3D" parent="./Arena"]
 
 [node name="Piece_2x3_full" type="MultiMeshInstance3D" parent="./Arena"]
