@@ -1,20 +1,68 @@
-[gd_scene load_steps=4 format=3 uid="uid://c1hf67vwcqxau"]
+[gd_scene load_steps=14 format=3 uid="uid://c1hf67vwcqxau"]
 
 [ext_resource type="Script" uid="uid://n5mybvgbaiqd" path="res://Orbital webwork/Scripts/GD Script/main.gd" id="1_717f4"]
-[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_8otdc"]
 [ext_resource type="PackedScene" uid="uid://dctij0wf1tt5f" path="res://tscn/Core chambers tscn/Core chambers.tscn" id="3_8otdc"]
+[ext_resource type="ArrayMesh" uid="uid://ba2lyr6c4n8wd" path="res://Mesh/Bastion Wedge (Military AI core ship)/ (Military AI core ship).res" id="3_f5wgq"]
+[ext_resource type="Texture2D" uid="uid://bqf4qd7pwnjt8" path="res://Mesh/Bastion Wedge (Military AI core ship)/shiiny_texture_pbr_20250901.png" id="4_00eaj"]
+[ext_resource type="Shader" uid="uid://p04f7ehhxj2r" path="res://System quarters/Buried chambers/arena_terrain Shaders/Gun effect aura shader.tres" id="4_o2633"]
+[ext_resource type="Texture2D" uid="uid://b76yu2yviosun" path="res://Mesh/Weapons/Prism Coil Disrutptor High Poly/ComfyUI_00005_.png" id="5_6hqrc"]
+[ext_resource type="Texture2D" uid="uid://d3foj2wqww1lk" path="res://VFX/Gun effects/Noise Textures/T_Noise1_tiled.png" id="5_apn2u"]
+[ext_resource type="Texture2D" uid="uid://cxk6fc8sj7j03" path="res://Mesh/Enemy-Meshs/Claw/new_Image_1.png" id="6_00eaj"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_7nd1x"]
+render_priority = 0
+shader = ExtResource("4_o2633")
+shader_parameter/Aura_Color = Color(6.07722, 1.8146975, 0, 1)
+shader_parameter/Aura_Intensity = 1.5
+shader_parameter/Vector2Parameter = Vector2(0.01, 0.01)
+shader_parameter/Texture2DParameter = ExtResource("4_00eaj")
+shader_parameter/tex_frg_10 = ExtResource("5_apn2u")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_2rjyr"]
+render_priority = 0
+next_pass = SubResource("ShaderMaterial_7nd1x")
+shader = ExtResource("4_o2633")
+shader_parameter/Aura_Color = Color(0.9319013, 0.8290591, 0, 1)
+shader_parameter/Aura_Intensity = 5.0
+shader_parameter/Vector2Parameter = Vector2(0.01, 0.01)
+shader_parameter/Texture2DParameter = ExtResource("4_00eaj")
+shader_parameter/tex_frg_10 = ExtResource("5_6hqrc")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_6hqrc"]
+render_priority = 0
+shader = ExtResource("4_o2633")
+shader_parameter/Aura_Color = Color(1.4217321, 0.97350997, 0, 1)
+shader_parameter/Aura_Intensity = 10.0
+shader_parameter/Vector2Parameter = Vector2(0.1, 0.1)
+shader_parameter/Texture2DParameter = ExtResource("5_apn2u")
+shader_parameter/tex_frg_10 = ExtResource("6_00eaj")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7nd1x"]
+next_pass = SubResource("ShaderMaterial_6hqrc")
+transparency = 1
+blend_mode = 1
+cull_mode = 1
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_2rjyr"]
+material = SubResource("StandardMaterial3D_7nd1x")
+size = Vector2(24, 6)
 
 [node name="Orbital webwork" type="Node3D"]
 script = ExtResource("1_717f4")
 grid_size = 3
-min_cube_size = 1500.0
-max_cube_size = 2000.0
-cube_spacing = 3000.0
-
-[node name="Camera3D" type="Camera3D" parent="."]
-far = 400000.0
-script = ExtResource("2_8otdc")
+min_cube_size = 7500.0
+max_cube_size = 10000.0
+cube_spacing = 15000.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 
 [node name="Core chambers" parent="." instance=ExtResource("3_8otdc")]
+
+[node name="(militaryAiCoreShip)" type="MeshInstance3D" parent="."]
+transform = Transform3D(10000, 0, 0, 0, -0.0004371139, 10000, 0, -10000, -0.0004371139, 5029.4326, 11271.253, -2487.3496)
+material_overlay = SubResource("ShaderMaterial_2rjyr")
+mesh = ExtResource("3_f5wgq")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="(militaryAiCoreShip)"]
+transform = Transform3D(0.0025337462, 0.009613614, -0.001076349, -0.009669792, 0.0025485526, -3.2605227e-10, 0.00027431292, 0.0010408073, 0.009941901, 0.16949274, 0.1958382, -0.1862027)
+mesh = SubResource("PlaneMesh_2rjyr")

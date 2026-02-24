@@ -1,8 +1,7 @@
-[gd_scene load_steps=5 format=3 uid="uid://cyo3li77q1lbt"]
+[gd_scene load_steps=4 format=3 uid="uid://cyo3li77q1lbt"]
 
 [ext_resource type="Script" uid="uid://1ys45s4pi210" path="res://System quarters/Buried chambers/arena_terrain Scripts/Main/arena_terrain.gd" id="1_f7om2"]
 [ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_5xo5h"]
-[ext_resource type="ArrayMesh" uid="uid://dol5vtkcruooj" path="res://Mesh/Enemy-Meshs/Crystal Beast/CB.res" id="3_h5le1"]
 
 [sub_resource type="Environment" id="Environment_u45fm"]
 
@@ -70,12 +69,12 @@ current = true
 fov = 82.2
 far = 1000000.0
 script = ExtResource("2_5xo5h")
+move_speed = 2550.0
 accel = 30.0
 enable_fly_vertical = false
 
 [node name="Player" type="MeshInstance3D" parent="TerrainBody/DebugCamera"]
 transform = Transform3D(201.21613, 2.518381, 148.34332, -8.705005, 249.7338, 7.568004, -148.1091, -11.256532, 201.08951, 32.405155, -86.49219, -590.7916)
-mesh = ExtResource("3_h5le1")
 skeleton = NodePath("../../..")
 
 [node name="ReflectionProbe" type="ReflectionProbe" parent="TerrainBody/DebugCamera/Player"]
