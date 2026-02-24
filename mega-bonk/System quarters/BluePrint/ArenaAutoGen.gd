@@ -34,6 +34,11 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
 
+@export var bind_to_wire_grid: bool = false
+@export var wire_grid_origin_path: NodePath
+@export var wire_grid_bounds_mesh_path: NodePath
+@export var use_grid_depth_for_h: bool = true
+
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
 @export var wall_thickness: float = 0.25
@@ -89,6 +94,8 @@ var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
 
 func _ready() -> void:
+	_sync_to_wire_grid()
+
 	if wall_mmi == null:
 		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
 		return
@@ -104,6 +111,62 @@ func _ready() -> void:
 
 	if auto_generate:
 		generate()
+
+func _sync_to_wire_grid() -> void:
+	if not bind_to_wire_grid:
+		return
+
+	var grid_node: Node = get_node_or_null("/root/Grid")
+	if grid_node != null:
+		var step: Variant = grid_node.get("STEP_SIZE")
+		if step is Vector3:
+			cell_size = max(0.0001, (step as Vector3).x)
+
+		var width_value: Variant = grid_node.get("grid_width")
+		if width_value is int:
+			grid_w = max(1, int(width_value))
+
+		var h_key: String = "grid_depth" if use_grid_depth_for_h else "grid_height"
+		var height_value: Variant = grid_node.get(h_key)
+		if height_value is int:
+			grid_h = max(1, int(height_value))
+
+	var origin_node: Node = get_node_or_null(wire_grid_origin_path)
+	if origin_node is Node3D:
+		origin_mode = OriginMode.CUSTOM_ANCHOR
+		origin_anchor_path = wire_grid_origin_path
+		origin_offset = Vector3.ZERO
+
+	var bounds_node: Node = get_node_or_null(wire_grid_bounds_mesh_path)
+	if bounds_node is MeshInstance3D:
+		var bounds_mi: MeshInstance3D = bounds_node as MeshInstance3D
+		if bounds_mi.mesh != null:
+			var to_self: Transform3D = global_transform.affine_inverse() * bounds_mi.global_transform
+			var aabb_self: AABB = _transform_aabb(bounds_mi.mesh.get_aabb(), to_self)
+			grid_w = max(1, int(floor(aabb_self.size.x / cell_size)))
+			grid_h = max(1, int(floor(aabb_self.size.z / cell_size)))
+			origin_mode = OriginMode.MIN_CORNER
+			origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+
+func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
+	var corners: Array[Vector3] = [
+		xform * aabb.position,
+		xform * (aabb.position + Vector3(aabb.size.x, 0.0, 0.0)),
+		xform * (aabb.position + Vector3(0.0, aabb.size.y, 0.0)),
+		xform * (aabb.position + Vector3(0.0, 0.0, aabb.size.z)),
+		xform * (aabb.position + Vector3(aabb.size.x, aabb.size.y, 0.0)),
+		xform * (aabb.position + Vector3(aabb.size.x, 0.0, aabb.size.z)),
+		xform * (aabb.position + Vector3(0.0, aabb.size.y, aabb.size.z)),
+		xform * (aabb.position + aabb.size),
+	]
+
+	var min_v: Vector3 = corners[0]
+	var max_v: Vector3 = corners[0]
+	for c in corners:
+		min_v = Vector3(min(min_v.x, c.x), min(min_v.y, c.y), min(min_v.z, c.z))
+		max_v = Vector3(max(max_v.x, c.x), max(max_v.y, c.y), max(max_v.z, c.z))
+
+	return AABB(min_v, max_v - min_v)
 
 func generate() -> void:
 	if grid_w <= 0 or grid_h <= 0:
