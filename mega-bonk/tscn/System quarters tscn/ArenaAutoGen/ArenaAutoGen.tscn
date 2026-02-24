@@ -1,10 +1,64 @@
 ; File: res://ArenaAutoGen.tscn
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=18 format=3]
 
 [ext_resource type="Script" path="res://System quarters/BluePrint/ArenaAutoGen.gd" id="1"]
 
+[sub_resource type="BoxMesh" id="1"]
+size = Vector3(2, 0.25, 2)
+
+[sub_resource type="BoxMesh" id="2"]
+size = Vector3(4, 0.25, 4)
+
+[sub_resource type="BoxMesh" id="3"]
+size = Vector3(6, 0.25, 2)
+
+[sub_resource type="BoxMesh" id="4"]
+size = Vector3(4, 0.25, 4)
+
+[sub_resource type="StandardMaterial3D" id="5"]
+albedo_color = Color(0.6, 0.6, 0.6, 1)
+
+[sub_resource type="StandardMaterial3D" id="6"]
+albedo_color = Color(0.2, 0.8, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="7"]
+albedo_color = Color(0.95, 0.8, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="8"]
+albedo_color = Color(0.9, 0.25, 0.25, 1)
+
+[sub_resource type="StandardMaterial3D" id="9"]
+albedo_color = Color(0.2, 0.45, 0.95, 1)
+
+[sub_resource type="StandardMaterial3D" id="10"]
+albedo_color = Color(0.95, 0.15, 0.9, 1)
+
+[sub_resource type="StandardMaterial3D" id="11"]
+albedo_color = Color(0.2, 0.95, 0.95, 1)
+
+[sub_resource type="StandardMaterial3D" id="12"]
+albedo_color = Color(1, 0.55, 0.15, 1)
+
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
+origin_mode = 2
+origin_offset = Vector3(0, 0, 0)
+origin_anchor_path = NodePath("../GridAnchor")
+cell_size = 2.0
+use_pattern_stamping = true
+pieces_replace_base_floor = false
+piece_height_epsilon = 0.01
+checker_is_solid = true
+mesh_full = SubResource("1")
+mesh_edge = SubResource("1")
+mesh_corner = SubResource("1")
+mesh_inverse_corner = SubResource("1")
+mesh_checker = SubResource("1")
+piece_mesh_2x2_full = SubResource("2")
+piece_mesh_3x1_edge = SubResource("3")
+piece_mesh_2x2_bay = SubResource("4")
+
+[node name="GridAnchor" type="Node3D" parent="."]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = Environment.new()
@@ -20,7 +74,39 @@ current = true
 [node name="Arena" type="Node3D" parent="."]
 
 [node name="FloorTiles" type="MultiMeshInstance3D" parent="Arena"]
+visible = false
+
+[node name="Floor_full" type="MultiMeshInstance3D" parent="Arena"]
 visible = true
+material_override = SubResource("5")
+
+[node name="Floor_edge" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("6")
+
+[node name="Floor_corner" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("7")
+
+[node name="Floor_inverse_corner" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("8")
+
+[node name="Floor_checker" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("9")
+
+[node name="Piece_2x2_full" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("10")
+
+[node name="Piece_3x1_edge" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("11")
+
+[node name="Piece_2x2_bay" type="MultiMeshInstance3D" parent="Arena"]
+visible = true
+material_override = SubResource("12")
 
 [node name="WallTiles" type="MultiMeshInstance3D" parent="Arena"]
 visible = true
