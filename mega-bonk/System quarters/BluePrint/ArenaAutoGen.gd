@@ -25,7 +25,7 @@ const CANONICAL_CHECKER: int = 0b0101
 @export var ensure_connected: bool = true
 @export var border: int = 1
 
-@export var cell_size: float = 2.0
+@export var cell_size: float = 8.0
 @export var floor_thickness: float = 0.25
 
 enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
