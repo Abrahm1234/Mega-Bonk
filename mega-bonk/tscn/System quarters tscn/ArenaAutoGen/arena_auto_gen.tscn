@@ -123,6 +123,7 @@ bind_to_wire_grid = true
 wire_grid_origin_path = NodePath("GridAnchor")
 wire_grid_bounds_mesh_path = NodePath("WireGridBounds")
 bounds_override_origin = false
+wire_grid_use_step_size_from_grid = false
 wall_height = 5.0
 wall_thickness = 0.75
 mesh_full = SubResource("BoxMesh_shxrv")

@@ -38,6 +38,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var wire_grid_origin_path: NodePath
 @export var wire_grid_bounds_mesh_path: NodePath
 @export var bounds_override_origin: bool = false
+@export var wire_grid_use_step_size_from_grid: bool = false
 @export var use_grid_depth_for_h: bool = true
 
 @export var make_walls: bool = true
@@ -126,7 +127,7 @@ func _sync_to_wire_grid() -> void:
 	var grid_node: Node = get_node_or_null("/root/Grid")
 	if grid_node != null:
 		var step: Variant = grid_node.get("STEP_SIZE")
-		if step is Vector3:
+		if wire_grid_use_step_size_from_grid and step is Vector3:
 			var step_x: float = (step as Vector3).x
 			if step_x > 0.0001:
 				cell_size = step_x
