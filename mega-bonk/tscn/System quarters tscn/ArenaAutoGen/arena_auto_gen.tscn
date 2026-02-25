@@ -121,7 +121,7 @@ cell_size = 8.0
 origin_anchor_path = NodePath("GridAnchor")
 bind_to_wire_grid = true
 wire_grid_origin_path = NodePath("GridAnchor")
-wire_grid_bounds_mesh_path = NodePath("WireGridBounds")
+wire_grid_bounds_mesh_path = NodePath("GridAnchor/WireGridBounds")
 bounds_override_origin = false
 wire_grid_use_step_size_from_grid = false
 wall_height = 5.0
@@ -143,10 +143,11 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 
 [node name="GridAnchor" type="Node3D" parent="."]
 
-[node name="WireGridBounds" type="MeshInstance3D" parent="."]
-position = Vector3(192, 0, 192)
+[node name="WireGridBounds" type="MeshInstance3D" parent="GridAnchor"]
 visible = false
 mesh = SubResource("2")
+
+[node name="WireGridDebug" type="MeshInstance3D" parent="GridAnchor"]
 
 [node name="Arena" type="Node3D" parent="."]
 
