@@ -291,7 +291,6 @@ skeleton = NodePath("Fractured plasma streak")
 
 [node name="GPUParticles3D" type="GPUParticles3D" parent="Pcd"]
 transform = Transform3D(2, 0, 0, 0, -8.742278e-08, 2, 0, -2, -8.742278e-08, 2.0077572, -0.032975435, 4.7525063)
-visible = false
 material_override = SubResource("StandardMaterial3D_1jjen")
 amount = 30
 local_coords = true
