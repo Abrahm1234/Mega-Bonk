@@ -62,11 +62,11 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var piece_height_epsilon: float = 0.01
 @export var checker_is_solid: bool = true
 
-@export var mesh_full: Mesh
-@export var mesh_edge: Mesh
-@export var mesh_corner: Mesh
-@export var mesh_inverse_corner: Mesh
-@export var mesh_checker: Mesh
+@export var mesh_full_variants: Array[Mesh] = []
+@export var mesh_edge_variants: Array[Mesh] = []
+@export var mesh_corner_variants: Array[Mesh] = []
+@export var mesh_inverse_corner_variants: Array[Mesh] = []
+@export var mesh_checker_variants: Array[Mesh] = []
 
 @export var piece_mesh_3x3_full: Mesh
 @export var piece_mesh_2x3_full: Mesh
@@ -107,6 +107,7 @@ var _wire_grid_material: StandardMaterial3D
 var _relaxed_floor_mi: MeshInstance3D
 var _relaxed_floor_material: StandardMaterial3D
 var _relaxed_noise_seed: int = 0
+var _mesh_variant_seed: int = 0
 
 func _ready() -> void:
 	if wall_mmi == null:
@@ -120,9 +121,11 @@ func _ready() -> void:
 	if use_random_seed or randomize_on_run:
 		_rng.randomize()
 		_relaxed_noise_seed = int(_rng.randi())
+		_mesh_variant_seed = int(_rng.randi())
 	else:
 		_rng.seed = seed_value
 		_relaxed_noise_seed = seed_value
+		_mesh_variant_seed = seed_value
 
 	_ensure_relaxed_floor_node()
 
@@ -745,7 +748,7 @@ func _build_floor_multimesh_legacy() -> void:
 		return
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	var mesh: Mesh = _build_floor_variant_mesh("full")
+	var mesh: Mesh = _build_floor_variant_mesh("full", 0, 0)
 	mm.mesh = mesh
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 	var transforms: Array[Transform3D] = []
@@ -760,13 +763,12 @@ func _build_floor_multimesh_legacy() -> void:
 	floor_mmi.multimesh = mm
 
 func _build_floor_multimeshes_by_variant() -> void:
-	var buckets: Dictionary = {"full": [], "edge": [], "corner": [], "inverse_corner": [], "checker": []}
-	var mesh_by_variant: Dictionary = {
-		"full": _build_floor_variant_mesh("full"),
-		"edge": _build_floor_variant_mesh("edge"),
-		"corner": _build_floor_variant_mesh("corner"),
-		"inverse_corner": _build_floor_variant_mesh("inverse_corner"),
-		"checker": _build_floor_variant_mesh("checker"),
+	var mesh_transform_buckets: Dictionary = {
+		"full": {},
+		"edge": {},
+		"corner": {},
+		"inverse_corner": {},
+		"checker": {},
 	}
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 
@@ -779,21 +781,24 @@ func _build_floor_multimeshes_by_variant() -> void:
 				continue
 			var canonical: Dictionary = _canonicalize_mask(mask)
 			var variant_id: String = str(canonical.get("variant_id", ""))
-			if not buckets.has(variant_id):
+			if not mesh_transform_buckets.has(variant_id):
 				continue
 			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
 			var pos: Vector3 = _tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			var yaw: float = rotation_steps * PI * 0.5
-			var mesh: Mesh = mesh_by_variant[variant_id] as Mesh
-			var transforms: Array = buckets[variant_id] as Array
+			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
+			var variant_bucket: Dictionary = mesh_transform_buckets[variant_id] as Dictionary
+			if not variant_bucket.has(mesh):
+				variant_bucket[mesh] = []
+			var transforms: Array = variant_bucket[mesh] as Array
 			transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
 
-	_assign_variant_multimesh(floor_full_mmi, buckets["full"] as Array, mesh_by_variant["full"] as Mesh)
-	_assign_variant_multimesh(floor_edge_mmi, buckets["edge"] as Array, mesh_by_variant["edge"] as Mesh)
-	_assign_variant_multimesh(floor_corner_mmi, buckets["corner"] as Array, mesh_by_variant["corner"] as Mesh)
-	_assign_variant_multimesh(floor_inverse_corner_mmi, buckets["inverse_corner"] as Array, mesh_by_variant["inverse_corner"] as Mesh)
-	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, mesh_by_variant["checker"] as Mesh)
+	_assign_variant_mesh_group(floor_full_mmi, mesh_transform_buckets["full"] as Dictionary)
+	_assign_variant_mesh_group(floor_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
+	_assign_variant_mesh_group(floor_corner_mmi, mesh_transform_buckets["corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_inverse_corner_mmi, mesh_transform_buckets["inverse_corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_checker_mmi, mesh_transform_buckets["checker"] as Dictionary)
 
 func _build_piece_multimeshes() -> void:
 	_assign_piece_multimesh(piece_3x3_full_mmi, "piece_3x3_full")
@@ -889,23 +894,40 @@ func _assign_variant_multimesh(target: MultiMeshInstance3D, transforms_raw: Arra
 	_assign_multimesh_transforms(mm, transforms)
 	target.multimesh = mm
 
-func _build_floor_variant_mesh(variant_id: String) -> Mesh:
+func _variant_mesh_array(variant_id: String) -> Array[Mesh]:
 	match variant_id:
 		"full":
-			if mesh_full != null:
-				return mesh_full
+			return mesh_full_variants
 		"edge":
-			if mesh_edge != null:
-				return mesh_edge
+			return mesh_edge_variants
 		"corner":
-			if mesh_corner != null:
-				return mesh_corner
+			return mesh_corner_variants
 		"inverse_corner":
-			if mesh_inverse_corner != null:
-				return mesh_inverse_corner
+			return mesh_inverse_corner_variants
 		"checker":
-			if mesh_checker != null:
-				return mesh_checker
+			return mesh_checker_variants
+	return []
+
+func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> int:
+	if count <= 1:
+		return 0
+	var h: int = x * 73856093
+	h ^= y * 19349663
+	h ^= _mesh_variant_seed * 83492791
+	h ^= variant_id.hash()
+	h &= 0x7fffffff
+	return h % count
+
+func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
+	var variants: Array[Mesh] = _variant_mesh_array(variant_id)
+	if not variants.is_empty():
+		var idx: int = _variant_index_for_tile(variant_id, x, y, variants.size())
+		var selected: Mesh = variants[idx]
+		if selected != null:
+			return selected
+		for fallback in variants:
+			if fallback != null:
+				return fallback
 
 	var mesh: BoxMesh = BoxMesh.new()
 	match variant_id:
@@ -915,6 +937,30 @@ func _build_floor_variant_mesh(variant_id: String) -> Mesh:
 		"checker": mesh.size = Vector3(cell_size * 0.75, floor_thickness, cell_size * 0.75)
 		_: mesh.size = Vector3(cell_size, floor_thickness, cell_size)
 	return mesh
+
+func _assign_variant_mesh_group(target: MultiMeshInstance3D, mesh_to_transforms: Dictionary) -> void:
+	if target == null:
+		return
+	if mesh_to_transforms.is_empty():
+		target.multimesh = null
+		return
+	
+	for child in target.get_children():
+		if child is MultiMeshInstance3D and str((child as Node).name).begins_with("Variant_"):
+			(child as Node).queue_free()
+
+	var meshes: Array = mesh_to_transforms.keys()
+	for i in range(meshes.size()):
+		var mesh: Mesh = meshes[i] as Mesh
+		var transforms: Array = mesh_to_transforms[mesh] as Array
+		if i == 0:
+			_assign_variant_multimesh(target, transforms, mesh)
+			continue
+		var extra: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		extra.name = "Variant_%d" % i
+		extra.multimesh = null
+		target.add_child(extra)
+		_assign_variant_multimesh(extra, transforms, mesh)
 
 func _build_walls_multimesh() -> void:
 	var mm: MultiMesh = MultiMesh.new()
