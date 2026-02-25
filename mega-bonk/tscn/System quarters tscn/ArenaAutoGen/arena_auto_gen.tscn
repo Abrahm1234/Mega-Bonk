@@ -147,7 +147,7 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 visible = false
 mesh = SubResource("2")
 
-[node name="WireGridDebug" type="MeshInstance3D" parent="GridAnchor"]
+[node name="ArenaWireGrid" type="MeshInstance3D" parent="."]
 
 [node name="Arena" type="Node3D" parent="."]
 

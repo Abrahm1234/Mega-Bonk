@@ -45,6 +45,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var wire_grid_y: float = 0.05
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
+@export var debug_grid_action: StringName = &"toggle_arena_grid"
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -93,7 +94,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
-@onready var wire_grid_debug_mi: MeshInstance3D = get_node_or_null("GridAnchor/WireGridDebug") as MeshInstance3D
+@onready var wire_grid_debug_mi: MeshInstance3D = get_node_or_null("ArenaWireGrid") as MeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
@@ -133,7 +134,7 @@ func _sync_and_generate_if_needed() -> void:
 		generate()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if InputMap.has_action("toggle_grid") and event.is_action_pressed("toggle_grid"):
+	if InputMap.has_action(debug_grid_action) and event.is_action_pressed(debug_grid_action):
 		show_wire_grid = not show_wire_grid
 		_update_wire_grid_debug()
 
@@ -206,7 +207,7 @@ func _update_bounds_mesh_from_grid() -> void:
 	if bounds_mi.get_parent() is Node3D and (bounds_mi.get_parent() as Node3D) == get_node_or_null("GridAnchor"):
 		bounds_mi.position = Vector3(sx * 0.5, bounds_mi.position.y, sz * 0.5)
 
-func _build_wire_grid_mesh(w: int, h: int, step: float) -> ImmediateMesh:
+func _build_wire_grid_mesh(w: int, h: int, step: float, gx: Transform3D) -> ImmediateMesh:
 	var m: ImmediateMesh = ImmediateMesh.new()
 	m.surface_begin(Mesh.PRIMITIVE_LINES)
 
@@ -216,38 +217,54 @@ func _build_wire_grid_mesh(w: int, h: int, step: float) -> ImmediateMesh:
 
 	for x in range(w + 1):
 		var px: float = float(x) * step
-		m.surface_add_vertex(Vector3(px, y, 0.0))
-		m.surface_add_vertex(Vector3(px, y, max_z))
+		var a: Vector3 = gx * Vector3(px, 0.0, 0.0)
+		var b: Vector3 = gx * Vector3(px, 0.0, max_z)
+		a.y += y
+		b.y += y
+		m.surface_add_vertex(a)
+		m.surface_add_vertex(b)
 
 	for z in range(h + 1):
 		var pz: float = float(z) * step
-		m.surface_add_vertex(Vector3(0.0, y, pz))
-		m.surface_add_vertex(Vector3(max_x, y, pz))
+		var a2: Vector3 = gx * Vector3(0.0, 0.0, pz)
+		var b2: Vector3 = gx * Vector3(max_x, 0.0, pz)
+		a2.y += y
+		b2.y += y
+		m.surface_add_vertex(a2)
+		m.surface_add_vertex(b2)
 
 	if wire_grid_draw_volume:
 		var height: float = float(max(wire_grid_height_cells, 1)) * step
 		for x in range(w + 1):
 			var px2: float = float(x) * step
-			m.surface_add_vertex(Vector3(px2, y, 0.0))
-			m.surface_add_vertex(Vector3(px2, y + height, 0.0))
-			m.surface_add_vertex(Vector3(px2, y, max_z))
-			m.surface_add_vertex(Vector3(px2, y + height, max_z))
+			var b0: Vector3 = gx * Vector3(px2, 0.0, 0.0)
+			var b1: Vector3 = gx * Vector3(px2, 0.0, max_z)
+			m.surface_add_vertex(b0 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(b0 + Vector3(0.0, y + height, 0.0))
+			m.surface_add_vertex(b1 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(b1 + Vector3(0.0, y + height, 0.0))
 
 		for z in range(h + 1):
 			var pz2: float = float(z) * step
-			m.surface_add_vertex(Vector3(0.0, y, pz2))
-			m.surface_add_vertex(Vector3(0.0, y + height, pz2))
-			m.surface_add_vertex(Vector3(max_x, y, pz2))
-			m.surface_add_vertex(Vector3(max_x, y + height, pz2))
+			var c0: Vector3 = gx * Vector3(0.0, 0.0, pz2)
+			var c1: Vector3 = gx * Vector3(max_x, 0.0, pz2)
+			m.surface_add_vertex(c0 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(c0 + Vector3(0.0, y + height, 0.0))
+			m.surface_add_vertex(c1 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(c1 + Vector3(0.0, y + height, 0.0))
 
-		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
-		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
+		var t00: Vector3 = gx * Vector3(0.0, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
+		var t10: Vector3 = gx * Vector3(max_x, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
+		var t11: Vector3 = gx * Vector3(max_x, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
+		var t01: Vector3 = gx * Vector3(0.0, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
+		m.surface_add_vertex(t00)
+		m.surface_add_vertex(t10)
+		m.surface_add_vertex(t10)
+		m.surface_add_vertex(t11)
+		m.surface_add_vertex(t11)
+		m.surface_add_vertex(t01)
+		m.surface_add_vertex(t01)
+		m.surface_add_vertex(t00)
 
 	m.surface_end()
 	return m
@@ -260,7 +277,8 @@ func _update_wire_grid_debug() -> void:
 	if not show_wire_grid:
 		return
 
-	wire_grid_debug_mi.mesh = _build_wire_grid_mesh(grid_w, grid_h, cell_size)
+	var gx: Transform3D = _grid_xform_local()
+	wire_grid_debug_mi.mesh = _build_wire_grid_mesh(grid_w, grid_h, cell_size, gx)
 	if _wire_grid_material == null:
 		_wire_grid_material = StandardMaterial3D.new()
 		_wire_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
