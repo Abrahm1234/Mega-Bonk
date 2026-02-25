@@ -34,8 +34,12 @@ func _ready():
 
 	initialize_grid()
 	generate_dungeon()
-	collect_visualization_data()
-	visualize()
+
+	if debug_mode:
+		collect_visualization_data()
+		visualize()
+	else:
+		Visualize.set_debug_enabled(false)
 
 func check_dependencies() -> bool:
 	return Grid != null and DelaunayTriangulation != null and KruskalMST != null and CorridorCreator != null and Pathfinder != null and Visualize != null
@@ -121,6 +125,12 @@ func collect_visualization_data():
 		print("Collected room data:", room_data)
 
 func visualize():
+	if not debug_mode:
+		return
+
+	Visualize.set_debug_enabled(true)
+	Visualize.ensure_ui()
+
 	# Assign necessary properties to the Visualize singleton
 	Visualize.grid_width = width
 	Visualize.grid_height = height
