@@ -143,6 +143,7 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 [node name="GridAnchor" type="Node3D" parent="."]
 
 [node name="WireGridBounds" type="MeshInstance3D" parent="."]
+position = Vector3(192, 0, 192)
 visible = false
 mesh = SubResource("2")
 
