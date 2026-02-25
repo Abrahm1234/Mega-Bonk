@@ -550,31 +550,147 @@ func _run_pattern_stamping() -> void:
 		_build_piece_multimeshes()
 		return
 
-	patterns.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a.get("priority", 0)) > int(b.get("priority", 0))
-	)
-
+	var patterns_by_priority: Dictionary = {}
+	var priority_levels: Array[int] = []
 	for pattern in patterns:
-		var size: Vector2i = pattern.get("size", Vector2i.ONE)
-		for y in range(grid_h - size.y + 1):
-			for x in range(grid_w - size.x + 1):
-				if _pattern_matches_at(pattern, x, y):
-					var pid: String = str(pattern.get("id", ""))
-					if not _piece_transforms.has(pid):
+		var priority: int = int(pattern.get("priority", 0))
+		if not patterns_by_priority.has(priority):
+			patterns_by_priority[priority] = []
+			priority_levels.append(priority)
+		var bucket: Array = patterns_by_priority[priority] as Array
+		bucket.append(pattern)
+
+	priority_levels.sort()
+	priority_levels.reverse()
+
+	var recent_by_family: Dictionary = {}
+
+	for priority in priority_levels:
+		var band_patterns: Array = patterns_by_priority.get(priority, []) as Array
+		var candidates: Array[Dictionary] = []
+
+		for pattern_raw in band_patterns:
+			var pattern: Dictionary = pattern_raw as Dictionary
+			var size: Vector2i = pattern.get("size", Vector2i.ONE)
+			for y in range(grid_h - size.y + 1):
+				for x in range(grid_w - size.x + 1):
+					if not _pattern_matches_at(pattern, x, y):
 						continue
-					if not _can_render_piece(pid):
+					if not _pattern_cooldown_allows(pattern, x, y, recent_by_family):
 						continue
-					_mark_pattern_occupied(pattern, x, y)
-					var t: Array = _piece_transforms[pid] as Array
-					var rot_steps: int = int(pattern.get("rot_steps", 0))
-					var yaw: float = rot_steps * PI * 0.5
-					var mesh: Mesh = _build_piece_mesh(pid)
-					var desired: Vector3 = _piece_desired_size(size)
-					var pos: Vector3 = _pattern_anchor_to_world(x, y, size)
-					pos.y += piece_height_epsilon
-					t.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+					candidates.append({
+						"pattern": pattern,
+						"x": x,
+						"y": y,
+						"weight": max(float(pattern.get("weight", 1.0)), 0.0),
+					})
+
+		while not candidates.is_empty():
+			var chosen_index: int = _pick_weighted_candidate_index(candidates)
+			if chosen_index < 0:
+				break
+
+			var chosen: Dictionary = candidates[chosen_index]
+			var pattern: Dictionary = chosen.get("pattern", {}) as Dictionary
+			var x: int = int(chosen.get("x", 0))
+			var y: int = int(chosen.get("y", 0))
+			var size: Vector2i = pattern.get("size", Vector2i.ONE)
+
+			candidates.remove_at(chosen_index)
+
+			if not _pattern_matches_at(pattern, x, y):
+				continue
+			if not _pattern_cooldown_allows(pattern, x, y, recent_by_family):
+				continue
+
+			var pid: String = str(pattern.get("id", ""))
+			if not _piece_transforms.has(pid):
+				continue
+			if not _can_render_piece(pid):
+				continue
+
+			_mark_pattern_occupied(pattern, x, y)
+			_record_pattern_cooldown(pattern, x, y, recent_by_family)
+
+			var t: Array = _piece_transforms[pid] as Array
+			var rot_steps: int = int(pattern.get("rot_steps", 0))
+			var yaw: float = rot_steps * PI * 0.5
+			var mesh: Mesh = _build_piece_mesh(pid)
+			var desired: Vector3 = _piece_desired_size(size)
+			var pos: Vector3 = _pattern_anchor_to_world(x, y, size)
+			pos.y += piece_height_epsilon
+			t.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+
+			var remaining: Array[Dictionary] = []
+			for candidate in candidates:
+				var cd: Dictionary = candidate as Dictionary
+				var cp: Dictionary = cd.get("pattern", {}) as Dictionary
+				var cx: int = int(cd.get("x", 0))
+				var cy: int = int(cd.get("y", 0))
+				if _pattern_matches_at(cp, cx, cy) and _pattern_cooldown_allows(cp, cx, cy, recent_by_family):
+					remaining.append(cd)
+			candidates = remaining
 
 	_build_piece_multimeshes()
+
+func _pick_weighted_candidate_index(candidates: Array[Dictionary]) -> int:
+	if candidates.is_empty():
+		return -1
+
+	var total_weight: float = 0.0
+	for c in candidates:
+		total_weight += max(float(c.get("weight", 0.0)), 0.0)
+
+	if total_weight <= 0.0001:
+		return _rng.randi_range(0, candidates.size() - 1)
+
+	var roll: float = _rng.randf() * total_weight
+	for i in range(candidates.size()):
+		roll -= max(float(candidates[i].get("weight", 0.0)), 0.0)
+		if roll <= 0.0:
+			return i
+
+	return candidates.size() - 1
+
+func _pattern_anchor_tile(x: int, y: int, size: Vector2i) -> Vector2:
+	var ax: float = float(x) + float(size.x) * 0.5
+	var ay: float = float(y) + float(size.y) * 0.5
+	return Vector2(ax, ay)
+
+func _pattern_cooldown_allows(pattern: Dictionary, x: int, y: int, recent_by_family: Dictionary) -> bool:
+	var radius: float = float(pattern.get("cooldown_radius", 0.0))
+	if radius <= 0.0:
+		return true
+
+	var family: String = str(pattern.get("cooldown_family", pattern.get("id", "")))
+	if family == "" or not recent_by_family.has(family):
+		return true
+
+	var size: Vector2i = pattern.get("size", Vector2i.ONE)
+	var anchor: Vector2 = _pattern_anchor_tile(x, y, size)
+	var anchors: Array = recent_by_family[family] as Array
+	for a in anchors:
+		var prev: Vector2 = a as Vector2
+		if anchor.distance_to(prev) < radius:
+			return false
+	return true
+
+func _record_pattern_cooldown(pattern: Dictionary, x: int, y: int, recent_by_family: Dictionary) -> void:
+	var radius: float = float(pattern.get("cooldown_radius", 0.0))
+	if radius <= 0.0:
+		return
+
+	var family: String = str(pattern.get("cooldown_family", pattern.get("id", "")))
+	if family == "":
+		return
+
+	if not recent_by_family.has(family):
+		recent_by_family[family] = []
+
+	var size: Vector2i = pattern.get("size", Vector2i.ONE)
+	var anchor: Vector2 = _pattern_anchor_tile(x, y, size)
+	var anchors: Array = recent_by_family[family] as Array
+	anchors.append(anchor)
 
 func _pattern_matches_at(pattern: Dictionary, x: int, y: int) -> bool:
 	var size: Vector2i = pattern["size"]
