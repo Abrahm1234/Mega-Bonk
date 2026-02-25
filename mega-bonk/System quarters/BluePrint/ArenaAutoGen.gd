@@ -46,6 +46,8 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
 @export var debug_grid_action: StringName = &"toggle_arena_grid"
+@export var debug_relaxed_visuals: bool = false
+@export_range(0.0, 0.2, 0.01) var relaxed_offset_fraction: float = 0.15
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -102,6 +104,9 @@ var _tiles: PackedByteArray
 var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
 var _wire_grid_material: StandardMaterial3D
+var _relaxed_floor_mi: MeshInstance3D
+var _relaxed_floor_material: StandardMaterial3D
+var _relaxed_noise_seed: int = 0
 
 func _ready() -> void:
 	if wall_mmi == null:
@@ -114,14 +119,19 @@ func _ready() -> void:
 
 	if use_random_seed or randomize_on_run:
 		_rng.randomize()
+		_relaxed_noise_seed = int(_rng.randi())
 	else:
 		_rng.seed = seed_value
+		_relaxed_noise_seed = seed_value
+
+	_ensure_relaxed_floor_node()
 
 	if bind_to_wire_grid:
 		call_deferred("_sync_and_generate_if_needed")
 	else:
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
+		_update_relaxed_floor_visual()
 		if auto_generate:
 			generate()
 
@@ -130,6 +140,7 @@ func _sync_and_generate_if_needed() -> void:
 	_sync_to_wire_grid()
 	_update_bounds_mesh_from_grid()
 	_update_wire_grid_debug()
+	_update_relaxed_floor_visual()
 	if auto_generate:
 		generate()
 
@@ -285,6 +296,113 @@ func _update_wire_grid_debug() -> void:
 		_wire_grid_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
 	wire_grid_debug_mi.material_override = _wire_grid_material
 
+func _ensure_relaxed_floor_node() -> void:
+	if _relaxed_floor_mi != null:
+		return
+
+	var existing: Node = get_node_or_null("Arena/RelaxedFloor")
+	if existing is MeshInstance3D:
+		_relaxed_floor_mi = existing as MeshInstance3D
+		return
+
+	var arena_root: Node = get_node_or_null("Arena")
+	if arena_root == null:
+		return
+
+	_relaxed_floor_mi = MeshInstance3D.new()
+	_relaxed_floor_mi.name = "RelaxedFloor"
+	_relaxed_floor_mi.visible = false
+	arena_root.add_child(_relaxed_floor_mi)
+
+func _set_base_floor_visible(visible: bool) -> void:
+	if floor_mmi != null:
+		floor_mmi.visible = visible
+	if floor_full_mmi != null:
+		floor_full_mmi.visible = visible
+	if floor_edge_mmi != null:
+		floor_edge_mmi.visible = visible
+	if floor_corner_mmi != null:
+		floor_corner_mmi.visible = visible
+	if floor_inverse_corner_mmi != null:
+		floor_inverse_corner_mmi.visible = visible
+	if floor_checker_mmi != null:
+		floor_checker_mmi.visible = visible
+
+func _relaxed_hash01(x: int, y: int, axis: int) -> float:
+	var seed_mix: int = _relaxed_noise_seed
+	var h: int = x * 73856093
+	h ^= y * 19349663
+	h ^= axis * 83492791
+	h ^= seed_mix * 2654435761
+	h &= 0x7fffffff
+	return float(h) / 2147483647.0
+
+func _build_relaxed_floor_mesh() -> ArrayMesh:
+	var max_offset: float = min(max(relaxed_offset_fraction, 0.0), 0.2) * cell_size
+	var point_positions: Array[Vector3] = []
+	point_positions.resize(_points_w() * _points_h())
+
+	for py in range(_points_h()):
+		for px in range(_points_w()):
+			var p: Vector3 = _corner_to_world(px, py)
+			var is_border: bool = px == 0 or py == 0 or px == _points_w() - 1 or py == _points_h() - 1
+			var ox: float = 0.0
+			var oz: float = 0.0
+			if not is_border:
+				ox = (_relaxed_hash01(px, py, 0) * 2.0 - 1.0) * max_offset
+				oz = (_relaxed_hash01(px, py, 1) * 2.0 - 1.0) * max_offset
+			point_positions[_corner_idx(px, py)] = p + Vector3(ox, floor_thickness, oz)
+
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var vertex_count: int = 0
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if _tile_get(x, y) == 0 or (pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0):
+				continue
+
+			var p00: Vector3 = point_positions[_corner_idx(x, y)]
+			var p10: Vector3 = point_positions[_corner_idx(x + 1, y)]
+			var p11: Vector3 = point_positions[_corner_idx(x + 1, y + 1)]
+			var p01: Vector3 = point_positions[_corner_idx(x, y + 1)]
+
+			st.set_normal(Vector3.UP)
+			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p00)
+			st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p10)
+			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p11)
+			vertex_count += 3
+
+			st.set_normal(Vector3.UP)
+			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p00)
+			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p11)
+			st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p01)
+			vertex_count += 3
+
+	if vertex_count == 0:
+		return ArrayMesh.new()
+	return st.commit() as ArrayMesh
+
+func _update_relaxed_floor_visual() -> void:
+	_ensure_relaxed_floor_node()
+	if _relaxed_floor_mi == null:
+		return
+
+	if not debug_relaxed_visuals or _tiles.is_empty():
+		_relaxed_floor_mi.visible = false
+		_relaxed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+
+	_relaxed_floor_mi.mesh = _build_relaxed_floor_mesh()
+	if _relaxed_floor_material == null:
+		_relaxed_floor_material = StandardMaterial3D.new()
+		_relaxed_floor_material.albedo_color = Color(0.85, 0.85, 0.85, 1.0)
+		_relaxed_floor_material.roughness = 1.0
+	_relaxed_floor_mi.material_override = _relaxed_floor_material
+	_relaxed_floor_mi.visible = true
+	_set_base_floor_visible(false)
+
 func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 	var corners: Array[Vector3] = [
 		xform * aabb.position,
@@ -340,6 +458,7 @@ func generate() -> void:
 
 	_update_bounds_mesh_from_grid()
 	_update_wire_grid_debug()
+	_update_relaxed_floor_visual()
 
 func _fill_corners_random() -> void:
 	for y in range(_points_h()):
