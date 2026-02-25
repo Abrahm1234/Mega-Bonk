@@ -37,7 +37,14 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var bind_to_wire_grid: bool = false
 @export var wire_grid_origin_path: NodePath
 @export var wire_grid_bounds_mesh_path: NodePath
+@export var bounds_override_origin: bool = false
+@export var wire_grid_use_step_size_from_grid: bool = false
 @export var use_grid_depth_for_h: bool = true
+@export var show_bounds_debug: bool = false
+@export var show_wire_grid: bool = true
+@export var wire_grid_y: float = 0.05
+@export var wire_grid_draw_volume: bool = false
+@export var wire_grid_height_cells: int = 48
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -86,12 +93,14 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
+@onready var wire_grid_debug_mi: MeshInstance3D = get_node_or_null("GridAnchor/WireGridDebug") as MeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
 var _tiles: PackedByteArray
 var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
+var _wire_grid_material: StandardMaterial3D
 
 func _ready() -> void:
 	if wall_mmi == null:
@@ -109,14 +118,24 @@ func _ready() -> void:
 
 	if bind_to_wire_grid:
 		call_deferred("_sync_and_generate_if_needed")
-	elif auto_generate:
-		generate()
+	else:
+		_update_bounds_mesh_from_grid()
+		_update_wire_grid_debug()
+		if auto_generate:
+			generate()
 
 func _sync_and_generate_if_needed() -> void:
 	await get_tree().process_frame
 	_sync_to_wire_grid()
+	_update_bounds_mesh_from_grid()
+	_update_wire_grid_debug()
 	if auto_generate:
 		generate()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if InputMap.has_action("toggle_grid") and event.is_action_pressed("toggle_grid"):
+		show_wire_grid = not show_wire_grid
+		_update_wire_grid_debug()
 
 func _sync_to_wire_grid() -> void:
 	if not bind_to_wire_grid:
@@ -125,7 +144,7 @@ func _sync_to_wire_grid() -> void:
 	var grid_node: Node = get_node_or_null("/root/Grid")
 	if grid_node != null:
 		var step: Variant = grid_node.get("STEP_SIZE")
-		if step is Vector3:
+		if wire_grid_use_step_size_from_grid and step is Vector3:
 			var step_x: float = (step as Vector3).x
 			if step_x > 0.0001:
 				cell_size = step_x
@@ -155,8 +174,10 @@ func _sync_to_wire_grid() -> void:
 			grid_w = w_from_bounds
 		if h_from_bounds > 0:
 			grid_h = h_from_bounds
-		origin_mode = OriginMode.MIN_CORNER
-		origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
+
+		if bounds_override_origin:
+			origin_mode = OriginMode.MIN_CORNER
+			origin_offset = Vector3(aabb_self.position.x, origin_offset.y, aabb_self.position.z)
 
 func _resolve_bounds_mesh(node: Node) -> MeshInstance3D:
 	if node == null:
@@ -167,6 +188,84 @@ func _resolve_bounds_mesh(node: Node) -> MeshInstance3D:
 	if meshes.is_empty():
 		return null
 	return meshes[0] as MeshInstance3D
+
+func _update_bounds_mesh_from_grid() -> void:
+	var bounds_node: Node = get_node_or_null(wire_grid_bounds_mesh_path)
+	var bounds_mi: MeshInstance3D = _resolve_bounds_mesh(bounds_node)
+	if bounds_mi == null:
+		return
+
+	bounds_mi.visible = show_bounds_debug
+
+	var sx: float = float(grid_w) * cell_size
+	var sz: float = float(grid_h) * cell_size
+	var box: BoxMesh = bounds_mi.mesh as BoxMesh
+	if box != null:
+		box.size = Vector3(sx, box.size.y, sz)
+
+	if bounds_mi.get_parent() is Node3D and (bounds_mi.get_parent() as Node3D) == get_node_or_null("GridAnchor"):
+		bounds_mi.position = Vector3(sx * 0.5, bounds_mi.position.y, sz * 0.5)
+
+func _build_wire_grid_mesh(w: int, h: int, step: float) -> ImmediateMesh:
+	var m: ImmediateMesh = ImmediateMesh.new()
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+
+	var max_x: float = float(w) * step
+	var max_z: float = float(h) * step
+	var y: float = wire_grid_y
+
+	for x in range(w + 1):
+		var px: float = float(x) * step
+		m.surface_add_vertex(Vector3(px, y, 0.0))
+		m.surface_add_vertex(Vector3(px, y, max_z))
+
+	for z in range(h + 1):
+		var pz: float = float(z) * step
+		m.surface_add_vertex(Vector3(0.0, y, pz))
+		m.surface_add_vertex(Vector3(max_x, y, pz))
+
+	if wire_grid_draw_volume:
+		var height: float = float(max(wire_grid_height_cells, 1)) * step
+		for x in range(w + 1):
+			var px2: float = float(x) * step
+			m.surface_add_vertex(Vector3(px2, y, 0.0))
+			m.surface_add_vertex(Vector3(px2, y + height, 0.0))
+			m.surface_add_vertex(Vector3(px2, y, max_z))
+			m.surface_add_vertex(Vector3(px2, y + height, max_z))
+
+		for z in range(h + 1):
+			var pz2: float = float(z) * step
+			m.surface_add_vertex(Vector3(0.0, y, pz2))
+			m.surface_add_vertex(Vector3(0.0, y + height, pz2))
+			m.surface_add_vertex(Vector3(max_x, y, pz2))
+			m.surface_add_vertex(Vector3(max_x, y + height, pz2))
+
+		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
+		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
+		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
+		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
+		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
+		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
+		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
+		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
+
+	m.surface_end()
+	return m
+
+func _update_wire_grid_debug() -> void:
+	if wire_grid_debug_mi == null:
+		return
+
+	wire_grid_debug_mi.visible = show_wire_grid
+	if not show_wire_grid:
+		return
+
+	wire_grid_debug_mi.mesh = _build_wire_grid_mesh(grid_w, grid_h, cell_size)
+	if _wire_grid_material == null:
+		_wire_grid_material = StandardMaterial3D.new()
+		_wire_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_wire_grid_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	wire_grid_debug_mi.material_override = _wire_grid_material
 
 func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 	var corners: Array[Vector3] = [
@@ -220,6 +319,9 @@ func generate() -> void:
 		_build_walls_multimesh()
 	else:
 		wall_mmi.multimesh = null
+
+	_update_bounds_mesh_from_grid()
+	_update_wire_grid_debug()
 
 func _fill_corners_random() -> void:
 	for y in range(_points_h()):
