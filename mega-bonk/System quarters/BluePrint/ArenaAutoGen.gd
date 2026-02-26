@@ -82,6 +82,8 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @export var mesh_corner: Mesh
 @export var mesh_inverse_corner: Mesh
 @export var mesh_checker: Mesh
+@export var canonical_mesh_tile_xz_size: float = 1.0
+@export var canonical_mesh_pivot_is_tile_center: bool = true
 
 @export var mesh_full_variants: Array[Mesh] = []
 @export var mesh_edge_variants: Array[Mesh] = []
@@ -161,21 +163,25 @@ func _ready() -> void:
 
 	if bind_to_wire_grid:
 		call_deferred("_sync_and_generate_if_needed")
+		return
+
+	if auto_generate:
+		generate()
 	else:
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
 		_update_deformed_floor_visual()
-		if auto_generate:
-			generate()
 
 func _sync_and_generate_if_needed() -> void:
 	await get_tree().process_frame
 	_sync_to_wire_grid()
-	_update_bounds_mesh_from_grid()
-	_update_wire_grid_debug()
-	_update_deformed_floor_visual()
+
 	if auto_generate:
 		generate()
+	else:
+		_update_bounds_mesh_from_grid()
+		_update_wire_grid_debug()
+		_update_deformed_floor_visual()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if InputMap.has_action(debug_grid_action) and event.is_action_pressed(debug_grid_action):
@@ -595,7 +601,12 @@ func _add_deformed_mesh_surface(st: SurfaceTool, mesh: Mesh, quad: Array[Vector3
 			if index < 0 or index >= verts.size():
 				continue
 			var v: Vector3 = verts[index]
-			var uv_from_pos: Vector2 = Vector2((v.x - aabb.position.x) / sx, (v.z - aabb.position.z) / sz)
+			var uv_from_pos: Vector2
+			if use_canonical_single_meshes and canonical_mesh_pivot_is_tile_center:
+				var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
+				uv_from_pos = Vector2(v.x / sxz + 0.5, v.z / sxz + 0.5)
+			else:
+				uv_from_pos = Vector2((v.x - aabb.position.x) / sx, (v.z - aabb.position.z) / sz)
 			uv_from_pos = _rotate_uv_steps(uv_from_pos, rotation_steps)
 			var base_pos: Vector3 = _bilerp_quad(p00, p10, p11, p01, uv_from_pos)
 			var y_t: float = (v.y - aabb.position.y) / sy
@@ -670,6 +681,17 @@ func _update_deformed_floor_visual() -> void:
 		return
 
 	if not show_deformed_floor_mesh or not _has_render_tiles():
+		_deformed_floor_mi.visible = false
+		_deformed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+
+	if layout_mode == LayoutMode.LEGACY_CORNERS and _corners.is_empty():
+		_deformed_floor_mi.visible = false
+		_deformed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS and _cells.is_empty():
 		_deformed_floor_mi.visible = false
 		_deformed_floor_mi.mesh = null
 		_set_base_floor_visible(true)
@@ -1070,7 +1092,10 @@ func _build_floor_multimesh_legacy() -> void:
 				continue
 			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
-			transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, 0.0, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
 	_assign_multimesh_transforms(mm, transforms)
 	floor_mmi.multimesh = mm
 
@@ -1104,7 +1129,10 @@ func _build_floor_multimeshes_by_variant() -> void:
 			if not variant_bucket.has(mesh):
 				variant_bucket[mesh] = []
 			var transforms: Array = variant_bucket[mesh] as Array
-			transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, yaw, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
 
 	_assign_variant_mesh_group(floor_full_mmi, mesh_transform_buckets["full"] as Dictionary)
 	_assign_variant_mesh_group(floor_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
@@ -1234,20 +1262,17 @@ func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
 	if use_canonical_single_meshes:
 		match variant_id:
 			"full":
-				if mesh_full != null:
-					return mesh_full
+				return mesh_full
 			"edge":
-				if mesh_edge != null:
-					return mesh_edge
+				return mesh_edge
 			"corner":
-				if mesh_corner != null:
-					return mesh_corner
+				return mesh_corner
 			"inverse_corner":
-				if mesh_inverse_corner != null:
-					return mesh_inverse_corner
+				return mesh_inverse_corner
 			"checker":
-				if mesh_checker != null:
-					return mesh_checker
+				return mesh_checker
+			_:
+				return null
 
 	var variants: Array[Mesh] = _variant_mesh_array(variant_id)
 	if not variants.is_empty():
@@ -1454,6 +1479,32 @@ func _fit_mesh_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_po
 		scale.y = 1.0
 
 	var basis: Basis = Basis(Vector3.UP, snapped_yaw).scaled(scale)
+	var center: Vector3 = aabb.position + aabb.size * 0.5
+	var corrected_pos: Vector3 = world_pos + basis * (-center)
+	return Transform3D(basis, corrected_pos)
+
+func _fit_canonical_tile_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_pos: Vector3) -> Transform3D:
+	var rot_steps: int = int(round(yaw / (PI * 0.5))) & 3
+	var snapped_yaw: float = rot_steps * PI * 0.5
+
+	if mesh == null:
+		return Transform3D(Basis(Vector3.UP, snapped_yaw), world_pos)
+
+	var desired: Vector3 = desired_size
+	if (rot_steps & 1) == 1:
+		desired = Vector3(desired_size.z, desired_size.y, desired_size.x)
+
+	var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
+	var aabb: AABB = mesh.get_aabb()
+	var sy: float = max(aabb.size.y, 0.0001)
+	var scale: Vector3 = Vector3(desired.x / sxz, desired.y / sy, desired.z / sxz)
+	if aabb.size.y < 0.001:
+		scale.y = 1.0
+
+	var basis: Basis = Basis(Vector3.UP, snapped_yaw).scaled(scale)
+	if canonical_mesh_pivot_is_tile_center:
+		return Transform3D(basis, world_pos)
+
 	var center: Vector3 = aabb.position + aabb.size * 0.5
 	var corrected_pos: Vector3 = world_pos + basis * (-center)
 	return Transform3D(basis, corrected_pos)
