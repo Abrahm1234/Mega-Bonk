@@ -1504,7 +1504,7 @@ func _render_tile_idx(x: int, y: int) -> int:
 
 func _render_tile_to_world_center(x: int, y: int) -> Vector3:
 	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
-		return _corner_to_world(x + 1, y + 1)
+		return _tile_to_world_center(x, y)
 	return _tile_to_world_center(x, y)
 
 func _mask_at_dual_tile(x: int, y: int) -> int:
