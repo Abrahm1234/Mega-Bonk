@@ -36,6 +36,8 @@ var button_edges
 var button_mst_edges
 var button_corridors
 var button_rooms
+var _ui_built: bool = false
+var _ui_layer: CanvasLayer
 
 var blue_cubes_visible = true
 var red_cubes_visible = true
@@ -47,15 +49,33 @@ var corridors_visible = true
 var rooms_visible = true
 
 func _ready():
+	if debug_mode:
+		ensure_ui()
+		visualize()
+
+func set_debug_enabled(enabled: bool) -> void:
+	debug_mode = enabled
+	if debug_mode:
+		ensure_ui()
+	else:
+		if _ui_layer != null:
+			_ui_layer.queue_free()
+			_ui_layer = null
+		_ui_built = false
+		clear_visualizations()
+
+func ensure_ui() -> void:
+	if _ui_built:
+		return
 	create_ui()
-	visualize()
+	_ui_built = true
 
 func create_ui():
-	var canvas_layer = CanvasLayer.new()
-	add_child(canvas_layer)
+	_ui_layer = CanvasLayer.new()
+	add_child(_ui_layer)
 
 	var control = Control.new()
-	canvas_layer.add_child(control)
+	_ui_layer.add_child(control)
 
 	button_blue_cubes = Button.new()
 	button_blue_cubes.text = "Toggle Room Wires"
@@ -106,6 +126,8 @@ func create_ui():
 	control.add_child(button_rooms)
 
 func _input(event):
+	if not debug_mode:
+		return
 	# Check if the event is a key press
 	if event is InputEventKey:
 		# Handle key press events
@@ -156,6 +178,8 @@ func _on_toggle_rooms():
 	visualize()
 
 func visualize():
+	if not debug_mode:
+		return
 	clear_visualizations()
 
 	# Visualize grid

@@ -25,14 +25,17 @@ const CANONICAL_CHECKER: int = 0b0101
 @export var ensure_connected: bool = true
 @export var border: int = 1
 
-@export var cell_size: float = 2.0
+@export var cell_size: float = 8.0
 @export var floor_thickness: float = 0.25
 
 enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
+enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 
 @export var origin_mode: OriginMode = OriginMode.CUSTOM_ANCHOR
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
+
+@export var layout_mode: LayoutMode = LayoutMode.LEGACY_CORNERS
 
 @export var bind_to_wire_grid: bool = false
 @export var wire_grid_origin_path: NodePath
@@ -42,9 +45,23 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var use_grid_depth_for_h: bool = true
 @export var show_bounds_debug: bool = false
 @export var show_wire_grid: bool = true
+@export var show_main_grid_overlay: bool = true
+@export var show_dual_grid_overlay: bool = true
+@export var show_dual_grid_points: bool = true
+@export var show_dual_bit_boxes: bool = false
+@export var main_grid_color: Color = Color(1.0, 0.55, 0.0, 1.0)
+@export var dual_grid_color: Color = Color(0.2, 0.3, 1.0, 1.0)
+@export var dual_point_color: Color = Color(0.2, 0.3, 1.0, 1.0)
+@export var dual_bit_filled_color: Color = Color(0.2, 0.8, 0.2, 0.35)
+@export var dual_bit_empty_color: Color = Color(0.2, 0.2, 0.8, 0.2)
+@export_range(0.5, 1.0, 0.01) var dual_bit_box_inset: float = 0.95
+@export_range(0.02, 0.5, 0.01) var dual_point_radius: float = 0.12
 @export var wire_grid_y: float = 0.05
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
+@export var debug_grid_action: StringName = &"toggle_arena_grid"
+@export var show_deformed_floor_mesh: bool = false
+@export_range(0.0, 0.2, 0.01) var deformed_offset_fraction: float = 0.15
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -59,11 +76,20 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var piece_height_epsilon: float = 0.01
 @export var checker_is_solid: bool = true
 
+@export var use_canonical_single_meshes: bool = false
 @export var mesh_full: Mesh
 @export var mesh_edge: Mesh
 @export var mesh_corner: Mesh
 @export var mesh_inverse_corner: Mesh
 @export var mesh_checker: Mesh
+@export var canonical_mesh_tile_xz_size: float = 1.0
+@export var canonical_mesh_pivot_is_tile_center: bool = true
+
+@export var mesh_full_variants: Array[Mesh] = []
+@export var mesh_edge_variants: Array[Mesh] = []
+@export var mesh_corner_variants: Array[Mesh] = []
+@export var mesh_inverse_corner_variants: Array[Mesh] = []
+@export var mesh_checker_variants: Array[Mesh] = []
 
 @export var piece_mesh_3x3_full: Mesh
 @export var piece_mesh_2x3_full: Mesh
@@ -93,17 +119,30 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
-@onready var wire_grid_debug_mi: MeshInstance3D = get_node_or_null("GridAnchor/WireGridDebug") as MeshInstance3D
+@onready var wire_grid_main_mi: MeshInstance3D = get_node_or_null("ArenaWireGridMain") as MeshInstance3D
+@onready var wire_grid_dual_mi: MeshInstance3D = get_node_or_null("ArenaWireGridDual") as MeshInstance3D
+@onready var dual_points_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualGridPoints") as MultiMeshInstance3D
+@onready var dual_bits_filled_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Filled") as MultiMeshInstance3D
+@onready var dual_bits_empty_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Empty") as MultiMeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
+var _cells: PackedByteArray
 var _tiles: PackedByteArray
 var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
-var _wire_grid_material: StandardMaterial3D
+var _wire_grid_main_material: StandardMaterial3D
+var _wire_grid_dual_material: StandardMaterial3D
+var _dual_points_material: StandardMaterial3D
+var _dual_bits_filled_material: StandardMaterial3D
+var _dual_bits_empty_material: StandardMaterial3D
+var _deformed_floor_mi: MeshInstance3D
+var _deformed_floor_material: StandardMaterial3D
+var _deformed_noise_seed: int = 0
+var _mesh_variant_seed: int = 0
 
 func _ready() -> void:
-	if wall_mmi == null:
+	if make_walls and wall_mmi == null:
 		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
 		return
 
@@ -113,27 +152,39 @@ func _ready() -> void:
 
 	if use_random_seed or randomize_on_run:
 		_rng.randomize()
+		_deformed_noise_seed = int(_rng.randi())
+		_mesh_variant_seed = int(_rng.randi())
 	else:
 		_rng.seed = seed_value
+		_deformed_noise_seed = seed_value
+		_mesh_variant_seed = seed_value
+
+	_ensure_deformed_floor_node()
 
 	if bind_to_wire_grid:
 		call_deferred("_sync_and_generate_if_needed")
+		return
+
+	if auto_generate:
+		generate()
 	else:
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
-		if auto_generate:
-			generate()
+		_update_deformed_floor_visual()
 
 func _sync_and_generate_if_needed() -> void:
 	await get_tree().process_frame
 	_sync_to_wire_grid()
-	_update_bounds_mesh_from_grid()
-	_update_wire_grid_debug()
+
 	if auto_generate:
 		generate()
+	else:
+		_update_bounds_mesh_from_grid()
+		_update_wire_grid_debug()
+		_update_deformed_floor_visual()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if InputMap.has_action("toggle_grid") and event.is_action_pressed("toggle_grid"):
+	if InputMap.has_action(debug_grid_action) and event.is_action_pressed(debug_grid_action):
 		show_wire_grid = not show_wire_grid
 		_update_wire_grid_debug()
 
@@ -206,66 +257,454 @@ func _update_bounds_mesh_from_grid() -> void:
 	if bounds_mi.get_parent() is Node3D and (bounds_mi.get_parent() as Node3D) == get_node_or_null("GridAnchor"):
 		bounds_mi.position = Vector3(sx * 0.5, bounds_mi.position.y, sz * 0.5)
 
-func _build_wire_grid_mesh(w: int, h: int, step: float) -> ImmediateMesh:
-	var m: ImmediateMesh = ImmediateMesh.new()
-	m.surface_begin(Mesh.PRIMITIVE_LINES)
-
+func _append_wire_grid_plane_lines(m: ImmediateMesh, w: int, h: int, step: float, gx: Transform3D, y: float, offset_x: float, offset_z: float) -> void:
 	var max_x: float = float(w) * step
 	var max_z: float = float(h) * step
-	var y: float = wire_grid_y
 
 	for x in range(w + 1):
-		var px: float = float(x) * step
-		m.surface_add_vertex(Vector3(px, y, 0.0))
-		m.surface_add_vertex(Vector3(px, y, max_z))
+		var px: float = float(x) * step + offset_x
+		var a: Vector3 = gx * Vector3(px, 0.0, offset_z)
+		var b: Vector3 = gx * Vector3(px, 0.0, max_z + offset_z)
+		a.y += y
+		b.y += y
+		m.surface_add_vertex(a)
+		m.surface_add_vertex(b)
 
 	for z in range(h + 1):
-		var pz: float = float(z) * step
-		m.surface_add_vertex(Vector3(0.0, y, pz))
-		m.surface_add_vertex(Vector3(max_x, y, pz))
+		var pz: float = float(z) * step + offset_z
+		var a2: Vector3 = gx * Vector3(offset_x, 0.0, pz)
+		var b2: Vector3 = gx * Vector3(max_x + offset_x, 0.0, pz)
+		a2.y += y
+		b2.y += y
+		m.surface_add_vertex(a2)
+		m.surface_add_vertex(b2)
 
-	if wire_grid_draw_volume:
+func _build_wire_grid_mesh_offset(w: int, h: int, step: float, gx: Transform3D, offset_x: float, offset_z: float) -> ImmediateMesh:
+	var m: ImmediateMesh = ImmediateMesh.new()
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	_append_wire_grid_plane_lines(m, w, h, step, gx, wire_grid_y, offset_x, offset_z)
+
+	if offset_x == 0.0 and offset_z == 0.0 and wire_grid_draw_volume:
+		var max_x: float = float(w) * step
+		var max_z: float = float(h) * step
+		var y: float = wire_grid_y
 		var height: float = float(max(wire_grid_height_cells, 1)) * step
 		for x in range(w + 1):
 			var px2: float = float(x) * step
-			m.surface_add_vertex(Vector3(px2, y, 0.0))
-			m.surface_add_vertex(Vector3(px2, y + height, 0.0))
-			m.surface_add_vertex(Vector3(px2, y, max_z))
-			m.surface_add_vertex(Vector3(px2, y + height, max_z))
+			var b0: Vector3 = gx * Vector3(px2, 0.0, 0.0)
+			var b1: Vector3 = gx * Vector3(px2, 0.0, max_z)
+			m.surface_add_vertex(b0 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(b0 + Vector3(0.0, y + height, 0.0))
+			m.surface_add_vertex(b1 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(b1 + Vector3(0.0, y + height, 0.0))
 
 		for z in range(h + 1):
 			var pz2: float = float(z) * step
-			m.surface_add_vertex(Vector3(0.0, y, pz2))
-			m.surface_add_vertex(Vector3(0.0, y + height, pz2))
-			m.surface_add_vertex(Vector3(max_x, y, pz2))
-			m.surface_add_vertex(Vector3(max_x, y + height, pz2))
+			var c0: Vector3 = gx * Vector3(0.0, 0.0, pz2)
+			var c1: Vector3 = gx * Vector3(max_x, 0.0, pz2)
+			m.surface_add_vertex(c0 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(c0 + Vector3(0.0, y + height, 0.0))
+			m.surface_add_vertex(c1 + Vector3(0.0, y, 0.0))
+			m.surface_add_vertex(c1 + Vector3(0.0, y + height, 0.0))
 
-		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, 0.0))
-		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
-		m.surface_add_vertex(Vector3(max_x, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, max_z))
-		m.surface_add_vertex(Vector3(0.0, y + height, 0.0))
+		var t00: Vector3 = gx * Vector3(0.0, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
+		var t10: Vector3 = gx * Vector3(max_x, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
+		var t11: Vector3 = gx * Vector3(max_x, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
+		var t01: Vector3 = gx * Vector3(0.0, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
+		m.surface_add_vertex(t00)
+		m.surface_add_vertex(t10)
+		m.surface_add_vertex(t10)
+		m.surface_add_vertex(t11)
+		m.surface_add_vertex(t11)
+		m.surface_add_vertex(t01)
+		m.surface_add_vertex(t01)
+		m.surface_add_vertex(t00)
 
 	m.surface_end()
 	return m
 
+func _make_unshaded_mat(c: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = c
+	return mat
+
+func _update_dual_grid_points() -> void:
+	if dual_points_mmi == null:
+		return
+
+	dual_points_mmi.visible = show_wire_grid and show_dual_grid_points
+	if not dual_points_mmi.visible:
+		return
+
+	var gx: Transform3D = _grid_xform_local()
+	var sphere := SphereMesh.new()
+	sphere.radius = dual_point_radius
+	sphere.height = dual_point_radius * 2.0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = sphere
+	mm.instance_count = grid_w * grid_h
+
+	var i: int = 0
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var p := gx * Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+			p.y += wire_grid_y
+			mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, p))
+			i += 1
+
+	dual_points_mmi.multimesh = mm
+	if _dual_points_material == null:
+		_dual_points_material = _make_unshaded_mat(dual_point_color)
+	else:
+		_dual_points_material.albedo_color = dual_point_color
+	dual_points_mmi.material_override = _dual_points_material
+
+func _update_dual_bit_boxes() -> void:
+	if layout_mode != LayoutMode.DUAL_FROM_CELLS:
+		if dual_bits_filled_mmi != null:
+			dual_bits_filled_mmi.visible = false
+		if dual_bits_empty_mmi != null:
+			dual_bits_empty_mmi.visible = false
+		return
+
+	if dual_bits_filled_mmi == null or dual_bits_empty_mmi == null:
+		return
+
+	var visible: bool = show_wire_grid and show_dual_bit_boxes
+	dual_bits_filled_mmi.visible = visible
+	dual_bits_empty_mmi.visible = visible
+	if not visible:
+		return
+
+	var half: float = cell_size * 0.5
+	var size: Vector3 = Vector3(half * dual_bit_box_inset, 0.02, half * dual_bit_box_inset)
+	var quad_mesh: BoxMesh = BoxMesh.new()
+	quad_mesh.size = size
+
+	var mm_filled: MultiMesh = MultiMesh.new()
+	mm_filled.transform_format = MultiMesh.TRANSFORM_3D
+	mm_filled.mesh = quad_mesh
+
+	var mm_empty: MultiMesh = MultiMesh.new()
+	mm_empty.transform_format = MultiMesh.TRANSFORM_3D
+	mm_empty.mesh = quad_mesh
+
+	var max_tiles: int = _render_w() * _render_h()
+	mm_filled.instance_count = max_tiles * 4
+	mm_empty.instance_count = max_tiles * 4
+
+	var y_level: float = wire_grid_y + 0.01
+	var fi: int = 0
+	var ei: int = 0
+	var offs: Array[Vector3] = [
+		Vector3(-half * 0.5, 0, -half * 0.5),
+		Vector3(half * 0.5, 0, -half * 0.5),
+		Vector3(half * 0.5, 0, half * 0.5),
+		Vector3(-half * 0.5, 0, half * 0.5),
+	]
+
+	for y0 in range(_render_h()):
+		for x0 in range(_render_w()):
+			var mask: int = _mask_at_dual_tile(x0, y0)
+			var center: Vector3 = _render_tile_to_world_center(x0, y0)
+			center.y = y_level
+
+			for bit in range(4):
+				var is_on: bool = ((mask >> bit) & 1) == 1
+				var t: Transform3D = Transform3D(Basis.IDENTITY, center + offs[bit])
+				if is_on:
+					mm_filled.set_instance_transform(fi, t)
+					fi += 1
+				else:
+					mm_empty.set_instance_transform(ei, t)
+					ei += 1
+
+	mm_filled.instance_count = fi
+	mm_empty.instance_count = ei
+
+	dual_bits_filled_mmi.multimesh = mm_filled
+	dual_bits_empty_mmi.multimesh = mm_empty
+
+	if _dual_bits_filled_material == null:
+		_dual_bits_filled_material = _make_unshaded_mat(dual_bit_filled_color)
+	else:
+		_dual_bits_filled_material.albedo_color = dual_bit_filled_color
+	dual_bits_filled_mmi.material_override = _dual_bits_filled_material
+
+	if _dual_bits_empty_material == null:
+		_dual_bits_empty_material = _make_unshaded_mat(dual_bit_empty_color)
+	else:
+		_dual_bits_empty_material.albedo_color = dual_bit_empty_color
+	dual_bits_empty_mmi.material_override = _dual_bits_empty_material
+
 func _update_wire_grid_debug() -> void:
-	if wire_grid_debug_mi == null:
+	var gx: Transform3D = _grid_xform_local()
+	var main_w: int = grid_w
+	var main_h: int = grid_h
+	var main_off_x: float = 0.0
+	var main_off_z: float = 0.0
+
+	var dual_w: int = grid_w
+	var dual_h: int = grid_h
+	var dual_off_x: float = cell_size * 0.5
+	var dual_off_z: float = cell_size * 0.5
+
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		main_w = _render_w()
+		main_h = _render_h()
+		main_off_x = cell_size * 0.5
+		main_off_z = cell_size * 0.5
+
+		dual_w = grid_w
+		dual_h = grid_h
+		dual_off_x = 0.0
+		dual_off_z = 0.0
+
+	if wire_grid_main_mi != null:
+		wire_grid_main_mi.visible = show_wire_grid and show_main_grid_overlay
+		if wire_grid_main_mi.visible:
+			wire_grid_main_mi.mesh = _build_wire_grid_mesh_offset(main_w, main_h, cell_size, gx, main_off_x, main_off_z)
+			if _wire_grid_main_material == null:
+				_wire_grid_main_material = _make_unshaded_mat(main_grid_color)
+			else:
+				_wire_grid_main_material.albedo_color = main_grid_color
+			wire_grid_main_mi.material_override = _wire_grid_main_material
+
+	if wire_grid_dual_mi != null:
+		wire_grid_dual_mi.visible = show_wire_grid and show_dual_grid_overlay
+		if wire_grid_dual_mi.visible:
+			wire_grid_dual_mi.mesh = _build_wire_grid_mesh_offset(dual_w, dual_h, cell_size, gx, dual_off_x, dual_off_z)
+			if _wire_grid_dual_material == null:
+				_wire_grid_dual_material = _make_unshaded_mat(dual_grid_color)
+			else:
+				_wire_grid_dual_material.albedo_color = dual_grid_color
+			wire_grid_dual_mi.material_override = _wire_grid_dual_material
+
+	_update_dual_grid_points()
+	_update_dual_bit_boxes()
+
+func _ensure_deformed_floor_node() -> void:
+	if _deformed_floor_mi != null:
 		return
 
-	wire_grid_debug_mi.visible = show_wire_grid
-	if not show_wire_grid:
+	var existing: Node = get_node_or_null("Arena/DeformedFloor")
+	if existing is MeshInstance3D:
+		_deformed_floor_mi = existing as MeshInstance3D
 		return
 
-	wire_grid_debug_mi.mesh = _build_wire_grid_mesh(grid_w, grid_h, cell_size)
-	if _wire_grid_material == null:
-		_wire_grid_material = StandardMaterial3D.new()
-		_wire_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_wire_grid_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	wire_grid_debug_mi.material_override = _wire_grid_material
+	var legacy_existing: Node = get_node_or_null("Arena/RelaxedFloor")
+	if legacy_existing is MeshInstance3D:
+		_deformed_floor_mi = legacy_existing as MeshInstance3D
+		_deformed_floor_mi.name = "DeformedFloor"
+		return
+
+	var arena_root: Node = get_node_or_null("Arena")
+	if arena_root == null:
+		return
+
+	_deformed_floor_mi = MeshInstance3D.new()
+	_deformed_floor_mi.name = "DeformedFloor"
+	_deformed_floor_mi.visible = false
+	arena_root.add_child(_deformed_floor_mi)
+
+func _set_base_floor_visible(visible: bool) -> void:
+	if floor_mmi != null:
+		floor_mmi.visible = visible
+	if floor_full_mmi != null:
+		floor_full_mmi.visible = visible
+	if floor_edge_mmi != null:
+		floor_edge_mmi.visible = visible
+	if floor_corner_mmi != null:
+		floor_corner_mmi.visible = visible
+	if floor_inverse_corner_mmi != null:
+		floor_inverse_corner_mmi.visible = visible
+	if floor_checker_mmi != null:
+		floor_checker_mmi.visible = visible
+
+func _deformed_hash01(x: int, y: int, axis: int) -> float:
+	var seed_mix: int = _deformed_noise_seed
+	var h: int = x * 73856093
+	h ^= y * 19349663
+	h ^= axis * 83492791
+	h ^= seed_mix * 2654435761
+	h &= 0x7fffffff
+	return float(h) / 2147483647.0
+
+func _build_jittered_corner_lattice() -> Array[Vector3]:
+	var max_offset: float = min(max(deformed_offset_fraction, 0.0), 0.2) * cell_size
+	var point_positions: Array[Vector3] = []
+	point_positions.resize(_points_w() * _points_h())
+
+	for py in range(_points_h()):
+		for px in range(_points_w()):
+			var p: Vector3 = _corner_to_world(px, py)
+			var is_border: bool = px == 0 or py == 0 or px == _points_w() - 1 or py == _points_h() - 1
+			var ox: float = 0.0
+			var oz: float = 0.0
+			if not is_border:
+				ox = (_deformed_hash01(px, py, 0) * 2.0 - 1.0) * max_offset
+				oz = (_deformed_hash01(px, py, 1) * 2.0 - 1.0) * max_offset
+			point_positions[_corner_idx(px, py)] = p + Vector3(ox, floor_thickness, oz)
+
+	return point_positions
+
+func _rotate_uv_steps(uv: Vector2, steps: int) -> Vector2:
+	match (steps & 3):
+		1:
+			return Vector2(uv.y, 1.0 - uv.x)
+		2:
+			return Vector2(1.0 - uv.x, 1.0 - uv.y)
+		3:
+			return Vector2(1.0 - uv.y, uv.x)
+		_:
+			return uv
+
+func _bilerp_quad(p00: Vector3, p10: Vector3, p11: Vector3, p01: Vector3, uv: Vector2) -> Vector3:
+	var a: Vector3 = p00.lerp(p10, uv.x)
+	var b: Vector3 = p01.lerp(p11, uv.x)
+	return a.lerp(b, uv.y)
+
+func _add_deformed_mesh_surface(st: SurfaceTool, mesh: Mesh, quad: Array[Vector3], rotation_steps: int, up: Vector3) -> int:
+	if mesh == null or quad.size() < 4:
+		return 0
+
+	var written: int = 0
+	var p00: Vector3 = quad[0]
+	var p10: Vector3 = quad[1]
+	var p11: Vector3 = quad[2]
+	var p01: Vector3 = quad[3]
+
+	for s in range(mesh.get_surface_count()):
+		var arrays: Array = mesh.surface_get_arrays(s)
+		if arrays.is_empty():
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		if verts.is_empty():
+			continue
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var aabb: AABB = mesh.get_aabb()
+		var sx: float = max(aabb.size.x, 0.0001)
+		var sy: float = max(aabb.size.y, 0.0001)
+		var sz: float = max(aabb.size.z, 0.0001)
+
+		if indices.is_empty():
+			indices.resize(verts.size())
+			for i in range(verts.size()):
+				indices[i] = i
+
+		for index in indices:
+			if index < 0 or index >= verts.size():
+				continue
+			var v: Vector3 = verts[index]
+			var uv_from_pos: Vector2
+			if use_canonical_single_meshes and canonical_mesh_pivot_is_tile_center:
+				var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
+				uv_from_pos = Vector2(v.x / sxz + 0.5, v.z / sxz + 0.5)
+			else:
+				uv_from_pos = Vector2((v.x - aabb.position.x) / sx, (v.z - aabb.position.z) / sz)
+			uv_from_pos = _rotate_uv_steps(uv_from_pos, rotation_steps)
+			var base_pos: Vector3 = _bilerp_quad(p00, p10, p11, p01, uv_from_pos)
+			var y_t: float = (v.y - aabb.position.y) / sy
+			var y_offset: float = (y_t - 1.0) * floor_thickness if aabb.size.y >= 0.001 else 0.0
+			var out_pos: Vector3 = base_pos + up * y_offset
+
+			var out_normal: Vector3 = Vector3.UP
+			if not normals.is_empty() and index < normals.size():
+				out_normal = normals[index]
+				out_normal = (Basis(up, rotation_steps * PI * 0.5) * out_normal).normalized()
+
+			var out_uv: Vector2 = uv_from_pos
+			if not uvs.is_empty() and index < uvs.size():
+				out_uv = uvs[index]
+
+			st.set_normal(out_normal)
+			st.set_uv(out_uv)
+			st.add_vertex(out_pos)
+			written += 1
+
+	return written
+
+func _build_deformed_floor_mesh() -> ArrayMesh:
+	var point_positions: Array[Vector3] = _build_jittered_corner_lattice()
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var vertex_count: int = 0
+	var grid_xform: Transform3D = _grid_xform_local()
+	var up_dir: Vector3 = grid_xform.basis.y.normalized()
+	if up_dir.length() < 0.001:
+		up_dir = Vector3.UP
+
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
+				continue
+
+			var mask: int = _mask_at_render_tile(x, y)
+			if mask == CANONICAL_EMPTY:
+				continue
+
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var variant_id: String = str(canonical.get("variant_id", ""))
+			if variant_id == "empty" or variant_id == "unknown":
+				continue
+
+			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
+			if mesh == null:
+				continue
+			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
+
+			var qx: int = x
+			var qy: int = y
+			if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+				qx += 1
+				qy += 1
+			var quad: Array[Vector3] = [
+				point_positions[_corner_idx(qx, qy)],
+				point_positions[_corner_idx(qx + 1, qy)],
+				point_positions[_corner_idx(qx + 1, qy + 1)],
+				point_positions[_corner_idx(qx, qy + 1)],
+			]
+			vertex_count += _add_deformed_mesh_surface(st, mesh, quad, rotation_steps, up_dir)
+
+	if vertex_count == 0:
+		return ArrayMesh.new()
+	return st.commit() as ArrayMesh
+
+func _update_deformed_floor_visual() -> void:
+	_ensure_deformed_floor_node()
+	if _deformed_floor_mi == null:
+		return
+
+	if not show_deformed_floor_mesh or not _has_render_tiles():
+		_deformed_floor_mi.visible = false
+		_deformed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+
+	if layout_mode == LayoutMode.LEGACY_CORNERS and _corners.is_empty():
+		_deformed_floor_mi.visible = false
+		_deformed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS and _cells.is_empty():
+		_deformed_floor_mi.visible = false
+		_deformed_floor_mi.mesh = null
+		_set_base_floor_visible(true)
+		return
+
+	_deformed_floor_mi.mesh = _build_deformed_floor_mesh()
+	if _deformed_floor_material == null:
+		_deformed_floor_material = StandardMaterial3D.new()
+		_deformed_floor_material.albedo_color = Color(0.85, 0.85, 0.85, 1.0)
+		_deformed_floor_material.roughness = 1.0
+	_deformed_floor_mi.material_override = _deformed_floor_material
+	_deformed_floor_mi.visible = true
+	_set_base_floor_visible(false)
 
 func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 	var corners: Array[Vector3] = [
@@ -292,6 +731,41 @@ func generate() -> void:
 		push_error("ArenaAutoGen: grid_w and grid_h must be > 0")
 		return
 
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS and (grid_w <= 1 or grid_h <= 1):
+		push_error("ArenaAutoGen: Need grid_w and grid_h >= 2 for dual grid layout")
+		return
+
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		_cells = PackedByteArray()
+		_cells.resize(grid_w * grid_h)
+		_fill_cells_random()
+		_apply_cell_border_empty()
+
+		for _i in range(smoothing_steps):
+			_smooth_cells_step()
+			_apply_cell_border_empty()
+
+		if ensure_connected:
+			_force_single_cell_region_from_center()
+
+		_corners = PackedByteArray()
+		_corners.resize(_points_w() * _points_h())
+		_tiles = PackedByteArray()
+		_tiles.resize(0)
+		_occupied = PackedByteArray()
+		_occupied.resize(_render_w() * _render_h())
+
+		_build_floor_multimeshes()
+		if make_walls:
+			_build_walls_from_cells()
+		elif wall_mmi != null:
+			wall_mmi.multimesh = null
+
+		_update_bounds_mesh_from_grid()
+		_update_wire_grid_debug()
+		_update_deformed_floor_visual()
+		return
+
 	_corners = PackedByteArray()
 	_corners.resize(_points_w() * _points_h())
 
@@ -299,7 +773,7 @@ func generate() -> void:
 	_tiles.resize(grid_w * grid_h)
 
 	_occupied = PackedByteArray()
-	_occupied.resize(grid_w * grid_h)
+	_occupied.resize(_render_w() * _render_h())
 
 	_fill_corners_random()
 	_apply_corner_border_empty()
@@ -317,11 +791,12 @@ func generate() -> void:
 
 	if make_walls:
 		_build_walls_multimesh()
-	else:
+	elif wall_mmi != null:
 		wall_mmi.multimesh = null
 
 	_update_bounds_mesh_from_grid()
 	_update_wire_grid_debug()
+	_update_deformed_floor_visual()
 
 func _fill_corners_random() -> void:
 	for y in range(_points_h()):
@@ -393,6 +868,49 @@ func _force_single_corner_region_from_center() -> void:
 			if _corners[ii] == 1 and visited[ii] == 0:
 				_corners[ii] = 0
 
+
+func _force_single_cell_region_from_center() -> void:
+	var start: Vector2i = Vector2i(int(grid_w / 2), int(grid_h / 2))
+	if _cell_get(start.x, start.y) == 0:
+		var found: bool = false
+		for r in range(1, max(grid_w, grid_h)):
+			for dy in range(-r, r + 1):
+				for dx in range(-r, r + 1):
+					var p: Vector2i = start + Vector2i(dx, dy)
+					if _cell_in_bounds(p.x, p.y) and _cell_get(p.x, p.y) == 1:
+						start = p
+						found = true
+						break
+				if found:
+					break
+			if found:
+				break
+		if not found:
+			return
+
+	var visited: PackedByteArray = PackedByteArray()
+	visited.resize(grid_w * grid_h)
+	var q: Array[Vector2i] = [start]
+	visited[_cell_idx(start.x, start.y)] = 1
+
+	var head: int = 0
+	while head < q.size():
+		var p: Vector2i = q[head]
+		head += 1
+		for d in DIRS4:
+			var n: Vector2i = p + d
+			if _cell_in_bounds(n.x, n.y) and _cell_get(n.x, n.y) == 1:
+				var ii: int = _cell_idx(n.x, n.y)
+				if visited[ii] == 0:
+					visited[ii] = 1
+					q.push_back(n)
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var ii: int = _cell_idx(x, y)
+			if _cells[ii] == 1 and visited[ii] == 0:
+				_cells[ii] = 0
+
 func _build_tiles_from_corners() -> void:
 	for y in range(grid_h):
 		for x in range(grid_w):
@@ -413,31 +931,147 @@ func _run_pattern_stamping() -> void:
 		_build_piece_multimeshes()
 		return
 
-	patterns.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a.get("priority", 0)) > int(b.get("priority", 0))
-	)
-
+	var patterns_by_priority: Dictionary = {}
+	var priority_levels: Array[int] = []
 	for pattern in patterns:
-		var size: Vector2i = pattern.get("size", Vector2i.ONE)
-		for y in range(grid_h - size.y + 1):
-			for x in range(grid_w - size.x + 1):
-				if _pattern_matches_at(pattern, x, y):
-					var pid: String = str(pattern.get("id", ""))
-					if not _piece_transforms.has(pid):
+		var priority: int = int(pattern.get("priority", 0))
+		if not patterns_by_priority.has(priority):
+			patterns_by_priority[priority] = []
+			priority_levels.append(priority)
+		var bucket: Array = patterns_by_priority[priority] as Array
+		bucket.append(pattern)
+
+	priority_levels.sort()
+	priority_levels.reverse()
+
+	var recent_by_family: Dictionary = {}
+
+	for priority in priority_levels:
+		var band_patterns: Array = patterns_by_priority.get(priority, []) as Array
+		var candidates: Array[Dictionary] = []
+
+		for pattern_raw in band_patterns:
+			var pattern: Dictionary = pattern_raw as Dictionary
+			var size: Vector2i = pattern.get("size", Vector2i.ONE)
+			for y in range(grid_h - size.y + 1):
+				for x in range(grid_w - size.x + 1):
+					if not _pattern_matches_at(pattern, x, y):
 						continue
-					if not _can_render_piece(pid):
+					if not _pattern_cooldown_allows(pattern, x, y, recent_by_family):
 						continue
-					_mark_pattern_occupied(pattern, x, y)
-					var t: Array = _piece_transforms[pid] as Array
-					var rot_steps: int = int(pattern.get("rot_steps", 0))
-					var yaw: float = rot_steps * PI * 0.5
-					var mesh: Mesh = _build_piece_mesh(pid)
-					var desired: Vector3 = _piece_desired_size(size)
-					var pos: Vector3 = _pattern_anchor_to_world(x, y, size)
-					pos.y += piece_height_epsilon
-					t.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+					candidates.append({
+						"pattern": pattern,
+						"x": x,
+						"y": y,
+						"weight": max(float(pattern.get("weight", 1.0)), 0.0),
+					})
+
+		while not candidates.is_empty():
+			var chosen_index: int = _pick_weighted_candidate_index(candidates)
+			if chosen_index < 0:
+				break
+
+			var chosen: Dictionary = candidates[chosen_index]
+			var pattern: Dictionary = chosen.get("pattern", {}) as Dictionary
+			var x: int = int(chosen.get("x", 0))
+			var y: int = int(chosen.get("y", 0))
+			var size: Vector2i = pattern.get("size", Vector2i.ONE)
+
+			candidates.remove_at(chosen_index)
+
+			if not _pattern_matches_at(pattern, x, y):
+				continue
+			if not _pattern_cooldown_allows(pattern, x, y, recent_by_family):
+				continue
+
+			var pid: String = str(pattern.get("id", ""))
+			if not _piece_transforms.has(pid):
+				continue
+			if not _can_render_piece(pid):
+				continue
+
+			_mark_pattern_occupied(pattern, x, y)
+			_record_pattern_cooldown(pattern, x, y, recent_by_family)
+
+			var t: Array = _piece_transforms[pid] as Array
+			var rot_steps: int = int(pattern.get("rot_steps", 0))
+			var yaw: float = rot_steps * PI * 0.5
+			var mesh: Mesh = _build_piece_mesh(pid)
+			var desired: Vector3 = _piece_desired_size(size)
+			var pos: Vector3 = _pattern_anchor_to_world(x, y, size)
+			pos.y += piece_height_epsilon
+			t.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+
+			var remaining: Array[Dictionary] = []
+			for candidate in candidates:
+				var cd: Dictionary = candidate as Dictionary
+				var cp: Dictionary = cd.get("pattern", {}) as Dictionary
+				var cx: int = int(cd.get("x", 0))
+				var cy: int = int(cd.get("y", 0))
+				if _pattern_matches_at(cp, cx, cy) and _pattern_cooldown_allows(cp, cx, cy, recent_by_family):
+					remaining.append(cd)
+			candidates = remaining
 
 	_build_piece_multimeshes()
+
+func _pick_weighted_candidate_index(candidates: Array[Dictionary]) -> int:
+	if candidates.is_empty():
+		return -1
+
+	var total_weight: float = 0.0
+	for c in candidates:
+		total_weight += max(float(c.get("weight", 0.0)), 0.0)
+
+	if total_weight <= 0.0001:
+		return _rng.randi_range(0, candidates.size() - 1)
+
+	var roll: float = _rng.randf() * total_weight
+	for i in range(candidates.size()):
+		roll -= max(float(candidates[i].get("weight", 0.0)), 0.0)
+		if roll <= 0.0:
+			return i
+
+	return candidates.size() - 1
+
+func _pattern_anchor_tile(x: int, y: int, size: Vector2i) -> Vector2:
+	var ax: float = float(x) + float(size.x) * 0.5
+	var ay: float = float(y) + float(size.y) * 0.5
+	return Vector2(ax, ay)
+
+func _pattern_cooldown_allows(pattern: Dictionary, x: int, y: int, recent_by_family: Dictionary) -> bool:
+	var radius: float = float(pattern.get("cooldown_radius", 0.0))
+	if radius <= 0.0:
+		return true
+
+	var family: String = str(pattern.get("cooldown_family", pattern.get("id", "")))
+	if family == "" or not recent_by_family.has(family):
+		return true
+
+	var size: Vector2i = pattern.get("size", Vector2i.ONE)
+	var anchor: Vector2 = _pattern_anchor_tile(x, y, size)
+	var anchors: Array = recent_by_family[family] as Array
+	for a in anchors:
+		var prev: Vector2 = a as Vector2
+		if anchor.distance_to(prev) < radius:
+			return false
+	return true
+
+func _record_pattern_cooldown(pattern: Dictionary, x: int, y: int, recent_by_family: Dictionary) -> void:
+	var radius: float = float(pattern.get("cooldown_radius", 0.0))
+	if radius <= 0.0:
+		return
+
+	var family: String = str(pattern.get("cooldown_family", pattern.get("id", "")))
+	if family == "":
+		return
+
+	if not recent_by_family.has(family):
+		recent_by_family[family] = []
+
+	var size: Vector2i = pattern.get("size", Vector2i.ONE)
+	var anchor: Vector2 = _pattern_anchor_tile(x, y, size)
+	var anchors: Array = recent_by_family[family] as Array
+	anchors.append(anchor)
 
 func _pattern_matches_at(pattern: Dictionary, x: int, y: int) -> bool:
 	var size: Vector2i = pattern["size"]
@@ -492,55 +1126,65 @@ func _build_floor_multimesh_legacy() -> void:
 		return
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	var mesh: Mesh = _build_floor_variant_mesh("full")
+	var mesh: Mesh = _build_floor_variant_mesh("full", 0, 0)
 	mm.mesh = mesh
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 	var transforms: Array[Transform3D] = []
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if _tile_get(x, y) == 0 or (pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0):
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if not _render_tile_filled(x, y):
 				continue
-			var pos: Vector3 = _tile_to_world_center(x, y)
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
+				continue
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
-			transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, 0.0, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
 	_assign_multimesh_transforms(mm, transforms)
 	floor_mmi.multimesh = mm
 
 func _build_floor_multimeshes_by_variant() -> void:
-	var buckets: Dictionary = {"full": [], "edge": [], "corner": [], "inverse_corner": [], "checker": []}
-	var mesh_by_variant: Dictionary = {
-		"full": _build_floor_variant_mesh("full"),
-		"edge": _build_floor_variant_mesh("edge"),
-		"corner": _build_floor_variant_mesh("corner"),
-		"inverse_corner": _build_floor_variant_mesh("inverse_corner"),
-		"checker": _build_floor_variant_mesh("checker"),
+	var mesh_transform_buckets: Dictionary = {
+		"full": {},
+		"edge": {},
+		"corner": {},
+		"inverse_corner": {},
+		"checker": {},
 	}
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0:
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
 				continue
-			var mask: int = _mask_at_tile(x, y)
+			var mask: int = _mask_at_render_tile(x, y)
 			if mask == CANONICAL_EMPTY:
 				continue
 			var canonical: Dictionary = _canonicalize_mask(mask)
 			var variant_id: String = str(canonical.get("variant_id", ""))
-			if not buckets.has(variant_id):
+			if not mesh_transform_buckets.has(variant_id):
 				continue
 			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
-			var pos: Vector3 = _tile_to_world_center(x, y)
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			var yaw: float = rotation_steps * PI * 0.5
-			var mesh: Mesh = mesh_by_variant[variant_id] as Mesh
-			var transforms: Array = buckets[variant_id] as Array
-			transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
+			var variant_bucket: Dictionary = mesh_transform_buckets[variant_id] as Dictionary
+			if not variant_bucket.has(mesh):
+				variant_bucket[mesh] = []
+			var transforms: Array = variant_bucket[mesh] as Array
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, yaw, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
 
-	_assign_variant_multimesh(floor_full_mmi, buckets["full"] as Array, mesh_by_variant["full"] as Mesh)
-	_assign_variant_multimesh(floor_edge_mmi, buckets["edge"] as Array, mesh_by_variant["edge"] as Mesh)
-	_assign_variant_multimesh(floor_corner_mmi, buckets["corner"] as Array, mesh_by_variant["corner"] as Mesh)
-	_assign_variant_multimesh(floor_inverse_corner_mmi, buckets["inverse_corner"] as Array, mesh_by_variant["inverse_corner"] as Mesh)
-	_assign_variant_multimesh(floor_checker_mmi, buckets["checker"] as Array, mesh_by_variant["checker"] as Mesh)
+	_assign_variant_mesh_group(floor_full_mmi, mesh_transform_buckets["full"] as Dictionary)
+	_assign_variant_mesh_group(floor_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
+	_assign_variant_mesh_group(floor_corner_mmi, mesh_transform_buckets["corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_inverse_corner_mmi, mesh_transform_buckets["inverse_corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_checker_mmi, mesh_transform_buckets["checker"] as Dictionary)
 
 func _build_piece_multimeshes() -> void:
 	_assign_piece_multimesh(piece_3x3_full_mmi, "piece_3x3_full")
@@ -636,23 +1280,55 @@ func _assign_variant_multimesh(target: MultiMeshInstance3D, transforms_raw: Arra
 	_assign_multimesh_transforms(mm, transforms)
 	target.multimesh = mm
 
-func _build_floor_variant_mesh(variant_id: String) -> Mesh:
+func _variant_mesh_array(variant_id: String) -> Array[Mesh]:
 	match variant_id:
 		"full":
-			if mesh_full != null:
-				return mesh_full
+			return mesh_full_variants
 		"edge":
-			if mesh_edge != null:
-				return mesh_edge
+			return mesh_edge_variants
 		"corner":
-			if mesh_corner != null:
-				return mesh_corner
+			return mesh_corner_variants
 		"inverse_corner":
-			if mesh_inverse_corner != null:
-				return mesh_inverse_corner
+			return mesh_inverse_corner_variants
 		"checker":
-			if mesh_checker != null:
+			return mesh_checker_variants
+	return []
+
+func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> int:
+	if count <= 1:
+		return 0
+	var h: int = x * 73856093
+	h ^= y * 19349663
+	h ^= _mesh_variant_seed * 83492791
+	h ^= variant_id.hash()
+	h &= 0x7fffffff
+	return h % count
+
+func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
+	if use_canonical_single_meshes:
+		match variant_id:
+			"full":
+				return mesh_full
+			"edge":
+				return mesh_edge
+			"corner":
+				return mesh_corner
+			"inverse_corner":
+				return mesh_inverse_corner
+			"checker":
 				return mesh_checker
+			_:
+				return null
+
+	var variants: Array[Mesh] = _variant_mesh_array(variant_id)
+	if not variants.is_empty():
+		var idx: int = _variant_index_for_tile(variant_id, x, y, variants.size())
+		var selected: Mesh = variants[idx]
+		if selected != null:
+			return selected
+		for fallback in variants:
+			if fallback != null:
+				return fallback
 
 	var mesh: BoxMesh = BoxMesh.new()
 	match variant_id:
@@ -662,6 +1338,30 @@ func _build_floor_variant_mesh(variant_id: String) -> Mesh:
 		"checker": mesh.size = Vector3(cell_size * 0.75, floor_thickness, cell_size * 0.75)
 		_: mesh.size = Vector3(cell_size, floor_thickness, cell_size)
 	return mesh
+
+func _assign_variant_mesh_group(target: MultiMeshInstance3D, mesh_to_transforms: Dictionary) -> void:
+	if target == null:
+		return
+	if mesh_to_transforms.is_empty():
+		target.multimesh = null
+		return
+	
+	for child in target.get_children():
+		if child is MultiMeshInstance3D and str((child as Node).name).begins_with("Variant_"):
+			(child as Node).queue_free()
+
+	var meshes: Array = mesh_to_transforms.keys()
+	for i in range(meshes.size()):
+		var mesh: Mesh = meshes[i] as Mesh
+		var transforms: Array = mesh_to_transforms[mesh] as Array
+		if i == 0:
+			_assign_variant_multimesh(target, transforms, mesh)
+			continue
+		var extra: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		extra.name = "Variant_%d" % i
+		extra.multimesh = null
+		target.add_child(extra)
+		_assign_variant_multimesh(extra, transforms, mesh)
 
 func _build_walls_multimesh() -> void:
 	var mm: MultiMesh = MultiMesh.new()
@@ -685,6 +1385,31 @@ func _build_walls_multimesh() -> void:
 	_assign_multimesh_transforms(mm, transforms)
 	wall_mmi.multimesh = mm
 
+func _build_walls_from_cells() -> void:
+	if wall_mmi == null:
+		return
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var wall_mesh: BoxMesh = BoxMesh.new()
+	wall_mesh.size = Vector3(cell_size, wall_height, wall_thickness)
+	mm.mesh = wall_mesh
+	var transforms: Array[Transform3D] = []
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if _cell_get(x, y) == 0:
+				continue
+			if _cell_get(x, y - 1) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, -0.5), 0.0))
+			if _cell_get(x, y + 1) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, 0.5), 0.0))
+			if _cell_get(x - 1, y) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(-0.5, 0, 0), PI * 0.5))
+			if _cell_get(x + 1, y) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0.5, 0, 0), PI * 0.5))
+	_assign_multimesh_transforms(mm, transforms)
+	wall_mmi.multimesh = mm
+
+
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
 	var center: Vector3 = _tile_to_world_center(x, y)
 	var offset: Vector3 = Vector3(local_offset.x * cell_size, 0.0, local_offset.z * cell_size)
@@ -696,6 +1421,45 @@ func _assign_multimesh_transforms(mm: MultiMesh, transforms: Array[Transform3D])
 	mm.instance_count = transforms.size()
 	for i in range(transforms.size()):
 		mm.set_instance_transform(i, transforms[i])
+
+func _dual_w() -> int:
+	return max(grid_w - 1, 0)
+
+func _dual_h() -> int:
+	return max(grid_h - 1, 0)
+
+func _render_w() -> int:
+	return _dual_w() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_w
+
+func _render_h() -> int:
+	return _dual_h() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_h
+
+func _render_tile_idx(x: int, y: int) -> int:
+	return y * _render_w() + x
+
+func _render_tile_to_world_center(x: int, y: int) -> Vector3:
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		return _corner_to_world(x + 1, y + 1)
+	return _tile_to_world_center(x, y)
+
+func _mask_at_dual_tile(x: int, y: int) -> int:
+	var tl: int = _cell_get(x, y)
+	var tr: int = _cell_get(x + 1, y)
+	var br: int = _cell_get(x + 1, y + 1)
+	var bl: int = _cell_get(x, y + 1)
+	return _mask_from_corners(tl, tr, br, bl)
+
+func _mask_at_render_tile(x: int, y: int) -> int:
+	return _mask_at_dual_tile(x, y) if layout_mode == LayoutMode.DUAL_FROM_CELLS else _mask_at_tile(x, y)
+
+func _render_tile_filled(x: int, y: int) -> bool:
+	var mask: int = _mask_at_render_tile(x, y)
+	if mask == CANONICAL_EMPTY:
+		return false
+	return _tile_filled_from_mask(mask)
+
+func _has_render_tiles() -> bool:
+	return _render_w() > 0 and _render_h() > 0
 
 func _mask_at_tile(x: int, y: int) -> int:
 	return _mask_from_corners(_corner_get(x, y), _corner_get(x + 1, y), _corner_get(x + 1, y + 1), _corner_get(x, y + 1))
@@ -765,6 +1529,32 @@ func _fit_mesh_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_po
 	var corrected_pos: Vector3 = world_pos + basis * (-center)
 	return Transform3D(basis, corrected_pos)
 
+func _fit_canonical_tile_transform(mesh: Mesh, desired_size: Vector3, yaw: float, world_pos: Vector3) -> Transform3D:
+	var rot_steps: int = int(round(yaw / (PI * 0.5))) & 3
+	var snapped_yaw: float = rot_steps * PI * 0.5
+
+	if mesh == null:
+		return Transform3D(Basis(Vector3.UP, snapped_yaw), world_pos)
+
+	var desired: Vector3 = desired_size
+	if (rot_steps & 1) == 1:
+		desired = Vector3(desired_size.z, desired_size.y, desired_size.x)
+
+	var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
+	var aabb: AABB = mesh.get_aabb()
+	var sy: float = max(aabb.size.y, 0.0001)
+	var scale: Vector3 = Vector3(desired.x / sxz, desired.y / sy, desired.z / sxz)
+	if aabb.size.y < 0.001:
+		scale.y = 1.0
+
+	var basis: Basis = Basis(Vector3.UP, snapped_yaw).scaled(scale)
+	if canonical_mesh_pivot_is_tile_center:
+		return Transform3D(basis, world_pos)
+
+	var center: Vector3 = aabb.position + aabb.size * 0.5
+	var corrected_pos: Vector3 = world_pos + basis * (-center)
+	return Transform3D(basis, corrected_pos)
+
 func _grid_xform_local() -> Transform3D:
 	match origin_mode:
 		OriginMode.MIN_CORNER:
@@ -790,6 +1580,56 @@ func _tile_to_world_center(x: int, y: int) -> Vector3:
 func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
 	var grid_xform: Transform3D = _grid_xform_local()
 	return grid_xform * Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
+
+func _cell_idx(x: int, y: int) -> int:
+	return y * grid_w + x
+
+func _cell_in_bounds(x: int, y: int) -> bool:
+	return x >= 0 and y >= 0 and x < grid_w and y < grid_h
+
+func _cell_get(x: int, y: int) -> int:
+	if not _cell_in_bounds(x, y):
+		return 0
+	if _cells.is_empty():
+		return 0
+	return int(_cells[_cell_idx(x, y)])
+
+func _fill_cells_random() -> void:
+	for y in range(grid_h):
+		for x in range(grid_w):
+			_cells[_cell_idx(x, y)] = 1 if _rng.randf() < fill_percent else 0
+
+func _apply_cell_border_empty() -> void:
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if x < border or y < border or x >= grid_w - border or y >= grid_h - border:
+				_cells[_cell_idx(x, y)] = 0
+
+func _count_cell_neighbors8(x: int, y: int) -> int:
+	var c: int = 0
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			c += _cell_get(x + dx, y + dy)
+	return c
+
+func _smooth_cells_step() -> void:
+	var next: PackedByteArray = PackedByteArray()
+	next.resize(grid_w * grid_h)
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var n: int = _count_cell_neighbors8(x, y)
+			var here: int = _cell_get(x, y)
+			if n > 4:
+				next[_cell_idx(x, y)] = 1
+			elif n < 4:
+				next[_cell_idx(x, y)] = 0
+			else:
+				next[_cell_idx(x, y)] = here
+
+	_cells = next
 
 func _points_w() -> int:
 	return grid_w + 1

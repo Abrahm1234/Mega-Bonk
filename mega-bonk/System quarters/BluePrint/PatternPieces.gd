@@ -12,6 +12,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full", "full"],
 			],
 			"priority": 140,
+			"weight": 0.35,
+			"cooldown_radius": 6.0,
+			"cooldown_family": "full_large",
 			"occupy": [["1","1","1"],["1","1","1"],["1","1","1"]],
 		},
 		{
@@ -23,6 +26,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full"],
 			],
 			"priority": 130,
+			"weight": 0.45,
+			"cooldown_radius": 5.0,
+			"cooldown_family": "full_large",
 			"occupy": [["1","1"],["1","1"],["1","1"]],
 		},
 		{
@@ -33,6 +39,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["full", "full"],
 			],
 			"priority": 120,
+			"weight": 0.9,
+			"cooldown_radius": 2.5,
+			"cooldown_family": "full_large",
 			"occupy": [["1","1"],["1","1"]],
 		},
 		{
@@ -42,6 +51,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge", "edge", "edge"],
 			],
 			"priority": 110,
+			"weight": 0.7,
+			"cooldown_radius": 4.0,
+			"cooldown_family": "edge_strips",
 			"occupy": [["1","1","1","1","1"]],
 		},
 		{
@@ -51,6 +63,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge", "edge"],
 			],
 			"priority": 105,
+			"weight": 0.85,
+			"cooldown_radius": 3.0,
+			"cooldown_family": "edge_strips",
 			"occupy": [["1","1","1","1"]],
 		},
 		{
@@ -60,6 +75,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "edge", "edge"],
 			],
 			"priority": 100,
+			"weight": 1.0,
+			"cooldown_radius": 0.0,
+			"cooldown_family": "edge_strips",
 			"occupy": [["1","1","1"]],
 		},
 		{
@@ -70,6 +88,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full", "full"],
 			],
 			"priority": 95,
+			"weight": 0.6,
+			"cooldown_radius": 3.5,
+			"cooldown_family": "bay",
 			"occupy": [["1","1","0"],["1","1","1"]],
 		},
 		{
@@ -80,6 +101,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full"],
 			],
 			"priority": 90,
+			"weight": 0.85,
+			"cooldown_radius": 2.0,
+			"cooldown_family": "bay",
 			"occupy": [["1","1"],["1","0"]],
 		},
 		{
@@ -90,6 +114,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 				["edge", "full"],
 			],
 			"priority": 85,
+			"weight": 1.0,
+			"cooldown_radius": 0.0,
+			"cooldown_family": "corner_cluster",
 			"occupy": [["1","1"],["1","1"]],
 		},
 	]
@@ -112,6 +139,9 @@ static func get_default_patterns() -> Array[Dictionary]:
 					"required": work_required,
 					"occupy": work_occupy,
 					"priority": pattern["priority"],
+					"weight": pattern.get("weight", 1.0),
+					"cooldown_radius": pattern.get("cooldown_radius", 0.0),
+					"cooldown_family": pattern.get("cooldown_family", pattern["id"]),
 					"rot_steps": rot_steps,
 					"mirrored": mirrored,
 				})
