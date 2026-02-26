@@ -745,6 +745,9 @@ func generate() -> void:
 			_smooth_cells_step()
 			_apply_cell_border_empty()
 
+		if ensure_connected:
+			_force_single_cell_region_from_center()
+
 		_corners = PackedByteArray()
 		_corners.resize(_points_w() * _points_h())
 		_tiles = PackedByteArray()
@@ -864,6 +867,49 @@ func _force_single_corner_region_from_center() -> void:
 			var ii: int = _corner_idx(x, y)
 			if _corners[ii] == 1 and visited[ii] == 0:
 				_corners[ii] = 0
+
+
+func _force_single_cell_region_from_center() -> void:
+	var start: Vector2i = Vector2i(int(grid_w / 2), int(grid_h / 2))
+	if _cell_get(start.x, start.y) == 0:
+		var found: bool = false
+		for r in range(1, max(grid_w, grid_h)):
+			for dy in range(-r, r + 1):
+				for dx in range(-r, r + 1):
+					var p: Vector2i = start + Vector2i(dx, dy)
+					if _cell_in_bounds(p.x, p.y) and _cell_get(p.x, p.y) == 1:
+						start = p
+						found = true
+						break
+				if found:
+					break
+			if found:
+				break
+		if not found:
+			return
+
+	var visited: PackedByteArray = PackedByteArray()
+	visited.resize(grid_w * grid_h)
+	var q: Array[Vector2i] = [start]
+	visited[_cell_idx(start.x, start.y)] = 1
+
+	var head: int = 0
+	while head < q.size():
+		var p: Vector2i = q[head]
+		head += 1
+		for d in DIRS4:
+			var n: Vector2i = p + d
+			if _cell_in_bounds(n.x, n.y) and _cell_get(n.x, n.y) == 1:
+				var ii: int = _cell_idx(n.x, n.y)
+				if visited[ii] == 0:
+					visited[ii] = 1
+					q.push_back(n)
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var ii: int = _cell_idx(x, y)
+			if _cells[ii] == 1 and visited[ii] == 0:
+				_cells[ii] = 0
 
 func _build_tiles_from_corners() -> void:
 	for y in range(grid_h):
