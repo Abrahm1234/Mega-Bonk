@@ -8,6 +8,11 @@ const DIRS4: Array[Vector2i] = [
 	Vector2i(0, -1),
 ]
 
+const BIT_TL: int = 0b0001
+const BIT_TR: int = 0b0010
+const BIT_BR: int = 0b0100
+const BIT_BL: int = 0b1000
+
 const CANONICAL_EMPTY: int = 0b0000
 const CANONICAL_FULL: int = 0b1111
 const CANONICAL_CORNER: int = 0b0001
@@ -362,6 +367,20 @@ func _update_dual_grid_points() -> void:
 		_dual_points_material.albedo_color = dual_point_color
 	dual_points_mmi.material_override = _dual_points_material
 
+func _dual_slot_offset_for_bit(bit: int) -> Vector3:
+	var quarter: float = cell_size * 0.25
+	match bit:
+		BIT_TL:
+			return Vector3(-quarter, 0.0, quarter)
+		BIT_TR:
+			return Vector3(quarter, 0.0, quarter)
+		BIT_BR:
+			return Vector3(quarter, 0.0, -quarter)
+		BIT_BL:
+			return Vector3(-quarter, 0.0, -quarter)
+		_:
+			return Vector3.ZERO
+
 func _update_dual_bit_boxes() -> void:
 	if layout_mode != LayoutMode.DUAL_FROM_CELLS:
 		if dual_bits_filled_mmi != null:
@@ -400,10 +419,10 @@ func _update_dual_bit_boxes() -> void:
 	var fi: int = 0
 	var ei: int = 0
 	var offs: Array[Vector3] = [
-		Vector3(-half * 0.5, 0, -half * 0.5),
-		Vector3(half * 0.5, 0, -half * 0.5),
-		Vector3(half * 0.5, 0, half * 0.5),
-		Vector3(-half * 0.5, 0, half * 0.5),
+		_dual_slot_offset_for_bit(BIT_TL),
+		_dual_slot_offset_for_bit(BIT_TR),
+		_dual_slot_offset_for_bit(BIT_BR),
+		_dual_slot_offset_for_bit(BIT_BL),
 	]
 
 	for y0 in range(_render_h()):
@@ -1137,13 +1156,12 @@ func _build_floor_dual_slot_multimeshes() -> void:
 		"inverse_corner": {},
 		"checker": {},
 	}
-	var quarter: float = cell_size * 0.25
 	var slot_size: Vector3 = Vector3(cell_size * 0.5, floor_thickness, cell_size * 0.5)
 	var slots: Array[Dictionary] = [
-		{"offset": Vector3(-quarter, 0.0, -quarter), "dx": -1, "dy": -1, "bit": 2},
-		{"offset": Vector3(quarter, 0.0, -quarter), "dx": 0, "dy": -1, "bit": 3},
-		{"offset": Vector3(quarter, 0.0, quarter), "dx": 0, "dy": 0, "bit": 0},
-		{"offset": Vector3(-quarter, 0.0, quarter), "dx": -1, "dy": 0, "bit": 1},
+		{"offset": _dual_slot_offset_for_bit(BIT_TL), "dx": -1, "dy": -1, "bit": BIT_BR},
+		{"offset": _dual_slot_offset_for_bit(BIT_TR), "dx": 0, "dy": -1, "bit": BIT_BL},
+		{"offset": _dual_slot_offset_for_bit(BIT_BR), "dx": 0, "dy": 0, "bit": BIT_TL},
+		{"offset": _dual_slot_offset_for_bit(BIT_BL), "dx": -1, "dy": 0, "bit": BIT_TR},
 	]
 
 	for y in range(grid_h):
@@ -1158,7 +1176,7 @@ func _build_floor_dual_slot_multimeshes() -> void:
 				var slot: Dictionary = slots[slot_idx]
 				var mask: int = _mask_at_dual_tile(x + int(slot["dx"]), y + int(slot["dy"]))
 				var bit_index: int = int(slot["bit"])
-				if ((mask >> bit_index) & 1) == 0:
+				if (mask & bit_index) == 0:
 					continue
 
 				var canonical: Dictionary = _canonicalize_mask(mask)
@@ -1493,14 +1511,14 @@ func _build_walls_from_dual_fine_grid() -> void:
 			var row0: int = (y * 2) * fine_w
 			var row1: int = (y * 2 + 1) * fine_w
 			var col: int = x * 2
-			if (mask & 0b0001) != 0:
-				fine[row0 + col] = 1
-			if (mask & 0b0010) != 0:
-				fine[row0 + col + 1] = 1
-			if (mask & 0b0100) != 0:
-				fine[row1 + col + 1] = 1
-			if (mask & 0b1000) != 0:
+			if (mask & BIT_TL) != 0:
 				fine[row1 + col] = 1
+			if (mask & BIT_TR) != 0:
+				fine[row1 + col + 1] = 1
+			if (mask & BIT_BR) != 0:
+				fine[row0 + col + 1] = 1
+			if (mask & BIT_BL) != 0:
+				fine[row0 + col] = 1
 
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -1538,11 +1556,16 @@ func _dual_fine_cell_center_to_world(fx: int, fy: int) -> Vector3:
 	var tile_x: int = fx >> 1
 	var tile_y: int = fy >> 1
 	var center: Vector3 = _render_tile_to_world_center(tile_x, tile_y)
-	var quarter: float = cell_size * 0.25
 	var sx: int = fx & 1
 	var sy: int = fy & 1
-	center += Vector3(-quarter if sx == 0 else quarter, 0.0, -quarter if sy == 0 else quarter)
-	return center
+	var bit: int = BIT_BL
+	if sx == 0 and sy == 1:
+		bit = BIT_TL
+	elif sx == 1 and sy == 1:
+		bit = BIT_TR
+	elif sx == 1 and sy == 0:
+		bit = BIT_BR
+	return center + _dual_slot_offset_for_bit(bit)
 
 
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
@@ -1569,10 +1592,14 @@ func _dual_h() -> int:
 	return max(grid_h - 1, 0)
 
 func _render_w() -> int:
-	return grid_w if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_w
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		return grid_w
+	return grid_w
 
 func _render_h() -> int:
-	return grid_h if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_h
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		return grid_h
+	return grid_h
 
 func _render_tile_idx(x: int, y: int) -> int:
 	return y * _render_w() + x
