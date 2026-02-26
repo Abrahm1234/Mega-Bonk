@@ -42,6 +42,7 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var use_grid_depth_for_h: bool = true
 @export var show_bounds_debug: bool = false
 @export var show_wire_grid: bool = true
+@export var show_dual_grid_overlay: bool = false
 @export var wire_grid_y: float = 0.05
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
@@ -221,6 +222,28 @@ func _update_bounds_mesh_from_grid() -> void:
 	if bounds_mi.get_parent() is Node3D and (bounds_mi.get_parent() as Node3D) == get_node_or_null("GridAnchor"):
 		bounds_mi.position = Vector3(sx * 0.5, bounds_mi.position.y, sz * 0.5)
 
+func _append_wire_grid_plane_lines(m: ImmediateMesh, w: int, h: int, step: float, gx: Transform3D, y: float, offset_x: float, offset_z: float) -> void:
+	var max_x: float = float(w) * step
+	var max_z: float = float(h) * step
+
+	for x in range(w + 1):
+		var px: float = float(x) * step + offset_x
+		var a: Vector3 = gx * Vector3(px, 0.0, offset_z)
+		var b: Vector3 = gx * Vector3(px, 0.0, max_z + offset_z)
+		a.y += y
+		b.y += y
+		m.surface_add_vertex(a)
+		m.surface_add_vertex(b)
+
+	for z in range(h + 1):
+		var pz: float = float(z) * step + offset_z
+		var a2: Vector3 = gx * Vector3(offset_x, 0.0, pz)
+		var b2: Vector3 = gx * Vector3(max_x + offset_x, 0.0, pz)
+		a2.y += y
+		b2.y += y
+		m.surface_add_vertex(a2)
+		m.surface_add_vertex(b2)
+
 func _build_wire_grid_mesh(w: int, h: int, step: float, gx: Transform3D) -> ImmediateMesh:
 	var m: ImmediateMesh = ImmediateMesh.new()
 	m.surface_begin(Mesh.PRIMITIVE_LINES)
@@ -229,23 +252,11 @@ func _build_wire_grid_mesh(w: int, h: int, step: float, gx: Transform3D) -> Imme
 	var max_z: float = float(h) * step
 	var y: float = wire_grid_y
 
-	for x in range(w + 1):
-		var px: float = float(x) * step
-		var a: Vector3 = gx * Vector3(px, 0.0, 0.0)
-		var b: Vector3 = gx * Vector3(px, 0.0, max_z)
-		a.y += y
-		b.y += y
-		m.surface_add_vertex(a)
-		m.surface_add_vertex(b)
+	_append_wire_grid_plane_lines(m, w, h, step, gx, y, 0.0, 0.0)
 
-	for z in range(h + 1):
-		var pz: float = float(z) * step
-		var a2: Vector3 = gx * Vector3(0.0, 0.0, pz)
-		var b2: Vector3 = gx * Vector3(max_x, 0.0, pz)
-		a2.y += y
-		b2.y += y
-		m.surface_add_vertex(a2)
-		m.surface_add_vertex(b2)
+	if show_dual_grid_overlay:
+		var half_step: float = step * 0.5
+		_append_wire_grid_plane_lines(m, w, h, step, gx, y, half_step, half_step)
 
 	if wire_grid_draw_volume:
 		var height: float = float(max(wire_grid_height_cells, 1)) * step

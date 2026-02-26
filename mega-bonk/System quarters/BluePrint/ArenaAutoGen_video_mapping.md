@@ -155,9 +155,9 @@ Use this ordered checklist before implementing deformation or dual-grid debug fe
 Goal: add toggleable visualization for both the main grid and half-cell offset dual grid to validate mask interpretation visually.
 
 ### Suggested hooks
-- `_build_main_grid_overlay_mesh() -> ImmediateMesh`
-- `_build_dual_grid_overlay_mesh() -> ImmediateMesh`
-- `_update_grid_overlays() -> void`
+- `show_dual_grid_overlay` export toggle in `ArenaAutoGen.gd`.
+- `_build_wire_grid_mesh(...)` emits base grid lines and a second half-cell offset line set.
+- Offset for dual overlay: `(cell_size * 0.5, 0, cell_size * 0.5)` in grid-local space.
 
 ### Definition of Done
 - Main grid and dual/offset grid overlays can be toggled independently at runtime.
@@ -165,6 +165,10 @@ Goal: add toggleable visualization for both the main grid and half-cell offset d
 
 ### Non-goals
 - Do not use debug overlays as a source of generation truth.
+
+### Iteration confirmation use
+- Toggle `show_dual_grid_overlay` while `show_wire_grid` is enabled to verify the offset overlay tracks the same transform/mask space as generated tiles.
+- If overlays drift from tile masks, the issue is in origin/grid transform setup rather than tile classification.
 
 ---
 
