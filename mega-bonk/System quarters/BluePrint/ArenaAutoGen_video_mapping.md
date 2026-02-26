@@ -1,6 +1,15 @@
 # ArenaAutoGen vs video method: code entry-point map
 
-This maps the “video method” steps to the current ArenaAutoGen implementation and identifies where a WFC-lite path should be inserted.
+This maps the subtitle-described video method to the current ArenaAutoGen implementation, clarifies where it already matches, and lists exact insertion points for remaining work.
+
+## 0) Key clarification: dual-grid vs bind-to-wire-grid
+
+- Video “dual grid” = internal algorithmic representation (main grid + offset/corner interpretation for reduced tile cases).
+- `bind_to_wire_grid` in this project = external integration/sync feature (`/root/Grid`, origin, bounds), not the dual-grid algorithm.
+
+So generator quality work should not depend on `bind_to_wire_grid`; keep it off while iterating unless embedding into Core chambers.
+
+---
 
 ## 1) Current CA pipeline (what exists now)
 
@@ -12,7 +21,7 @@ This maps the “video method” steps to the current ArenaAutoGen implementatio
   - `_force_single_corner_region_from_center()` (optional connectivity pass)
   - `_build_tiles_from_corners()`
 
-### Tile typing from neighborhood / mask
+### Tile typing from neighborhood / mask (dual-grid-style reduction)
 - `_mask_at_tile(x, y)`
 - `_canonicalize_mask(mask)`
 - `_variant_at_tile(x, y)`
@@ -22,7 +31,7 @@ This maps the “video method” steps to the current ArenaAutoGen implementatio
   - priority-band grouping
   - weighted candidate picking (`_pick_weighted_candidate_index`)
   - cooldown checks (`_pattern_cooldown_allows` / `_record_pattern_cooldown`)
-- pattern definitions live in `PatternPieces.gd`
+- pattern definitions in `PatternPieces.gd`
 
 ### Rendering passes
 - Floor:
@@ -35,28 +44,45 @@ This maps the “video method” steps to the current ArenaAutoGen implementatio
   - `_update_relaxed_floor_visual()`
   - `_build_relaxed_floor_mesh()`
 
-## 2) What differs from the video’s core generator
+---
 
-Current logic generation is CA + cleanup. The video’s core generation is constraint/model-synthesis (WFC-like propagation).
+## 2) What already matches the video
 
-That means the replacement target is **only the logic-generation stage** (tile-type solving), not rendering/stamping/wire debug.
+1. Neighbor-based model selection (tile type from neighborhood state).
+2. Corner-mask canonical reduction (reduced case count, rotation/mirror).
+3. Multiple variants per tile type (deterministic per-cell variant choice).
+4. Multi-tile feature pieces via stamping patterns.
+5. Visual-only relaxed/jittered floor direction.
 
-## 3) Minimal WFC-lite insertion plan (without breaking existing rendering)
+---
 
-### New function hooks to add in `ArenaAutoGen.gd`
-- `_build_tile_domains() -> Array`  
-  Initializes per-cell candidate sets (tile variants).
-- `_seed_constraints(domains: Array) -> void`  
-  Applies border/fixed constraints before solve.
-- `_collapse_low_entropy_cell(domains: Array) -> Vector2i`  
-  Chooses a cell and collapses to a single tile type.
-- `_propagate_constraints(domains: Array, start_cell: Vector2i) -> bool`  
-  Enforces adjacency consistency; returns false on contradiction.
-- `_extract_tiles_from_domains(domains: Array) -> void`  
-  Converts solved domains into `_tiles` / variant IDs used by existing render path.
+## 3) What still differs from the video’s later stages
 
-### Integration point
-Inside `generate()`, replace this block:
+1. **Core generation model**
+   - Current: CA smoothing + cleanup.
+   - Video late-stage: constraint/model synthesis (WFC-like propagation).
+
+2. **Model deformation stage**
+   - Current: relaxed floor surface mesh only.
+   - Video step: deform placed tile/piece models using handle-style deformation so seams stay connected.
+
+3. **Stålberg irregular quad grid stage**
+   - Current: rectangular grid logic.
+   - Video step: irregular quad main grid generation pipeline (hex/tri/quad/relax/stitch workflow).
+
+---
+
+## 4) Minimal WFC-lite insertion plan (without breaking existing rendering)
+
+### New hooks to add in `ArenaAutoGen.gd`
+- `_build_tile_domains() -> Array`
+- `_seed_constraints(domains: Array) -> void`
+- `_collapse_low_entropy_cell(domains: Array) -> Vector2i`
+- `_propagate_constraints(domains: Array, start_cell: Vector2i) -> bool`
+- `_extract_tiles_from_domains(domains: Array) -> void`
+
+### Integration point in `generate()`
+Replace only the logic-source block:
 - `_fill_corners_random()`
 - `_apply_corner_border_empty()`
 - smoothing loop
@@ -64,25 +90,50 @@ Inside `generate()`, replace this block:
 - `_build_tiles_from_corners()`
 
 with:
-- `if use_wfc_lite:` solve via domain propagation
-- `else:` keep current CA path
+- `if use_wfc_lite:` constraint solve path
+- `else:` existing CA path
 
-Everything after logical tile solution remains unchanged:
+Leave downstream stages unchanged:
 - `_run_pattern_stamping()`
 - `_build_floor_multimeshes()`
 - `_build_walls_multimesh()`
 - debug visual updates
 
-## 4) “Double grid” mapping in current codebase
+---
+
+## 5) Deformation step insertion plan (video-aligned next step)
+
+Goal: move from relaxed floor-only to deformed placed pieces while keeping gameplay grid canonical.
+
+### Suggested hooks
+- `_build_visual_corner_lattice() -> Array[Vector3]`
+- `_deform_tile_mesh_to_quad(mesh: Mesh, quad: Array[Vector3]) -> ArrayMesh`
+- `_deform_piece_mesh_to_region(mesh: Mesh, region_corners: Array[Vector3]) -> ArrayMesh`
+
+### Integration
+- Build one shared jittered corner lattice per generation pass.
+- Use shared corners for adjacent tiles to avoid cracks.
+- Keep `_tiles` / `_occupied` / walls on canonical grid for gameplay and perf stability.
+
+---
+
+## 6) “Double grid” mapping in this codebase
 
 - Logic grid: `_tiles`, masks/variants, stamping occupancy (`_occupied`)
-- Visual grid: wire debug (`_build_wire_grid_mesh`) + relaxed visual (`_build_relaxed_floor_mesh`)
+- Visual grid: wire debug (`_build_wire_grid_mesh`) + relaxed/deformed visual mesh path
 
-`bind_to_wire_grid` is integration/sync with external Grid data and is not required for logic generation.
+`bind_to_wire_grid` is alignment/integration with external grid systems; it is not the generator’s dual-grid concept.
 
-## 5) Safe development mode recommendation
+---
 
-For generator iteration and reproducibility:
+## 7) Performance notes for bind mode
+
+Large frame-time jumps under bind mode are usually from effective resolution changes:
+- smaller effective `cell_size` (e.g., synced from external `STEP_SIZE`)
+- larger resulting cell count
+- more instances and debug lines
+
+Keep during generator iteration:
 - `bind_to_wire_grid = false`
 - `wire_grid_use_step_size_from_grid = false`
 - fixed `seed_value`
