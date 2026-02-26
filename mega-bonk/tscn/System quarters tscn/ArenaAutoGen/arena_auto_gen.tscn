@@ -142,7 +142,11 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 [node name="GridAnchor" type="Node3D" parent="."]
 
 
-[node name="ArenaWireGrid" type="MeshInstance3D" parent="."]
+[node name="ArenaWireGridMain" type="MeshInstance3D" parent="."]
+
+[node name="ArenaWireGridDual" type="MeshInstance3D" parent="."]
+
+[node name="ArenaDualGridPoints" type="MultiMeshInstance3D" parent="."]
 
 [node name="Arena" type="Node3D" parent="."]
 

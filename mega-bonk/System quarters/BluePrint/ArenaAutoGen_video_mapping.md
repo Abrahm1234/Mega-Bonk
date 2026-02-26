@@ -173,6 +173,12 @@ Goal: add toggleable visualization for both the main grid and half-cell offset d
 
 ---
 
+
+### Dual-grid layout mode implementation notes
+- `layout_mode = DUAL_FROM_CELLS` switches generation source to `_cells` (main cell grid) and renders tile variants from 2x2 cell neighborhoods via `_mask_at_dual_tile()` / `_mask_at_render_tile()`.
+- Main/dual debug overlays are split across scene nodes `ArenaWireGridMain`, `ArenaWireGridDual`, and center-point markers `ArenaDualGridPoints`.
+- Legacy corner-based pipeline remains available under `layout_mode = LEGACY_CORNERS`.
+
 ## 8) “Double grid” mapping in this codebase
 
 - Logic grid: `_tiles`, masks/variants, stamping occupancy (`_occupied`)

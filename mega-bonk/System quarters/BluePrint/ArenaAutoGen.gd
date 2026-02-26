@@ -29,10 +29,13 @@ const CANONICAL_CHECKER: int = 0b0101
 @export var floor_thickness: float = 0.25
 
 enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
+enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 
 @export var origin_mode: OriginMode = OriginMode.CUSTOM_ANCHOR
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
+
+@export var layout_mode: LayoutMode = LayoutMode.LEGACY_CORNERS
 
 @export var bind_to_wire_grid: bool = false
 @export var wire_grid_origin_path: NodePath
@@ -42,7 +45,13 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @export var use_grid_depth_for_h: bool = true
 @export var show_bounds_debug: bool = false
 @export var show_wire_grid: bool = true
-@export var show_dual_grid_overlay: bool = false
+@export var show_main_grid_overlay: bool = true
+@export var show_dual_grid_overlay: bool = true
+@export var show_dual_grid_points: bool = true
+@export var main_grid_color: Color = Color(1.0, 0.55, 0.0, 1.0)
+@export var dual_grid_color: Color = Color(0.2, 0.3, 1.0, 1.0)
+@export var dual_point_color: Color = Color(0.2, 0.3, 1.0, 1.0)
+@export_range(0.02, 0.5, 0.01) var dual_point_radius: float = 0.12
 @export var wire_grid_y: float = 0.05
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
@@ -97,14 +106,19 @@ enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 @onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
-@onready var wire_grid_debug_mi: MeshInstance3D = get_node_or_null("ArenaWireGrid") as MeshInstance3D
+@onready var wire_grid_main_mi: MeshInstance3D = get_node_or_null("ArenaWireGridMain") as MeshInstance3D
+@onready var wire_grid_dual_mi: MeshInstance3D = get_node_or_null("ArenaWireGridDual") as MeshInstance3D
+@onready var dual_points_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualGridPoints") as MultiMeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
+var _cells: PackedByteArray
 var _tiles: PackedByteArray
 var _occupied: PackedByteArray
 var _piece_transforms: Dictionary = {}
-var _wire_grid_material: StandardMaterial3D
+var _wire_grid_main_material: StandardMaterial3D
+var _wire_grid_dual_material: StandardMaterial3D
+var _dual_points_material: StandardMaterial3D
 var _deformed_floor_mi: MeshInstance3D
 var _deformed_floor_material: StandardMaterial3D
 var _deformed_noise_seed: int = 0
@@ -244,21 +258,15 @@ func _append_wire_grid_plane_lines(m: ImmediateMesh, w: int, h: int, step: float
 		m.surface_add_vertex(a2)
 		m.surface_add_vertex(b2)
 
-func _build_wire_grid_mesh(w: int, h: int, step: float, gx: Transform3D) -> ImmediateMesh:
+func _build_wire_grid_mesh_offset(w: int, h: int, step: float, gx: Transform3D, offset_x: float, offset_z: float) -> ImmediateMesh:
 	var m: ImmediateMesh = ImmediateMesh.new()
 	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	_append_wire_grid_plane_lines(m, w, h, step, gx, wire_grid_y, offset_x, offset_z)
 
-	var max_x: float = float(w) * step
-	var max_z: float = float(h) * step
-	var y: float = wire_grid_y
-
-	_append_wire_grid_plane_lines(m, w, h, step, gx, y, 0.0, 0.0)
-
-	if show_dual_grid_overlay:
-		var half_step: float = step * 0.5
-		_append_wire_grid_plane_lines(m, w, h, step, gx, y, half_step, half_step)
-
-	if wire_grid_draw_volume:
+	if offset_x == 0.0 and offset_z == 0.0 and wire_grid_draw_volume:
+		var max_x: float = float(w) * step
+		var max_z: float = float(h) * step
+		var y: float = wire_grid_y
 		var height: float = float(max(wire_grid_height_cells, 1)) * step
 		for x in range(w + 1):
 			var px2: float = float(x) * step
@@ -294,21 +302,70 @@ func _build_wire_grid_mesh(w: int, h: int, step: float, gx: Transform3D) -> Imme
 	m.surface_end()
 	return m
 
-func _update_wire_grid_debug() -> void:
-	if wire_grid_debug_mi == null:
+func _make_unshaded_mat(c: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = c
+	return mat
+
+func _update_dual_grid_points() -> void:
+	if dual_points_mmi == null:
 		return
 
-	wire_grid_debug_mi.visible = show_wire_grid
-	if not show_wire_grid:
+	dual_points_mmi.visible = show_wire_grid and show_dual_grid_points
+	if not dual_points_mmi.visible:
 		return
 
 	var gx: Transform3D = _grid_xform_local()
-	wire_grid_debug_mi.mesh = _build_wire_grid_mesh(grid_w, grid_h, cell_size, gx)
-	if _wire_grid_material == null:
-		_wire_grid_material = StandardMaterial3D.new()
-		_wire_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_wire_grid_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	wire_grid_debug_mi.material_override = _wire_grid_material
+	var sphere := SphereMesh.new()
+	sphere.radius = dual_point_radius
+	sphere.height = dual_point_radius * 2.0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = sphere
+	mm.instance_count = grid_w * grid_h
+
+	var i: int = 0
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var p := gx * Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+			p.y += wire_grid_y
+			mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, p))
+			i += 1
+
+	dual_points_mmi.multimesh = mm
+	if _dual_points_material == null:
+		_dual_points_material = _make_unshaded_mat(dual_point_color)
+	else:
+		_dual_points_material.albedo_color = dual_point_color
+	dual_points_mmi.material_override = _dual_points_material
+
+func _update_wire_grid_debug() -> void:
+	var gx: Transform3D = _grid_xform_local()
+
+	if wire_grid_main_mi != null:
+		wire_grid_main_mi.visible = show_wire_grid and show_main_grid_overlay
+		if wire_grid_main_mi.visible:
+			wire_grid_main_mi.mesh = _build_wire_grid_mesh_offset(grid_w, grid_h, cell_size, gx, 0.0, 0.0)
+			if _wire_grid_main_material == null:
+				_wire_grid_main_material = _make_unshaded_mat(main_grid_color)
+			else:
+				_wire_grid_main_material.albedo_color = main_grid_color
+			wire_grid_main_mi.material_override = _wire_grid_main_material
+
+	if wire_grid_dual_mi != null:
+		wire_grid_dual_mi.visible = show_wire_grid and show_dual_grid_overlay
+		if wire_grid_dual_mi.visible:
+			var half: float = cell_size * 0.5
+			wire_grid_dual_mi.mesh = _build_wire_grid_mesh_offset(grid_w, grid_h, cell_size, gx, half, half)
+			if _wire_grid_dual_material == null:
+				_wire_grid_dual_material = _make_unshaded_mat(dual_grid_color)
+			else:
+				_wire_grid_dual_material.albedo_color = dual_grid_color
+			wire_grid_dual_mi.material_override = _wire_grid_dual_material
+
+	_update_dual_grid_points()
 
 func _ensure_deformed_floor_node() -> void:
 	if _deformed_floor_mi != null:
@@ -458,12 +515,12 @@ func _build_deformed_floor_mesh() -> ArrayMesh:
 	if up_dir.length() < 0.001:
 		up_dir = Vector3.UP
 
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0:
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
 				continue
 
-			var mask: int = _mask_at_tile(x, y)
+			var mask: int = _mask_at_render_tile(x, y)
 			if mask == CANONICAL_EMPTY:
 				continue
 
@@ -477,11 +534,16 @@ func _build_deformed_floor_mesh() -> ArrayMesh:
 				continue
 			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
 
+			var qx: int = x
+			var qy: int = y
+			if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+				qx += 1
+				qy += 1
 			var quad: Array[Vector3] = [
-				point_positions[_corner_idx(x, y)],
-				point_positions[_corner_idx(x + 1, y)],
-				point_positions[_corner_idx(x + 1, y + 1)],
-				point_positions[_corner_idx(x, y + 1)],
+				point_positions[_corner_idx(qx, qy)],
+				point_positions[_corner_idx(qx + 1, qy)],
+				point_positions[_corner_idx(qx + 1, qy + 1)],
+				point_positions[_corner_idx(qx, qy + 1)],
 			]
 			vertex_count += _add_deformed_mesh_surface(st, mesh, quad, rotation_steps, up_dir)
 
@@ -494,7 +556,7 @@ func _update_deformed_floor_visual() -> void:
 	if _deformed_floor_mi == null:
 		return
 
-	if not show_deformed_floor_mesh or _tiles.is_empty():
+	if not show_deformed_floor_mesh or not _has_render_tiles():
 		_deformed_floor_mi.visible = false
 		_deformed_floor_mi.mesh = null
 		_set_base_floor_visible(true)
@@ -534,6 +596,38 @@ func generate() -> void:
 		push_error("ArenaAutoGen: grid_w and grid_h must be > 0")
 		return
 
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS and (grid_w <= 1 or grid_h <= 1):
+		push_error("ArenaAutoGen: Need grid_w and grid_h >= 2 for dual grid layout")
+		return
+
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		_cells = PackedByteArray()
+		_cells.resize(grid_w * grid_h)
+		_fill_cells_random()
+		_apply_cell_border_empty()
+
+		for _i in range(smoothing_steps):
+			_smooth_cells_step()
+			_apply_cell_border_empty()
+
+		_corners = PackedByteArray()
+		_corners.resize(_points_w() * _points_h())
+		_tiles = PackedByteArray()
+		_tiles.resize(0)
+		_occupied = PackedByteArray()
+		_occupied.resize(_render_w() * _render_h())
+
+		_build_floor_multimeshes()
+		if make_walls:
+			_build_walls_from_cells()
+		else:
+			wall_mmi.multimesh = null
+
+		_update_bounds_mesh_from_grid()
+		_update_wire_grid_debug()
+		_update_deformed_floor_visual()
+		return
+
 	_corners = PackedByteArray()
 	_corners.resize(_points_w() * _points_h())
 
@@ -541,7 +635,7 @@ func generate() -> void:
 	_tiles.resize(grid_w * grid_h)
 
 	_occupied = PackedByteArray()
-	_occupied.resize(grid_w * grid_h)
+	_occupied.resize(_render_w() * _render_h())
 
 	_fill_corners_random()
 	_apply_corner_border_empty()
@@ -855,11 +949,13 @@ func _build_floor_multimesh_legacy() -> void:
 	mm.mesh = mesh
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 	var transforms: Array[Transform3D] = []
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if _tile_get(x, y) == 0 or (pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0):
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if not _render_tile_filled(x, y):
 				continue
-			var pos: Vector3 = _tile_to_world_center(x, y)
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
+				continue
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			transforms.append(_fit_mesh_transform(mesh, desired, 0.0, pos))
 	_assign_multimesh_transforms(mm, transforms)
@@ -875,11 +971,11 @@ func _build_floor_multimeshes_by_variant() -> void:
 	}
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 
-	for y in range(grid_h):
-		for x in range(grid_w):
-			if pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0:
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
 				continue
-			var mask: int = _mask_at_tile(x, y)
+			var mask: int = _mask_at_render_tile(x, y)
 			if mask == CANONICAL_EMPTY:
 				continue
 			var canonical: Dictionary = _canonicalize_mask(mask)
@@ -887,7 +983,7 @@ func _build_floor_multimeshes_by_variant() -> void:
 			if not mesh_transform_buckets.has(variant_id):
 				continue
 			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
-			var pos: Vector3 = _tile_to_world_center(x, y)
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
 			var yaw: float = rotation_steps * PI * 0.5
 			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
@@ -1087,6 +1183,31 @@ func _build_walls_multimesh() -> void:
 	_assign_multimesh_transforms(mm, transforms)
 	wall_mmi.multimesh = mm
 
+func _build_walls_from_cells() -> void:
+	if wall_mmi == null:
+		return
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var wall_mesh: BoxMesh = BoxMesh.new()
+	wall_mesh.size = Vector3(cell_size, wall_height, wall_thickness)
+	mm.mesh = wall_mesh
+	var transforms: Array[Transform3D] = []
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if _cell_get(x, y) == 0:
+				continue
+			if _cell_get(x, y - 1) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, -0.5), 0.0))
+			if _cell_get(x, y + 1) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0, 0, 0.5), 0.0))
+			if _cell_get(x - 1, y) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(-0.5, 0, 0), PI * 0.5))
+			if _cell_get(x + 1, y) == 0:
+				transforms.append(_wall_transform_for_edge(x, y, Vector3(0.5, 0, 0), PI * 0.5))
+	_assign_multimesh_transforms(mm, transforms)
+	wall_mmi.multimesh = mm
+
+
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
 	var center: Vector3 = _tile_to_world_center(x, y)
 	var offset: Vector3 = Vector3(local_offset.x * cell_size, 0.0, local_offset.z * cell_size)
@@ -1098,6 +1219,45 @@ func _assign_multimesh_transforms(mm: MultiMesh, transforms: Array[Transform3D])
 	mm.instance_count = transforms.size()
 	for i in range(transforms.size()):
 		mm.set_instance_transform(i, transforms[i])
+
+func _dual_w() -> int:
+	return max(grid_w - 1, 0)
+
+func _dual_h() -> int:
+	return max(grid_h - 1, 0)
+
+func _render_w() -> int:
+	return _dual_w() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_w
+
+func _render_h() -> int:
+	return _dual_h() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_h
+
+func _render_tile_idx(x: int, y: int) -> int:
+	return y * _render_w() + x
+
+func _render_tile_to_world_center(x: int, y: int) -> Vector3:
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		return _corner_to_world(x + 1, y + 1)
+	return _tile_to_world_center(x, y)
+
+func _mask_at_dual_tile(x: int, y: int) -> int:
+	var tl: int = _cell_get(x, y)
+	var tr: int = _cell_get(x + 1, y)
+	var br: int = _cell_get(x + 1, y + 1)
+	var bl: int = _cell_get(x, y + 1)
+	return _mask_from_corners(tl, tr, br, bl)
+
+func _mask_at_render_tile(x: int, y: int) -> int:
+	return _mask_at_dual_tile(x, y) if layout_mode == LayoutMode.DUAL_FROM_CELLS else _mask_at_tile(x, y)
+
+func _render_tile_filled(x: int, y: int) -> bool:
+	var mask: int = _mask_at_render_tile(x, y)
+	if mask == CANONICAL_EMPTY:
+		return false
+	return _tile_filled_from_mask(mask)
+
+func _has_render_tiles() -> bool:
+	return _render_w() > 0 and _render_h() > 0
 
 func _mask_at_tile(x: int, y: int) -> int:
 	return _mask_from_corners(_corner_get(x, y), _corner_get(x + 1, y), _corner_get(x + 1, y + 1), _corner_get(x, y + 1))
@@ -1192,6 +1352,56 @@ func _tile_to_world_center(x: int, y: int) -> Vector3:
 func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
 	var grid_xform: Transform3D = _grid_xform_local()
 	return grid_xform * Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
+
+func _cell_idx(x: int, y: int) -> int:
+	return y * grid_w + x
+
+func _cell_in_bounds(x: int, y: int) -> bool:
+	return x >= 0 and y >= 0 and x < grid_w and y < grid_h
+
+func _cell_get(x: int, y: int) -> int:
+	if not _cell_in_bounds(x, y):
+		return 0
+	if _cells.is_empty():
+		return 0
+	return int(_cells[_cell_idx(x, y)])
+
+func _fill_cells_random() -> void:
+	for y in range(grid_h):
+		for x in range(grid_w):
+			_cells[_cell_idx(x, y)] = 1 if _rng.randf() < fill_percent else 0
+
+func _apply_cell_border_empty() -> void:
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if x < border or y < border or x >= grid_w - border or y >= grid_h - border:
+				_cells[_cell_idx(x, y)] = 0
+
+func _count_cell_neighbors8(x: int, y: int) -> int:
+	var c: int = 0
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			c += _cell_get(x + dx, y + dy)
+	return c
+
+func _smooth_cells_step() -> void:
+	var next: PackedByteArray = PackedByteArray()
+	next.resize(grid_w * grid_h)
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var n: int = _count_cell_neighbors8(x, y)
+			var here: int = _cell_get(x, y)
+			if n > 4:
+				next[_cell_idx(x, y)] = 1
+			elif n < 4:
+				next[_cell_idx(x, y)] = 0
+			else:
+				next[_cell_idx(x, y)] = here
+
+	_cells = next
 
 func _points_w() -> int:
 	return grid_w + 1
