@@ -1507,6 +1507,11 @@ func _render_tile_to_world_center(x: int, y: int) -> Vector3:
 		return _tile_to_world_center(x, y)
 	return _tile_to_world_center(x, y)
 
+# NOTE: Center-based placement is currently the active render path.
+# This xform helper is provided for symmetry with _render_tile_to_world_center.
+func _render_tile_to_world_xform(x: int, y: int, rot_steps: int) -> Transform3D:
+	return _tile_to_world_xform(x, y, rot_steps)
+
 func _mask_at_dual_tile(x: int, y: int) -> int:
 	var tl: int = _cell_get(x, y)
 	var tr: int = _cell_get(x + 1, y)
@@ -1641,6 +1646,11 @@ func _corner_to_world(x: int, y: int) -> Vector3:
 func _tile_to_world_center(x: int, y: int) -> Vector3:
 	var grid_xform: Transform3D = _grid_xform_local()
 	return grid_xform * Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+
+func _tile_to_world_xform(x: int, y: int, rot_steps: int) -> Transform3D:
+	var center: Vector3 = _tile_to_world_center(x, y)
+	var yaw: float = (rot_steps & 3) * PI * 0.5
+	return Transform3D(Basis(Vector3.UP, yaw), center)
 
 func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
 	var grid_xform: Transform3D = _grid_xform_local()
