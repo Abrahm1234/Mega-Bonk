@@ -99,6 +99,13 @@ Leave downstream stages unchanged:
 - `_build_walls_multimesh()`
 - debug visual updates
 
+### Definition of Done
+- `use_wfc_lite` feature flag cleanly switches between CA and WFC-lite paths in `generate()`.
+- Under fixed seed settings, repeated runs produce deterministic tile outputs in WFC-lite mode.
+
+### Non-goals
+- Do not replace downstream rendering/stamping/wall code during this phase.
+
 ---
 
 ## 5) Deformation step insertion plan (video-aligned next step)
@@ -115,9 +122,35 @@ Goal: move from relaxed floor-only to deformed placed pieces while keeping gamep
 - Use shared corners for adjacent tiles to avoid cracks.
 - Keep `_tiles` / `_occupied` / walls on canonical grid for gameplay and perf stability.
 
+### Definition of Done
+- Deformed floor renders from a shared corner lattice built once per generation pass.
+- Adjacent tile seams show no cracks because shared lattice corners are reused.
+- Canonical gameplay collision behavior remains unchanged.
+
+### Non-goals
+- Do not deform gameplay collision meshes or pathing logic in this phase.
+
 ---
 
-## 6) “Double grid” mapping in this codebase
+## 6) Dual-grid debug overlay phase
+
+Goal: add toggleable visualization for both the main grid and half-cell offset dual grid to validate mask interpretation visually.
+
+### Suggested hooks
+- `_build_main_grid_overlay_mesh() -> ImmediateMesh`
+- `_build_dual_grid_overlay_mesh() -> ImmediateMesh`
+- `_update_grid_overlays() -> void`
+
+### Definition of Done
+- Main grid and dual/offset grid overlays can be toggled independently at runtime.
+- Overlays align with tile masks and corner interpretation in the same coordinate space.
+
+### Non-goals
+- Do not use debug overlays as a source of generation truth.
+
+---
+
+## 7) “Double grid” mapping in this codebase
 
 - Logic grid: `_tiles`, masks/variants, stamping occupancy (`_occupied`)
 - Visual grid: wire debug (`_build_wire_grid_mesh`) + relaxed/deformed visual mesh path
@@ -126,7 +159,7 @@ Goal: move from relaxed floor-only to deformed placed pieces while keeping gamep
 
 ---
 
-## 7) Performance notes for bind mode
+## 8) Performance notes for bind mode
 
 Large frame-time jumps under bind mode are usually from effective resolution changes:
 - smaller effective `cell_size` (e.g., synced from external `STEP_SIZE`)
