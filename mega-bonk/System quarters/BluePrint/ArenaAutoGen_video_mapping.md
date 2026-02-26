@@ -132,7 +132,25 @@ Goal: move from relaxed floor-only to deformed placed pieces while keeping gamep
 
 ---
 
-## 6) Dual-grid debug overlay phase
+## 6) Scene wiring checklist (`arena_auto_gen.tscn`)
+
+Use this ordered checklist before implementing deformation or dual-grid debug features.
+
+1. Ensure the `Arena` child exists and is the visual parent for generated visuals.
+   - Expected node path: `ArenaAutoGen/Arena`
+2. Add or keep the wire debug mesh node and make it toggleable.
+   - Expected node path: `ArenaAutoGen/ArenaWireGrid`
+3. Add a deformed floor output mesh under `Arena`.
+   - Expected node path: `ArenaAutoGen/Arena/DeformedFloor`
+4. Define visibility switching rules in script so visual modes are mutually exclusive.
+   - When deformed visuals are ON: hide floor multimesh containers under `ArenaAutoGen/Arena/*` and show `ArenaAutoGen/Arena/DeformedFloor`.
+   - When deformed visuals are OFF: show floor multimesh containers and hide `ArenaAutoGen/Arena/DeformedFloor`.
+5. Keep wall and collision generation unchanged and tied to canonical grid logic.
+   - Preserve canonical data flow from `_tiles` / `_occupied` into wall and collision construction.
+
+---
+
+## 7) Dual-grid debug overlay phase
 
 Goal: add toggleable visualization for both the main grid and half-cell offset dual grid to validate mask interpretation visually.
 
@@ -150,7 +168,7 @@ Goal: add toggleable visualization for both the main grid and half-cell offset d
 
 ---
 
-## 7) “Double grid” mapping in this codebase
+## 8) “Double grid” mapping in this codebase
 
 - Logic grid: `_tiles`, masks/variants, stamping occupancy (`_occupied`)
 - Visual grid: wire debug (`_build_wire_grid_mesh`) + relaxed/deformed visual mesh path
@@ -159,7 +177,7 @@ Goal: add toggleable visualization for both the main grid and half-cell offset d
 
 ---
 
-## 8) Performance notes for bind mode
+## 9) Performance notes for bind mode
 
 Large frame-time jumps under bind mode are usually from effective resolution changes:
 - smaller effective `cell_size` (e.g., synced from external `STEP_SIZE`)
