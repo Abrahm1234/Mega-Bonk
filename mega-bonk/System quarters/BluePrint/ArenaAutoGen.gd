@@ -1115,11 +1115,76 @@ func _pattern_anchor_to_world(x: int, y: int, size: Vector2i) -> Vector3:
 
 func _build_floor_multimeshes() -> void:
 	if _has_variant_floor_nodes():
+		if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+			_build_floor_dual_slot_multimeshes()
+			if floor_mmi != null:
+				floor_mmi.multimesh = null
+			return
 		_build_floor_multimeshes_by_variant()
 		if floor_mmi != null:
 			floor_mmi.multimesh = null
 		return
 	_build_floor_multimesh_legacy()
+
+func _build_floor_dual_slot_multimeshes() -> void:
+	if floor_full_mmi == null or floor_edge_mmi == null or floor_corner_mmi == null or floor_inverse_corner_mmi == null or floor_checker_mmi == null:
+		return
+
+	var mesh_transform_buckets: Dictionary = {
+		"full": {},
+		"edge": {},
+		"corner": {},
+		"inverse_corner": {},
+		"checker": {},
+	}
+	var quarter: float = cell_size * 0.25
+	var slot_size: Vector3 = Vector3(cell_size * 0.5, floor_thickness, cell_size * 0.5)
+	var slots: Array[Dictionary] = [
+		{"offset": Vector3(-quarter, 0.0, -quarter), "dx": -1, "dy": -1, "bit": 2},
+		{"offset": Vector3(quarter, 0.0, -quarter), "dx": 0, "dy": -1, "bit": 3},
+		{"offset": Vector3(quarter, 0.0, quarter), "dx": 0, "dy": 0, "bit": 0},
+		{"offset": Vector3(-quarter, 0.0, quarter), "dx": -1, "dy": 0, "bit": 1},
+	]
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if _cell_get(x, y) == 0:
+				continue
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_cell_idx(x, y)] != 0:
+				continue
+
+			var cell_center: Vector3 = _tile_to_world_center(x, y)
+			for slot_idx in range(slots.size()):
+				var slot: Dictionary = slots[slot_idx]
+				var mask: int = _mask_at_dual_tile(x + int(slot["dx"]), y + int(slot["dy"]))
+				var bit_index: int = int(slot["bit"])
+				if ((mask >> bit_index) & 1) == 0:
+					continue
+
+				var canonical: Dictionary = _canonicalize_mask(mask)
+				var variant_id: String = str(canonical.get("variant_id", ""))
+				if variant_id == "" or variant_id == "empty" or not mesh_transform_buckets.has(variant_id):
+					continue
+
+				var mesh: Mesh = _build_floor_variant_mesh(variant_id, x * 4 + slot_idx, y)
+				if mesh == null:
+					continue
+
+				var pos: Vector3 = cell_center + (slot["offset"] as Vector3)
+				pos.y = floor_thickness * 0.5
+				var yaw: float = 0.0
+				var transforms: Array = (mesh_transform_buckets[variant_id] as Dictionary).get(mesh, []) as Array
+				if use_canonical_single_meshes:
+					transforms.append(_fit_canonical_tile_transform(mesh, slot_size, yaw, pos))
+				else:
+					transforms.append(_fit_mesh_transform(mesh, slot_size, yaw, pos))
+				(mesh_transform_buckets[variant_id] as Dictionary)[mesh] = transforms
+
+	_assign_variant_mesh_group(floor_full_mmi, mesh_transform_buckets["full"] as Dictionary)
+	_assign_variant_mesh_group(floor_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
+	_assign_variant_mesh_group(floor_corner_mmi, mesh_transform_buckets["corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_inverse_corner_mmi, mesh_transform_buckets["inverse_corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_checker_mmi, mesh_transform_buckets["checker"] as Dictionary)
 
 func _build_floor_multimesh_legacy() -> void:
 	if floor_mmi == null:
