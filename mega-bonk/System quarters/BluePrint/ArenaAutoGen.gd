@@ -142,7 +142,7 @@ var _deformed_noise_seed: int = 0
 var _mesh_variant_seed: int = 0
 
 func _ready() -> void:
-	if wall_mmi == null:
+	if make_walls and wall_mmi == null:
 		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
 		return
 
@@ -755,7 +755,7 @@ func generate() -> void:
 		_build_floor_multimeshes()
 		if make_walls:
 			_build_walls_from_cells()
-		else:
+		elif wall_mmi != null:
 			wall_mmi.multimesh = null
 
 		_update_bounds_mesh_from_grid()
@@ -788,7 +788,7 @@ func generate() -> void:
 
 	if make_walls:
 		_build_walls_multimesh()
-	else:
+	elif wall_mmi != null:
 		wall_mmi.multimesh = null
 
 	_update_bounds_mesh_from_grid()
