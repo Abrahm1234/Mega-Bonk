@@ -124,6 +124,13 @@ bounds_override_origin = false
 wire_grid_use_step_size_from_grid = false
 wall_height = 5.0
 wall_thickness = 0.75
+use_pattern_stamping = false
+use_canonical_single_meshes = true
+mesh_full = SubResource("BoxMesh_shxrv")
+mesh_edge = SubResource("BoxMesh_xq2nr")
+mesh_corner = SubResource("BoxMesh_dgfft")
+mesh_inverse_corner = SubResource("BoxMesh_1lv5y")
+mesh_checker = SubResource("BoxMesh_5sqxa")
 mesh_full_variants = Array[Mesh]([SubResource("BoxMesh_shxrv")])
 mesh_edge_variants = Array[Mesh]([SubResource("BoxMesh_xq2nr")])
 mesh_corner_variants = Array[Mesh]([SubResource("BoxMesh_dgfft")])
@@ -147,6 +154,10 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 [node name="ArenaWireGridDual" type="MeshInstance3D" parent="."]
 
 [node name="ArenaDualGridPoints" type="MultiMeshInstance3D" parent="."]
+
+[node name="ArenaDualBits_Filled" type="MultiMeshInstance3D" parent="."]
+
+[node name="ArenaDualBits_Empty" type="MultiMeshInstance3D" parent="."]
 
 [node name="Arena" type="Node3D" parent="."]
 

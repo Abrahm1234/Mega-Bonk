@@ -176,7 +176,7 @@ Goal: add toggleable visualization for both the main grid and half-cell offset d
 
 ### Dual-grid layout mode implementation notes
 - `layout_mode = DUAL_FROM_CELLS` switches generation source to `_cells` (main cell grid) and renders tile variants from 2x2 cell neighborhoods via `_mask_at_dual_tile()` / `_mask_at_render_tile()`.
-- Main/dual debug overlays are split across scene nodes `ArenaWireGridMain`, `ArenaWireGridDual`, and center-point markers `ArenaDualGridPoints`.
+- Main/dual debug overlays are split across scene nodes `ArenaWireGridMain`, `ArenaWireGridDual`, center-point markers `ArenaDualGridPoints`, and optional 2x2 neighborhood bit boxes (`ArenaDualBits_Filled` / `ArenaDualBits_Empty`).
 - Legacy corner-based pipeline remains available under `layout_mode = LEGACY_CORNERS`.
 
 ## 8) “Double grid” mapping in this codebase
@@ -201,3 +201,9 @@ Keep during generator iteration:
 - fixed `seed_value`
 
 Enable bind/sync only when embedding into Core chambers room flows.
+
+
+## 10) Canonical-only mesh mode
+
+- `use_canonical_single_meshes = true` forces one mesh per canonical variant (`full`, `edge`, `corner`, `inverse_corner`, `checker`).
+- This keeps base rendering constrained to the six canonical mask outcomes (including empty-as-skip) while preserving the variant-array path for experimentation.

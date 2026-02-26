@@ -48,9 +48,13 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @export var show_main_grid_overlay: bool = true
 @export var show_dual_grid_overlay: bool = true
 @export var show_dual_grid_points: bool = true
+@export var show_dual_bit_boxes: bool = false
 @export var main_grid_color: Color = Color(1.0, 0.55, 0.0, 1.0)
 @export var dual_grid_color: Color = Color(0.2, 0.3, 1.0, 1.0)
 @export var dual_point_color: Color = Color(0.2, 0.3, 1.0, 1.0)
+@export var dual_bit_filled_color: Color = Color(0.2, 0.8, 0.2, 0.35)
+@export var dual_bit_empty_color: Color = Color(0.2, 0.2, 0.8, 0.2)
+@export_range(0.5, 1.0, 0.01) var dual_bit_box_inset: float = 0.95
 @export_range(0.02, 0.5, 0.01) var dual_point_radius: float = 0.12
 @export var wire_grid_y: float = 0.05
 @export var wire_grid_draw_volume: bool = false
@@ -71,6 +75,13 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @export var pieces_replace_base_floor: bool = false
 @export var piece_height_epsilon: float = 0.01
 @export var checker_is_solid: bool = true
+
+@export var use_canonical_single_meshes: bool = false
+@export var mesh_full: Mesh
+@export var mesh_edge: Mesh
+@export var mesh_corner: Mesh
+@export var mesh_inverse_corner: Mesh
+@export var mesh_checker: Mesh
 
 @export var mesh_full_variants: Array[Mesh] = []
 @export var mesh_edge_variants: Array[Mesh] = []
@@ -109,6 +120,8 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @onready var wire_grid_main_mi: MeshInstance3D = get_node_or_null("ArenaWireGridMain") as MeshInstance3D
 @onready var wire_grid_dual_mi: MeshInstance3D = get_node_or_null("ArenaWireGridDual") as MeshInstance3D
 @onready var dual_points_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualGridPoints") as MultiMeshInstance3D
+@onready var dual_bits_filled_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Filled") as MultiMeshInstance3D
+@onready var dual_bits_empty_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Empty") as MultiMeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
@@ -119,6 +132,8 @@ var _piece_transforms: Dictionary = {}
 var _wire_grid_main_material: StandardMaterial3D
 var _wire_grid_dual_material: StandardMaterial3D
 var _dual_points_material: StandardMaterial3D
+var _dual_bits_filled_material: StandardMaterial3D
+var _dual_bits_empty_material: StandardMaterial3D
 var _deformed_floor_mi: MeshInstance3D
 var _deformed_floor_material: StandardMaterial3D
 var _deformed_noise_seed: int = 0
@@ -341,13 +356,111 @@ func _update_dual_grid_points() -> void:
 		_dual_points_material.albedo_color = dual_point_color
 	dual_points_mmi.material_override = _dual_points_material
 
+func _update_dual_bit_boxes() -> void:
+	if layout_mode != LayoutMode.DUAL_FROM_CELLS:
+		if dual_bits_filled_mmi != null:
+			dual_bits_filled_mmi.visible = false
+		if dual_bits_empty_mmi != null:
+			dual_bits_empty_mmi.visible = false
+		return
+
+	if dual_bits_filled_mmi == null or dual_bits_empty_mmi == null:
+		return
+
+	var visible: bool = show_wire_grid and show_dual_bit_boxes
+	dual_bits_filled_mmi.visible = visible
+	dual_bits_empty_mmi.visible = visible
+	if not visible:
+		return
+
+	var half: float = cell_size * 0.5
+	var size: Vector3 = Vector3(half * dual_bit_box_inset, 0.02, half * dual_bit_box_inset)
+	var quad_mesh: BoxMesh = BoxMesh.new()
+	quad_mesh.size = size
+
+	var mm_filled: MultiMesh = MultiMesh.new()
+	mm_filled.transform_format = MultiMesh.TRANSFORM_3D
+	mm_filled.mesh = quad_mesh
+
+	var mm_empty: MultiMesh = MultiMesh.new()
+	mm_empty.transform_format = MultiMesh.TRANSFORM_3D
+	mm_empty.mesh = quad_mesh
+
+	var max_tiles: int = _render_w() * _render_h()
+	mm_filled.instance_count = max_tiles * 4
+	mm_empty.instance_count = max_tiles * 4
+
+	var y_level: float = wire_grid_y + 0.01
+	var fi: int = 0
+	var ei: int = 0
+	var offs: Array[Vector3] = [
+		Vector3(-half * 0.5, 0, -half * 0.5),
+		Vector3(half * 0.5, 0, -half * 0.5),
+		Vector3(half * 0.5, 0, half * 0.5),
+		Vector3(-half * 0.5, 0, half * 0.5),
+	]
+
+	for y0 in range(_render_h()):
+		for x0 in range(_render_w()):
+			var mask: int = _mask_at_dual_tile(x0, y0)
+			var center: Vector3 = _render_tile_to_world_center(x0, y0)
+			center.y = y_level
+
+			for bit in range(4):
+				var is_on: bool = ((mask >> bit) & 1) == 1
+				var t: Transform3D = Transform3D(Basis.IDENTITY, center + offs[bit])
+				if is_on:
+					mm_filled.set_instance_transform(fi, t)
+					fi += 1
+				else:
+					mm_empty.set_instance_transform(ei, t)
+					ei += 1
+
+	mm_filled.instance_count = fi
+	mm_empty.instance_count = ei
+
+	dual_bits_filled_mmi.multimesh = mm_filled
+	dual_bits_empty_mmi.multimesh = mm_empty
+
+	if _dual_bits_filled_material == null:
+		_dual_bits_filled_material = _make_unshaded_mat(dual_bit_filled_color)
+	else:
+		_dual_bits_filled_material.albedo_color = dual_bit_filled_color
+	dual_bits_filled_mmi.material_override = _dual_bits_filled_material
+
+	if _dual_bits_empty_material == null:
+		_dual_bits_empty_material = _make_unshaded_mat(dual_bit_empty_color)
+	else:
+		_dual_bits_empty_material.albedo_color = dual_bit_empty_color
+	dual_bits_empty_mmi.material_override = _dual_bits_empty_material
+
 func _update_wire_grid_debug() -> void:
 	var gx: Transform3D = _grid_xform_local()
+	var main_w: int = grid_w
+	var main_h: int = grid_h
+	var main_off_x: float = 0.0
+	var main_off_z: float = 0.0
+
+	var dual_w: int = grid_w
+	var dual_h: int = grid_h
+	var dual_off_x: float = cell_size * 0.5
+	var dual_off_z: float = cell_size * 0.5
+
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		main_w = _render_w()
+		main_h = _render_h()
+		main_off_x = cell_size * 0.5
+		main_off_z = cell_size * 0.5
+
+		dual_w = grid_w
+		dual_h = grid_h
+		dual_off_x = 0.0
+		dual_off_z = 0.0
 
 	if wire_grid_main_mi != null:
 		wire_grid_main_mi.visible = show_wire_grid and show_main_grid_overlay
 		if wire_grid_main_mi.visible:
-			wire_grid_main_mi.mesh = _build_wire_grid_mesh_offset(grid_w, grid_h, cell_size, gx, 0.0, 0.0)
+			wire_grid_main_mi.mesh = _build_wire_grid_mesh_offset(main_w, main_h, cell_size, gx, main_off_x, main_off_z)
 			if _wire_grid_main_material == null:
 				_wire_grid_main_material = _make_unshaded_mat(main_grid_color)
 			else:
@@ -357,8 +470,7 @@ func _update_wire_grid_debug() -> void:
 	if wire_grid_dual_mi != null:
 		wire_grid_dual_mi.visible = show_wire_grid and show_dual_grid_overlay
 		if wire_grid_dual_mi.visible:
-			var half: float = cell_size * 0.5
-			wire_grid_dual_mi.mesh = _build_wire_grid_mesh_offset(grid_w, grid_h, cell_size, gx, half, half)
+			wire_grid_dual_mi.mesh = _build_wire_grid_mesh_offset(dual_w, dual_h, cell_size, gx, dual_off_x, dual_off_z)
 			if _wire_grid_dual_material == null:
 				_wire_grid_dual_material = _make_unshaded_mat(dual_grid_color)
 			else:
@@ -366,6 +478,7 @@ func _update_wire_grid_debug() -> void:
 			wire_grid_dual_mi.material_override = _wire_grid_dual_material
 
 	_update_dual_grid_points()
+	_update_dual_bit_boxes()
 
 func _ensure_deformed_floor_node() -> void:
 	if _deformed_floor_mi != null:
@@ -1118,6 +1231,24 @@ func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> 
 	return h % count
 
 func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
+	if use_canonical_single_meshes:
+		match variant_id:
+			"full":
+				if mesh_full != null:
+					return mesh_full
+			"edge":
+				if mesh_edge != null:
+					return mesh_edge
+			"corner":
+				if mesh_corner != null:
+					return mesh_corner
+			"inverse_corner":
+				if mesh_inverse_corner != null:
+					return mesh_inverse_corner
+			"checker":
+				if mesh_checker != null:
+					return mesh_checker
+
 	var variants: Array[Mesh] = _variant_mesh_array(variant_id)
 	if not variants.is_empty():
 		var idx: int = _variant_index_for_tile(variant_id, x, y, variants.size())
