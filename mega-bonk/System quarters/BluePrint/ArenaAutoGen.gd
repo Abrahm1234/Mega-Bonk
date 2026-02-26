@@ -1453,6 +1453,10 @@ func _build_walls_multimesh() -> void:
 func _build_walls_from_cells() -> void:
 	if wall_mmi == null:
 		return
+	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		_build_walls_from_dual_fine_grid()
+		return
+
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	var wall_mesh: BoxMesh = BoxMesh.new()
@@ -1474,11 +1478,82 @@ func _build_walls_from_cells() -> void:
 	_assign_multimesh_transforms(mm, transforms)
 	wall_mmi.multimesh = mm
 
+func _build_walls_from_dual_fine_grid() -> void:
+	var fine_w: int = _render_w() * 2
+	var fine_h: int = _render_h() * 2
+	if fine_w <= 0 or fine_h <= 0:
+		wall_mmi.multimesh = null
+		return
+
+	var fine: PackedByteArray = PackedByteArray()
+	fine.resize(fine_w * fine_h)
+	for y in range(_render_h()):
+		for x in range(_render_w()):
+			var mask: int = _mask_at_render_tile(x, y)
+			var row0: int = (y * 2) * fine_w
+			var row1: int = (y * 2 + 1) * fine_w
+			var col: int = x * 2
+			if (mask & 0b0001) != 0:
+				fine[row0 + col] = 1
+			if (mask & 0b0010) != 0:
+				fine[row0 + col + 1] = 1
+			if (mask & 0b0100) != 0:
+				fine[row1 + col + 1] = 1
+			if (mask & 0b1000) != 0:
+				fine[row1 + col] = 1
+
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var wall_mesh: BoxMesh = BoxMesh.new()
+	wall_mesh.size = Vector3(cell_size * 0.5, wall_height, wall_thickness)
+	mm.mesh = wall_mesh
+
+	var transforms: Array[Transform3D] = []
+	for fy in range(fine_h):
+		for fx in range(fine_w):
+			var idx: int = fy * fine_w + fx
+			if fine[idx] == 0:
+				continue
+
+			var center: Vector3 = _dual_fine_cell_center_to_world(fx, fy)
+			var quarter: float = cell_size * 0.25
+			if _dual_fine_get(fine, fine_w, fine_h, fx, fy - 1) == 0:
+				transforms.append(_wall_transform_for_world_center(center + Vector3(0.0, 0.0, -quarter), 0.0))
+			if _dual_fine_get(fine, fine_w, fine_h, fx, fy + 1) == 0:
+				transforms.append(_wall_transform_for_world_center(center + Vector3(0.0, 0.0, quarter), 0.0))
+			if _dual_fine_get(fine, fine_w, fine_h, fx - 1, fy) == 0:
+				transforms.append(_wall_transform_for_world_center(center + Vector3(-quarter, 0.0, 0.0), PI * 0.5))
+			if _dual_fine_get(fine, fine_w, fine_h, fx + 1, fy) == 0:
+				transforms.append(_wall_transform_for_world_center(center + Vector3(quarter, 0.0, 0.0), PI * 0.5))
+
+	_assign_multimesh_transforms(mm, transforms)
+	wall_mmi.multimesh = mm
+
+func _dual_fine_get(fine: PackedByteArray, fine_w: int, fine_h: int, x: int, y: int) -> int:
+	if x < 0 or y < 0 or x >= fine_w or y >= fine_h:
+		return 0
+	return int(fine[y * fine_w + x])
+
+func _dual_fine_cell_center_to_world(fx: int, fy: int) -> Vector3:
+	var tile_x: int = fx >> 1
+	var tile_y: int = fy >> 1
+	var center: Vector3 = _render_tile_to_world_center(tile_x, tile_y)
+	var quarter: float = cell_size * 0.25
+	var sx: int = fx & 1
+	var sy: int = fy & 1
+	center += Vector3(-quarter if sx == 0 else quarter, 0.0, -quarter if sy == 0 else quarter)
+	return center
+
 
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
 	var center: Vector3 = _tile_to_world_center(x, y)
 	var offset: Vector3 = Vector3(local_offset.x * cell_size, 0.0, local_offset.z * cell_size)
 	var pos: Vector3 = center + offset
+	pos.y = wall_height * 0.5
+	return Transform3D(Basis(Vector3.UP, yaw), pos)
+
+func _wall_transform_for_world_center(center: Vector3, yaw: float) -> Transform3D:
+	var pos: Vector3 = center
 	pos.y = wall_height * 0.5
 	return Transform3D(Basis(Vector3.UP, yaw), pos)
 
