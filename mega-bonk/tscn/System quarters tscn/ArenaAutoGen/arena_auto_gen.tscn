@@ -101,8 +101,6 @@ albedo_color = Color(0.3, 0, 0, 1)
 material = SubResource("StandardMaterial3D_rsbvf")
 size = Vector3(4, 0.25, 4)
 
-[sub_resource type="BoxMesh" id="2"]
-size = Vector3(384, 1, 384)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rpn3m"]
 albedo_color = Color(1, 0, 0, 1)
@@ -121,7 +119,7 @@ cell_size = 8.0
 origin_anchor_path = NodePath("GridAnchor")
 bind_to_wire_grid = true
 wire_grid_origin_path = NodePath("GridAnchor")
-wire_grid_bounds_mesh_path = NodePath("GridAnchor/WireGridBounds")
+wire_grid_bounds_mesh_path = NodePath("")
 bounds_override_origin = false
 wire_grid_use_step_size_from_grid = false
 wall_height = 5.0
@@ -143,9 +141,6 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 
 [node name="GridAnchor" type="Node3D" parent="."]
 
-[node name="WireGridBounds" type="MeshInstance3D" parent="GridAnchor"]
-visible = false
-mesh = SubResource("2")
 
 [node name="ArenaWireGrid" type="MeshInstance3D" parent="."]
 
