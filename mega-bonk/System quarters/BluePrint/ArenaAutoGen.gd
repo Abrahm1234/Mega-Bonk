@@ -1569,10 +1569,10 @@ func _dual_h() -> int:
 	return max(grid_h - 1, 0)
 
 func _render_w() -> int:
-	return _dual_w() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_w
+	return grid_w if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_w
 
 func _render_h() -> int:
-	return _dual_h() if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_h
+	return grid_h if layout_mode == LayoutMode.DUAL_FROM_CELLS else grid_h
 
 func _render_tile_idx(x: int, y: int) -> int:
 	return y * _render_w() + x
