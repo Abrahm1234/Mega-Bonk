@@ -40,9 +40,10 @@ So generator quality work should not depend on `bind_to_wire_grid`; keep it off 
   - deterministic per-tile variant selection in `_build_floor_variant_mesh(variant_id, x, y)`
 - Walls:
   - `_build_walls_multimesh()`
-- Optional relaxed visual mesh:
-  - `_update_relaxed_floor_visual()`
-  - `_build_relaxed_floor_mesh()`
+- Optional deformed visual mesh:
+  - `_update_deformed_floor_visual()`
+  - `_build_jittered_corner_lattice()`
+  - `_build_deformed_floor_mesh()`
 
 ---
 
@@ -63,8 +64,8 @@ So generator quality work should not depend on `bind_to_wire_grid`; keep it off 
    - Video late-stage: constraint/model synthesis (WFC-like propagation).
 
 2. **Model deformation stage**
-   - Current: relaxed floor surface mesh only.
-   - Video step: deform placed tile/piece models using handle-style deformation so seams stay connected.
+   - Current: floor tiles are deformed into one visual mesh from a shared jittered corner lattice.
+   - Remaining: extend the same deformation approach to stamped multi-tile pieces/walls if full video parity is required.
 
 3. **Stålberg irregular quad grid stage**
    - Current: rectangular grid logic.
@@ -110,7 +111,7 @@ Leave downstream stages unchanged:
 
 ## 5) Deformation step insertion plan (video-aligned next step)
 
-Goal: move from relaxed floor-only to deformed placed pieces while keeping gameplay grid canonical.
+Goal: extend current deformed floor implementation toward full placed-piece deformation while keeping gameplay grid canonical.
 
 ### Suggested hooks
 - `_build_visual_corner_lattice() -> Array[Vector3]`

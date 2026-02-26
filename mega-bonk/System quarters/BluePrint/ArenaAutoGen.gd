@@ -375,34 +375,115 @@ func _build_jittered_corner_lattice() -> Array[Vector3]:
 
 	return point_positions
 
+func _rotate_uv_steps(uv: Vector2, steps: int) -> Vector2:
+	match (steps & 3):
+		1:
+			return Vector2(uv.y, 1.0 - uv.x)
+		2:
+			return Vector2(1.0 - uv.x, 1.0 - uv.y)
+		3:
+			return Vector2(1.0 - uv.y, uv.x)
+		_:
+			return uv
+
+func _bilerp_quad(p00: Vector3, p10: Vector3, p11: Vector3, p01: Vector3, uv: Vector2) -> Vector3:
+	var a: Vector3 = p00.lerp(p10, uv.x)
+	var b: Vector3 = p01.lerp(p11, uv.x)
+	return a.lerp(b, uv.y)
+
+func _add_deformed_mesh_surface(st: SurfaceTool, mesh: Mesh, quad: Array[Vector3], rotation_steps: int, up: Vector3) -> int:
+	if mesh == null or quad.size() < 4:
+		return 0
+
+	var written: int = 0
+	var p00: Vector3 = quad[0]
+	var p10: Vector3 = quad[1]
+	var p11: Vector3 = quad[2]
+	var p01: Vector3 = quad[3]
+
+	for s in range(mesh.get_surface_count()):
+		var arrays: Array = mesh.surface_get_arrays(s)
+		if arrays.is_empty():
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		if verts.is_empty():
+			continue
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var aabb: AABB = mesh.get_aabb()
+		var sx: float = max(aabb.size.x, 0.0001)
+		var sy: float = max(aabb.size.y, 0.0001)
+		var sz: float = max(aabb.size.z, 0.0001)
+
+		if indices.is_empty():
+			indices.resize(verts.size())
+			for i in range(verts.size()):
+				indices[i] = i
+
+		for index in indices:
+			if index < 0 or index >= verts.size():
+				continue
+			var v: Vector3 = verts[index]
+			var uv_from_pos: Vector2 = Vector2((v.x - aabb.position.x) / sx, (v.z - aabb.position.z) / sz)
+			uv_from_pos = _rotate_uv_steps(uv_from_pos, rotation_steps)
+			var base_pos: Vector3 = _bilerp_quad(p00, p10, p11, p01, uv_from_pos)
+			var y_t: float = (v.y - aabb.position.y) / sy
+			var y_offset: float = (y_t - 1.0) * floor_thickness if aabb.size.y >= 0.001 else 0.0
+			var out_pos: Vector3 = base_pos + up * y_offset
+
+			var out_normal: Vector3 = Vector3.UP
+			if not normals.is_empty() and index < normals.size():
+				out_normal = normals[index]
+				out_normal = (Basis(up, rotation_steps * PI * 0.5) * out_normal).normalized()
+
+			var out_uv: Vector2 = uv_from_pos
+			if not uvs.is_empty() and index < uvs.size():
+				out_uv = uvs[index]
+
+			st.set_normal(out_normal)
+			st.set_uv(out_uv)
+			st.add_vertex(out_pos)
+			written += 1
+
+	return written
+
 func _build_deformed_floor_mesh() -> ArrayMesh:
 	var point_positions: Array[Vector3] = _build_jittered_corner_lattice()
-
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var vertex_count: int = 0
+	var grid_xform: Transform3D = _grid_xform_local()
+	var up_dir: Vector3 = grid_xform.basis.y.normalized()
+	if up_dir.length() < 0.001:
+		up_dir = Vector3.UP
 
 	for y in range(grid_h):
 		for x in range(grid_w):
-			if _tile_get(x, y) == 0 or (pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0):
+			if pieces_replace_base_floor and _occupied[_tile_idx(x, y)] != 0:
 				continue
 
-			var p00: Vector3 = point_positions[_corner_idx(x, y)]
-			var p10: Vector3 = point_positions[_corner_idx(x + 1, y)]
-			var p11: Vector3 = point_positions[_corner_idx(x + 1, y + 1)]
-			var p01: Vector3 = point_positions[_corner_idx(x, y + 1)]
+			var mask: int = _mask_at_tile(x, y)
+			if mask == CANONICAL_EMPTY:
+				continue
 
-			st.set_normal(Vector3.UP)
-			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p00)
-			st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p10)
-			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p11)
-			vertex_count += 3
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var variant_id: String = str(canonical.get("variant_id", ""))
+			if variant_id == "empty" or variant_id == "unknown":
+				continue
 
-			st.set_normal(Vector3.UP)
-			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p00)
-			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p11)
-			st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p01)
-			vertex_count += 3
+			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
+			if mesh == null:
+				continue
+			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
+
+			var quad: Array[Vector3] = [
+				point_positions[_corner_idx(x, y)],
+				point_positions[_corner_idx(x + 1, y)],
+				point_positions[_corner_idx(x + 1, y + 1)],
+				point_positions[_corner_idx(x, y + 1)],
+			]
+			vertex_count += _add_deformed_mesh_surface(st, mesh, quad, rotation_steps, up_dir)
 
 	if vertex_count == 0:
 		return ArrayMesh.new()
