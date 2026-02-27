@@ -494,13 +494,8 @@ func _update_wire_grid_debug() -> void:
 	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
 		main_w = _render_w()
 		main_h = _render_h()
-		main_off_x = cell_size * 0.5
-		main_off_z = cell_size * 0.5
-
 		dual_w = grid_w
 		dual_h = grid_h
-		dual_off_x = 0.0
-		dual_off_z = 0.0
 
 	if wire_grid_main_mi != null:
 		wire_grid_main_mi.visible = show_wire_grid and show_main_grid_overlay
@@ -1829,19 +1824,7 @@ func _dual_fine_get(fine: PackedByteArray, fine_w: int, fine_h: int, x: int, y: 
 	return int(fine[y * fine_w + x])
 
 func _dual_fine_cell_center_to_world(fx: int, fy: int) -> Vector3:
-	var tile_x: int = fx >> 1
-	var tile_y: int = fy >> 1
-	var center: Vector3 = _render_tile_to_world_center(tile_x, tile_y)
-	var sx: int = fx & 1
-	var sy: int = fy & 1
-	var bit: int = BIT_BL
-	if sx == 0 and sy == 1:
-		bit = BIT_TL
-	elif sx == 1 and sy == 1:
-		bit = BIT_TR
-	elif sx == 1 and sy == 0:
-		bit = BIT_BR
-	return center + _dual_slot_offset_for_bit(bit)
+	return _fine_center_ws(fx, fy)
 
 
 func _wall_transform_for_edge(x: int, y: int, local_offset: Vector3, yaw: float) -> Transform3D:
@@ -2020,12 +2003,10 @@ func _grid_xform_local() -> Transform3D:
 	return Transform3D(Basis.IDENTITY, origin_offset)
 
 func _corner_to_world(x: int, y: int) -> Vector3:
-	var grid_xform: Transform3D = _grid_xform_local()
-	return grid_xform * Vector3(x * cell_size, 0.0, y * cell_size)
+	return _orange_corner_ws(x, y)
 
 func _tile_to_world_center(x: int, y: int) -> Vector3:
-	var grid_xform: Transform3D = _grid_xform_local()
-	return grid_xform * Vector3((x + 0.5) * cell_size, 0.0, (y + 0.5) * cell_size)
+	return _orange_center_ws(x, y)
 
 func _tile_to_world_xform(x: int, y: int, rot_steps: int) -> Transform3D:
 	var center: Vector3 = _tile_to_world_center(x, y)
@@ -2033,8 +2014,34 @@ func _tile_to_world_xform(x: int, y: int, rot_steps: int) -> Transform3D:
 	return Transform3D(Basis(Vector3.UP, yaw), center)
 
 func _tile_to_world_center_f(xf: float, yf: float) -> Vector3:
-	var grid_xform: Transform3D = _grid_xform_local()
-	return grid_xform * Vector3((xf + 0.5) * cell_size, 0.0, (yf + 0.5) * cell_size)
+	var origin: Vector3 = _origin_ws()
+	return Vector3(origin.x + (xf + 0.5) * cell_size, origin.y, origin.z + (yf + 0.5) * cell_size)
+
+func _origin_ws() -> Vector3:
+	return _grid_xform_local().origin
+
+func _orange_corner_ws(cx: int, cy: int) -> Vector3:
+	var origin: Vector3 = _origin_ws()
+	return Vector3(origin.x + cx * cell_size, origin.y, origin.z + cy * cell_size)
+
+func _orange_center_ws(cx: int, cy: int) -> Vector3:
+	var origin: Vector3 = _origin_ws()
+	return Vector3(origin.x + (cx + 0.5) * cell_size, origin.y, origin.z + (cy + 0.5) * cell_size)
+
+func _fine_center_ws(fx: int, fy: int) -> Vector3:
+	var tile_x: int = fx >> 1
+	var tile_y: int = fy >> 1
+	var center: Vector3 = _orange_center_ws(tile_x, tile_y)
+	var sx: int = fx & 1
+	var sy: int = fy & 1
+	var bit: int = BIT_BL
+	if sx == 0 and sy == 1:
+		bit = BIT_TL
+	elif sx == 1 and sy == 1:
+		bit = BIT_TR
+	elif sx == 1 and sy == 0:
+		bit = BIT_BR
+	return center + _dual_slot_offset_for_bit(bit)
 
 func _cell_idx(x: int, y: int) -> int:
 	return y * grid_w + x
