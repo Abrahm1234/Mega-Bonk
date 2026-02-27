@@ -285,65 +285,44 @@ func _update_bounds_mesh_from_grid() -> void:
 func _append_wire_grid_plane_lines(m: ImmediateMesh, w: int, h: int, step: float, gx: Transform3D, y: float, offset_x: float, offset_z: float) -> void:
 	var max_x: float = float(w) * step
 	var max_z: float = float(h) * step
+	var up: Vector3 = gx.basis.y
+	var yoff: Vector3 = up * y
 
 	for x in range(w + 1):
 		var px: float = float(x) * step + offset_x
-		var a: Vector3 = gx * Vector3(px, 0.0, offset_z)
-		var b: Vector3 = gx * Vector3(px, 0.0, max_z + offset_z)
-		a.y += y
-		b.y += y
+		var a: Vector3 = gx * Vector3(px, 0.0, 0.0) + yoff
+		var b: Vector3 = gx * Vector3(px, 0.0, max_z) + yoff
 		m.surface_add_vertex(a)
 		m.surface_add_vertex(b)
 
 	for z in range(h + 1):
 		var pz: float = float(z) * step + offset_z
-		var a2: Vector3 = gx * Vector3(offset_x, 0.0, pz)
-		var b2: Vector3 = gx * Vector3(max_x + offset_x, 0.0, pz)
-		a2.y += y
-		b2.y += y
-		m.surface_add_vertex(a2)
-		m.surface_add_vertex(b2)
+		var a: Vector3 = gx * Vector3(0.0, 0.0, pz) + yoff
+		var b: Vector3 = gx * Vector3(max_x, 0.0, pz) + yoff
+		m.surface_add_vertex(a)
+		m.surface_add_vertex(b)
 
 func _build_wire_grid_mesh_offset(w: int, h: int, step: float, gx: Transform3D, offset_x: float, offset_z: float) -> ImmediateMesh:
 	var m: ImmediateMesh = ImmediateMesh.new()
 	m.surface_begin(Mesh.PRIMITIVE_LINES)
 	_append_wire_grid_plane_lines(m, w, h, step, gx, wire_grid_y, offset_x, offset_z)
 
-	if offset_x == 0.0 and offset_z == 0.0 and wire_grid_draw_volume:
-		var max_x: float = float(w) * step
-		var max_z: float = float(h) * step
-		var y: float = wire_grid_y
-		var height: float = float(max(wire_grid_height_cells, 1)) * step
+	if wire_grid_draw_volume and wire_grid_height_cells > 0:
+		var up: Vector3 = gx.basis.y
+		var y0: float = wire_grid_y
+		var y1: float = wire_grid_y + float(wire_grid_height_cells) * step
+
+		for yi in range(1, wire_grid_height_cells + 1):
+			var y: float = wire_grid_y + float(yi) * step
+			_append_wire_grid_plane_lines(m, w, h, step, gx, y, offset_x, offset_z)
+
 		for x in range(w + 1):
-			var px2: float = float(x) * step
-			var b0: Vector3 = gx * Vector3(px2, 0.0, 0.0)
-			var b1: Vector3 = gx * Vector3(px2, 0.0, max_z)
-			m.surface_add_vertex(b0 + Vector3(0.0, y, 0.0))
-			m.surface_add_vertex(b0 + Vector3(0.0, y + height, 0.0))
-			m.surface_add_vertex(b1 + Vector3(0.0, y, 0.0))
-			m.surface_add_vertex(b1 + Vector3(0.0, y + height, 0.0))
-
-		for z in range(h + 1):
-			var pz2: float = float(z) * step
-			var c0: Vector3 = gx * Vector3(0.0, 0.0, pz2)
-			var c1: Vector3 = gx * Vector3(max_x, 0.0, pz2)
-			m.surface_add_vertex(c0 + Vector3(0.0, y, 0.0))
-			m.surface_add_vertex(c0 + Vector3(0.0, y + height, 0.0))
-			m.surface_add_vertex(c1 + Vector3(0.0, y, 0.0))
-			m.surface_add_vertex(c1 + Vector3(0.0, y + height, 0.0))
-
-		var t00: Vector3 = gx * Vector3(0.0, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
-		var t10: Vector3 = gx * Vector3(max_x, 0.0, 0.0) + Vector3(0.0, y + height, 0.0)
-		var t11: Vector3 = gx * Vector3(max_x, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
-		var t01: Vector3 = gx * Vector3(0.0, 0.0, max_z) + Vector3(0.0, y + height, 0.0)
-		m.surface_add_vertex(t00)
-		m.surface_add_vertex(t10)
-		m.surface_add_vertex(t10)
-		m.surface_add_vertex(t11)
-		m.surface_add_vertex(t11)
-		m.surface_add_vertex(t01)
-		m.surface_add_vertex(t01)
-		m.surface_add_vertex(t00)
+			var px: float = float(x) * step + offset_x
+			for z in range(h + 1):
+				var pz: float = float(z) * step + offset_z
+				var base: Vector3 = gx * Vector3(px, 0.0, pz)
+				m.surface_add_vertex(base + up * y0)
+				m.surface_add_vertex(base + up * y1)
 
 	m.surface_end()
 	return m
