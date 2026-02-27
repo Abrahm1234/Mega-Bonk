@@ -764,6 +764,14 @@ func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 
 	return AABB(min_v, max_v - min_v)
 
+func _disable_legacy_renderers_for_dual_mode() -> void:
+	if floor_mmi != null:
+		floor_mmi.multimesh = null
+	if wall_mmi != null and _has_variant_wall_nodes():
+		wall_mmi.multimesh = null
+	if _deformed_floor_mi != null:
+		_deformed_floor_mi.visible = false
+
 func generate() -> void:
 	if grid_w <= 0 or grid_h <= 0:
 		push_error("ArenaAutoGen: grid_w and grid_h must be > 0")
@@ -793,6 +801,7 @@ func generate() -> void:
 		_occupied = PackedByteArray()
 		_occupied.resize(_render_w() * _render_h())
 
+		_disable_legacy_renderers_for_dual_mode()
 		_build_floor_multimeshes()
 		if make_walls:
 			_build_walls_from_cells()
@@ -1154,7 +1163,7 @@ func _pattern_anchor_to_world(x: int, y: int, size: Vector2i) -> Vector3:
 func _build_floor_multimeshes() -> void:
 	if _has_variant_floor_nodes():
 		if layout_mode == LayoutMode.DUAL_FROM_CELLS:
-			_build_floor_dual_slot_multimeshes()
+			_build_floor_dual_variant_multimeshes()
 			if floor_mmi != null:
 				floor_mmi.multimesh = null
 			return
@@ -1163,6 +1172,74 @@ func _build_floor_multimeshes() -> void:
 			floor_mmi.multimesh = null
 		return
 	_build_floor_multimesh_legacy()
+
+func _mask_from_fine_2x2(fine: PackedByteArray, x: int, y: int, fine_w: int, fine_h: int) -> int:
+	var col: int = x * 2
+	var row0: int = y * 2
+	var row1: int = y * 2 + 1
+	var mask: int = 0
+	if _dual_fine_get(fine, fine_w, fine_h, col, row1) != 0:
+		mask |= BIT_TL
+	if _dual_fine_get(fine, fine_w, fine_h, col + 1, row1) != 0:
+		mask |= BIT_TR
+	if _dual_fine_get(fine, fine_w, fine_h, col + 1, row0) != 0:
+		mask |= BIT_BR
+	if _dual_fine_get(fine, fine_w, fine_h, col, row0) != 0:
+		mask |= BIT_BL
+	return mask
+
+func _build_floor_dual_variant_multimeshes() -> void:
+	if floor_full_mmi == null or floor_edge_mmi == null or floor_corner_mmi == null or floor_inverse_corner_mmi == null or floor_checker_mmi == null:
+		return
+
+	var fine_w: int = grid_w * 2
+	var fine_h: int = grid_h * 2
+	var fine_floor: PackedByteArray = _build_dual_floor_fine_occupancy()
+	var mesh_transform_buckets: Dictionary = {
+		"full": {},
+		"edge": {},
+		"corner": {},
+		"inverse_corner": {},
+		"checker": {},
+	}
+	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
+	var counts: Dictionary = {"corner": 0, "edge": 0, "checker": 0, "inverse_corner": 0, "full": 0, "empty": 0}
+
+	for y in range(grid_h):
+		for x in range(grid_w):
+			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_cell_idx(x, y)] != 0:
+				continue
+
+			var mask: int = _mask_from_fine_2x2(fine_floor, x, y, fine_w, fine_h)
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var variant_id: String = str(canonical.get("variant_id", ""))
+			if variant_id == "" or variant_id == "empty":
+				counts["empty"] = int(counts.get("empty", 0)) + 1
+				continue
+			if not mesh_transform_buckets.has(variant_id):
+				continue
+			counts[variant_id] = int(counts.get(variant_id, 0)) + 1
+
+			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
+			if mesh == null:
+				continue
+
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
+			pos.y = floor_thickness * 0.5
+			var yaw: float = -float(canonical.get("rotation_steps", 0)) * PI * 0.5
+			var transforms: Array = (mesh_transform_buckets[variant_id] as Dictionary).get(mesh, []) as Array
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, yaw, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+			(mesh_transform_buckets[variant_id] as Dictionary)[mesh] = transforms
+
+	print("floor dual variant counts: ", counts)
+	_assign_variant_mesh_group(floor_full_mmi, mesh_transform_buckets["full"] as Dictionary)
+	_assign_variant_mesh_group(floor_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
+	_assign_variant_mesh_group(floor_corner_mmi, mesh_transform_buckets["corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_inverse_corner_mmi, mesh_transform_buckets["inverse_corner"] as Dictionary)
+	_assign_variant_mesh_group(floor_checker_mmi, mesh_transform_buckets["checker"] as Dictionary)
 
 func _build_floor_dual_slot_multimeshes() -> void:
 	if floor_full_mmi == null or floor_edge_mmi == null or floor_corner_mmi == null or floor_inverse_corner_mmi == null or floor_checker_mmi == null:
@@ -1459,19 +1536,20 @@ func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> 
 
 func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
 	if use_canonical_single_meshes:
+		var single: Mesh = null
 		match variant_id:
 			"full":
-				return mesh_full
+				single = mesh_full
 			"edge":
-				return mesh_edge
+				single = mesh_edge
 			"corner":
-				return mesh_corner
+				single = mesh_corner
 			"inverse_corner":
-				return mesh_inverse_corner
+				single = mesh_inverse_corner
 			"checker":
-				return mesh_checker
-			_:
-				return null
+				single = mesh_checker
+		if single != null:
+			return single
 
 	var variants: Array[Mesh] = _dual_floor_variant_mesh_array(variant_id)
 	if not variants.is_empty():
