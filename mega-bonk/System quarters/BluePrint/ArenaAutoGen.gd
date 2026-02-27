@@ -184,6 +184,7 @@ func _ready() -> void:
 		_mesh_variant_seed = seed_value
 
 	_ensure_deformed_floor_node()
+	_init_variant_mmis()
 
 	if bind_to_wire_grid:
 		call_deferred("_sync_and_generate_if_needed")
@@ -1524,6 +1525,29 @@ func _clear_wall_variant_multimeshes() -> void:
 	if wall_corner_mmi != null:
 		wall_corner_mmi.multimesh = null
 
+func _ensure_unique_mm(mmi: MultiMeshInstance3D) -> void:
+	if mmi == null:
+		return
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mmi.multimesh = mm
+
+func _init_variant_mmis() -> void:
+	var targets: Array[MultiMeshInstance3D] = [
+		floor_full_mmi,
+		floor_edge_mmi,
+		floor_corner_mmi,
+		floor_inverse_corner_mmi,
+		floor_checker_mmi,
+		wall_full_mmi,
+		wall_edge_mmi,
+		wall_corner_mmi,
+		wall_inverse_corner_mmi,
+		wall_checker_mmi,
+	]
+	for target in targets:
+		_ensure_unique_mm(target)
+
 func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> int:
 	if count <= 1:
 		return 0
@@ -1636,7 +1660,8 @@ func _build_walls_from_cells() -> void:
 		if _build_walls_dual_variant_multimeshes():
 			return
 		_clear_wall_variant_multimeshes()
-		_build_walls_from_dual_fine_grid()
+		if wall_mmi != null:
+			wall_mmi.multimesh = null
 		return
 	_clear_wall_variant_multimeshes()
 
@@ -1668,18 +1693,15 @@ func _build_dual_floor_fine_occupancy() -> PackedByteArray:
 	fine.resize(fine_w * fine_h)
 	for y in range(grid_h):
 		for x in range(grid_w):
-			var mask: int = _mask_at_dual_tile(x, y)
+			if _cell_get(x, y) == 0:
+				continue
 			var row0: int = (y * 2) * fine_w
 			var row1: int = (y * 2 + 1) * fine_w
 			var col: int = x * 2
-			if (mask & BIT_TL) != 0:
-				fine[row1 + col] = 1
-			if (mask & BIT_TR) != 0:
-				fine[row1 + col + 1] = 1
-			if (mask & BIT_BR) != 0:
-				fine[row0 + col + 1] = 1
-			if (mask & BIT_BL) != 0:
-				fine[row0 + col] = 1
+			fine[row1 + col] = 1
+			fine[row1 + col + 1] = 1
+			fine[row0 + col + 1] = 1
+			fine[row0 + col] = 1
 	return fine
 
 func _build_dual_wall_fine_ring(floor_fine: PackedByteArray, fine_w: int, fine_h: int) -> PackedByteArray:
@@ -1968,6 +1990,8 @@ func _fit_canonical_tile_transform(mesh: Mesh, desired_size: Vector3, yaw: float
 
 	var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
 	var aabb: AABB = mesh.get_aabb()
+	if aabb.size.x < 0.0001 or aabb.size.z < 0.0001:
+		push_warning("ArenaAutoGen: mesh has zero-ish AABB in X/Z; check Custom AABB/export for %s" % [str(mesh)])
 	var sy: float = max(aabb.size.y, 0.0001)
 	var scale: Vector3 = Vector3(desired.x / sxz, desired.y / sy, desired.z / sxz)
 	if aabb.size.y < 0.001:

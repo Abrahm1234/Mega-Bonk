@@ -115,6 +115,7 @@ mesh = SubResource("1")
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
 origin_anchor_path = NodePath("GridAnchor")
+layout_mode = 1
 bind_to_wire_grid = true
 wire_grid_origin_path = NodePath("GridAnchor")
 wall_height = 5.0
