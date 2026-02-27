@@ -165,6 +165,21 @@ multimesh = SubResource("3")
 [node name="WallTiles" type="MultiMeshInstance3D" parent="Arena"]
 multimesh = SubResource("3")
 
+[node name="Wall_full" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_inverse_corner" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_edge" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_checker" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_corner" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
 [node name="Floor_full" type="MultiMeshInstance3D" parent="Arena"]
 multimesh = SubResource("3")
 

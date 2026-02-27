@@ -96,6 +96,20 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @export var mesh_inverse_corner_variants: Array[Mesh] = []
 @export var mesh_checker_variants: Array[Mesh] = []
 
+@export_category("Dual Floor Tiles (6-state)")
+@export var floor_mesh_full_variants: Array[Mesh] = []
+@export var floor_mesh_inverse_corner_variants: Array[Mesh] = []
+@export var floor_mesh_edge_variants: Array[Mesh] = []
+@export var floor_mesh_checker_variants: Array[Mesh] = []
+@export var floor_mesh_corner_variants: Array[Mesh] = []
+
+@export_category("Dual Wall Tiles (6-state)")
+@export var wall_mesh_full_variants: Array[Mesh] = []
+@export var wall_mesh_inverse_corner_variants: Array[Mesh] = []
+@export var wall_mesh_edge_variants: Array[Mesh] = []
+@export var wall_mesh_checker_variants: Array[Mesh] = []
+@export var wall_mesh_corner_variants: Array[Mesh] = []
+
 @export var piece_mesh_3x3_full: Mesh
 @export var piece_mesh_2x3_full: Mesh
 @export var piece_mesh_2x2_full: Mesh
@@ -124,6 +138,11 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @onready var piece_corner_cluster_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Piece_corner_cluster") as MultiMeshInstance3D
 
 @onready var wall_mmi: MultiMeshInstance3D = $"Arena/WallTiles" as MultiMeshInstance3D
+@onready var wall_full_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Wall_full") as MultiMeshInstance3D
+@onready var wall_inverse_corner_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Wall_inverse_corner") as MultiMeshInstance3D
+@onready var wall_edge_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Wall_edge") as MultiMeshInstance3D
+@onready var wall_checker_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Wall_checker") as MultiMeshInstance3D
+@onready var wall_corner_mmi: MultiMeshInstance3D = get_node_or_null("Arena/Wall_corner") as MultiMeshInstance3D
 @onready var wire_grid_main_mi: MeshInstance3D = get_node_or_null("ArenaWireGridMain") as MeshInstance3D
 @onready var wire_grid_dual_mi: MeshInstance3D = get_node_or_null("ArenaWireGridDual") as MeshInstance3D
 @onready var dual_points_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualGridPoints") as MultiMeshInstance3D
@@ -147,8 +166,8 @@ var _deformed_noise_seed: int = 0
 var _mesh_variant_seed: int = 0
 
 func _ready() -> void:
-	if make_walls and wall_mmi == null:
-		push_error("ArenaAutoGen: Missing MultiMeshInstance3D node at Arena/WallTiles")
+	if make_walls and wall_mmi == null and not _has_variant_wall_nodes():
+		push_error("ArenaAutoGen: Missing wall renderer. Add Arena/WallTiles or variant nodes Arena/Wall_*")
 		return
 
 	if not _has_variant_floor_nodes() and floor_mmi == null:
@@ -1377,6 +1396,57 @@ func _variant_mesh_array(variant_id: String) -> Array[Mesh]:
 			return mesh_checker_variants
 	return []
 
+func _dual_floor_variant_mesh_array(variant_id: String) -> Array[Mesh]:
+	match variant_id:
+		"full":
+			if not floor_mesh_full_variants.is_empty():
+				return floor_mesh_full_variants
+		"inverse_corner":
+			if not floor_mesh_inverse_corner_variants.is_empty():
+				return floor_mesh_inverse_corner_variants
+		"edge":
+			if not floor_mesh_edge_variants.is_empty():
+				return floor_mesh_edge_variants
+		"checker":
+			if not floor_mesh_checker_variants.is_empty():
+				return floor_mesh_checker_variants
+		"corner":
+			if not floor_mesh_corner_variants.is_empty():
+				return floor_mesh_corner_variants
+	return _variant_mesh_array(variant_id)
+
+func _wall_variant_mesh_array(variant_id: String) -> Array[Mesh]:
+	match variant_id:
+		"full":
+			return wall_mesh_full_variants
+		"inverse_corner":
+			return wall_mesh_inverse_corner_variants
+		"edge":
+			return wall_mesh_edge_variants
+		"checker":
+			return wall_mesh_checker_variants
+		"corner":
+			return wall_mesh_corner_variants
+	return []
+
+func _has_variant_wall_nodes() -> bool:
+	return wall_full_mmi != null and wall_inverse_corner_mmi != null and wall_edge_mmi != null and wall_checker_mmi != null and wall_corner_mmi != null
+
+func _has_configured_wall_variant_meshes() -> bool:
+	return not wall_mesh_full_variants.is_empty() or not wall_mesh_inverse_corner_variants.is_empty() or not wall_mesh_edge_variants.is_empty() or not wall_mesh_checker_variants.is_empty() or not wall_mesh_corner_variants.is_empty()
+
+func _clear_wall_variant_multimeshes() -> void:
+	if wall_full_mmi != null:
+		wall_full_mmi.multimesh = null
+	if wall_inverse_corner_mmi != null:
+		wall_inverse_corner_mmi.multimesh = null
+	if wall_edge_mmi != null:
+		wall_edge_mmi.multimesh = null
+	if wall_checker_mmi != null:
+		wall_checker_mmi.multimesh = null
+	if wall_corner_mmi != null:
+		wall_corner_mmi.multimesh = null
+
 func _variant_index_for_tile(variant_id: String, x: int, y: int, count: int) -> int:
 	if count <= 1:
 		return 0
@@ -1403,7 +1473,7 @@ func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
 			_:
 				return null
 
-	var variants: Array[Mesh] = _variant_mesh_array(variant_id)
+	var variants: Array[Mesh] = _dual_floor_variant_mesh_array(variant_id)
 	if not variants.is_empty():
 		var idx: int = _variant_index_for_tile(variant_id, x, y, variants.size())
 		var selected: Mesh = variants[idx]
@@ -1421,6 +1491,19 @@ func _build_floor_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
 		"checker": mesh.size = Vector3(cell_size * 0.75, floor_thickness, cell_size * 0.75)
 		_: mesh.size = Vector3(cell_size, floor_thickness, cell_size)
 	return mesh
+
+func _build_wall_variant_mesh(variant_id: String, x: int, y: int) -> Mesh:
+	var variants: Array[Mesh] = _wall_variant_mesh_array(variant_id)
+	if variants.is_empty():
+		return null
+	var idx: int = _variant_index_for_tile(variant_id, x, y, variants.size())
+	var selected: Mesh = variants[idx]
+	if selected != null:
+		return selected
+	for fallback in variants:
+		if fallback != null:
+			return fallback
+	return null
 
 func _assign_variant_mesh_group(target: MultiMeshInstance3D, mesh_to_transforms: Dictionary) -> void:
 	if target == null:
@@ -1469,11 +1552,15 @@ func _build_walls_multimesh() -> void:
 	wall_mmi.multimesh = mm
 
 func _build_walls_from_cells() -> void:
-	if wall_mmi == null:
+	if wall_mmi == null and not _has_variant_wall_nodes():
 		return
 	if layout_mode == LayoutMode.DUAL_FROM_CELLS:
+		if _build_walls_dual_variant_multimeshes():
+			return
+		_clear_wall_variant_multimeshes()
 		_build_walls_from_dual_fine_grid()
 		return
+	_clear_wall_variant_multimeshes()
 
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -1496,18 +1583,14 @@ func _build_walls_from_cells() -> void:
 	_assign_multimesh_transforms(mm, transforms)
 	wall_mmi.multimesh = mm
 
-func _build_walls_from_dual_fine_grid() -> void:
-	var fine_w: int = _render_w() * 2
-	var fine_h: int = _render_h() * 2
-	if fine_w <= 0 or fine_h <= 0:
-		wall_mmi.multimesh = null
-		return
-
+func _build_dual_floor_fine_occupancy() -> PackedByteArray:
+	var fine_w: int = grid_w * 2
+	var fine_h: int = grid_h * 2
 	var fine: PackedByteArray = PackedByteArray()
 	fine.resize(fine_w * fine_h)
-	for y in range(_render_h()):
-		for x in range(_render_w()):
-			var mask: int = _mask_at_render_tile(x, y)
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var mask: int = _mask_at_dual_tile(x, y)
 			var row0: int = (y * 2) * fine_w
 			var row1: int = (y * 2 + 1) * fine_w
 			var col: int = x * 2
@@ -1519,6 +1602,99 @@ func _build_walls_from_dual_fine_grid() -> void:
 				fine[row0 + col + 1] = 1
 			if (mask & BIT_BL) != 0:
 				fine[row0 + col] = 1
+	return fine
+
+func _build_dual_wall_fine_ring(floor_fine: PackedByteArray, fine_w: int, fine_h: int) -> PackedByteArray:
+	var ring: PackedByteArray = PackedByteArray()
+	ring.resize(fine_w * fine_h)
+	for fy in range(fine_h):
+		for fx in range(fine_w):
+			var idx: int = fy * fine_w + fx
+			if floor_fine[idx] != 0:
+				continue
+			if _dual_fine_get(floor_fine, fine_w, fine_h, fx - 1, fy) != 0 or _dual_fine_get(floor_fine, fine_w, fine_h, fx + 1, fy) != 0 or _dual_fine_get(floor_fine, fine_w, fine_h, fx, fy - 1) != 0 or _dual_fine_get(floor_fine, fine_w, fine_h, fx, fy + 1) != 0:
+				ring[idx] = 1
+	return ring
+
+func _wall_mask_at_dual_tile(wall_fine: PackedByteArray, x: int, y: int, fine_w: int, fine_h: int) -> int:
+	var col: int = x * 2
+	var row0: int = y * 2
+	var row1: int = y * 2 + 1
+	var mask: int = 0
+	if _dual_fine_get(wall_fine, fine_w, fine_h, col, row1) != 0:
+		mask |= BIT_TL
+	if _dual_fine_get(wall_fine, fine_w, fine_h, col + 1, row1) != 0:
+		mask |= BIT_TR
+	if _dual_fine_get(wall_fine, fine_w, fine_h, col + 1, row0) != 0:
+		mask |= BIT_BR
+	if _dual_fine_get(wall_fine, fine_w, fine_h, col, row0) != 0:
+		mask |= BIT_BL
+	return mask
+
+func _build_walls_dual_variant_multimeshes() -> bool:
+	if not _has_variant_wall_nodes() or not _has_configured_wall_variant_meshes():
+		return false
+	var fine_w: int = grid_w * 2
+	var fine_h: int = grid_h * 2
+	if fine_w <= 0 or fine_h <= 0:
+		_clear_wall_variant_multimeshes()
+		if wall_mmi != null:
+			wall_mmi.multimesh = null
+		return true
+
+	var floor_fine: PackedByteArray = _build_dual_floor_fine_occupancy()
+	var wall_fine: PackedByteArray = _build_dual_wall_fine_ring(floor_fine, fine_w, fine_h)
+	var mesh_transform_buckets: Dictionary = {
+		"full": {},
+		"edge": {},
+		"corner": {},
+		"inverse_corner": {},
+		"checker": {},
+	}
+	var desired: Vector3 = Vector3(cell_size, wall_height, cell_size)
+	var counts: Dictionary = {"corner": 0, "edge": 0, "checker": 0, "inverse_corner": 0, "full": 0, "empty": 0}
+	for y in range(grid_h):
+		for x in range(grid_w):
+			var mask: int = _wall_mask_at_dual_tile(wall_fine, x, y, fine_w, fine_h)
+			var canonical: Dictionary = _canonicalize_mask(mask)
+			var variant_id: String = str(canonical.get("variant_id", ""))
+			if variant_id == "" or variant_id == "empty":
+				counts["empty"] = int(counts.get("empty", 0)) + 1
+				continue
+			if not mesh_transform_buckets.has(variant_id):
+				continue
+			counts[variant_id] = int(counts.get(variant_id, 0)) + 1
+			var mesh: Mesh = _build_wall_variant_mesh(variant_id, x, y)
+			if mesh == null:
+				continue
+			var yaw: float = -float(canonical.get("rotation_steps", 0)) * PI * 0.5
+			var pos: Vector3 = _render_tile_to_world_center(x, y)
+			pos.y = wall_height * 0.5
+			var transforms: Array = (mesh_transform_buckets[variant_id] as Dictionary).get(mesh, []) as Array
+			if use_canonical_single_meshes:
+				transforms.append(_fit_canonical_tile_transform(mesh, desired, yaw, pos))
+			else:
+				transforms.append(_fit_mesh_transform(mesh, desired, yaw, pos))
+			(mesh_transform_buckets[variant_id] as Dictionary)[mesh] = transforms
+
+	print("wall dual variant counts: ", counts)
+	_assign_variant_mesh_group(wall_full_mmi, mesh_transform_buckets["full"] as Dictionary)
+	_assign_variant_mesh_group(wall_edge_mmi, mesh_transform_buckets["edge"] as Dictionary)
+	_assign_variant_mesh_group(wall_corner_mmi, mesh_transform_buckets["corner"] as Dictionary)
+	_assign_variant_mesh_group(wall_inverse_corner_mmi, mesh_transform_buckets["inverse_corner"] as Dictionary)
+	_assign_variant_mesh_group(wall_checker_mmi, mesh_transform_buckets["checker"] as Dictionary)
+	if wall_mmi != null:
+		wall_mmi.multimesh = null
+	return true
+
+func _build_walls_from_dual_fine_grid() -> void:
+	var fine_w: int = _render_w() * 2
+	var fine_h: int = _render_h() * 2
+	if fine_w <= 0 or fine_h <= 0:
+		wall_mmi.multimesh = null
+		return
+
+	var fine: PackedByteArray = _build_dual_floor_fine_occupancy()
 
 	var mm: MultiMesh = MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
