@@ -1420,6 +1420,34 @@ func _clear_wall_variant_multimeshes() -> void:
 	if wall_corner_mmi != null:
 		wall_corner_mmi.multimesh = null
 
+func _clear_floor_variant_multimeshes() -> void:
+	if floor_full_mmi != null:
+		floor_full_mmi.multimesh = null
+	if floor_inverse_corner_mmi != null:
+		floor_inverse_corner_mmi.multimesh = null
+	if floor_edge_mmi != null:
+		floor_edge_mmi.multimesh = null
+	if floor_checker_mmi != null:
+		floor_checker_mmi.multimesh = null
+	if floor_corner_mmi != null:
+		floor_corner_mmi.multimesh = null
+
+func _clear_piece_multimeshes() -> void:
+	var targets: Array[MultiMeshInstance3D] = [
+		piece_3x3_full_mmi,
+		piece_2x3_full_mmi,
+		piece_2x2_full_mmi,
+		piece_5x1_edge_mmi,
+		piece_4x1_edge_mmi,
+		piece_3x1_edge_mmi,
+		piece_3x2_bay_mmi,
+		piece_2x2_bay_mmi,
+		piece_corner_cluster_mmi,
+	]
+	for t in targets:
+		if t != null:
+			t.multimesh = null
+
 func _ensure_unique_mm(mmi: MultiMeshInstance3D) -> void:
 	if mmi == null:
 		return
