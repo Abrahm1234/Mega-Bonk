@@ -1,6 +1,8 @@
 extends Node3D
 class_name ArenaAutoGen
 
+const IrregularQuadGrid = preload("res://System quarters/BluePrint/IrregularQuadGrid.gd")
+
 const DIRS4: Array[Vector2i] = [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
@@ -35,12 +37,14 @@ const CANONICAL_CHECKER: int = 0b0101
 
 enum OriginMode { MIN_CORNER, CENTERED, CUSTOM_ANCHOR }
 enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
+enum GridGeometry { RECT_VOXEL, IRREGULAR_PATCH }
 
 @export var origin_mode: OriginMode = OriginMode.CUSTOM_ANCHOR
 @export var origin_offset: Vector3 = Vector3.ZERO
 @export var origin_anchor_path: NodePath
 
 @export var layout_mode: LayoutMode = LayoutMode.LEGACY_CORNERS
+@export var grid_geometry: GridGeometry = GridGeometry.RECT_VOXEL
 
 @export var bind_to_wire_grid: bool = false
 @export var wire_grid_origin_path: NodePath
@@ -65,8 +69,13 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @export var wire_grid_draw_volume: bool = false
 @export var wire_grid_height_cells: int = 48
 @export var debug_grid_action: StringName = &"toggle_arena_grid"
-@export var show_deformed_floor_mesh: bool = false
-@export_range(0.0, 0.2, 0.01) var deformed_offset_fraction: float = 0.15
+
+@export var patch_rings: int = 8
+@export_range(0.0, 1.0, 0.01) var dissolve_chance: float = 0.6
+@export var subdivide_quads: bool = true
+@export var relax_iters: int = 25
+@export_range(0.0, 1.0, 0.01) var relax_alpha: float = 0.45
+@export var patch_tile_radius: int = 1
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -148,6 +157,7 @@ enum LayoutMode { LEGACY_CORNERS, DUAL_FROM_CELLS }
 @onready var dual_points_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualGridPoints") as MultiMeshInstance3D
 @onready var dual_bits_filled_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Filled") as MultiMeshInstance3D
 @onready var dual_bits_empty_mmi: MultiMeshInstance3D = get_node_or_null("ArenaDualBits_Empty") as MultiMeshInstance3D
+@onready var irregular_floor_mi: MeshInstance3D = get_node_or_null("Arena/IrregularFloor") as MeshInstance3D
 
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _corners: PackedByteArray
@@ -160,10 +170,12 @@ var _wire_grid_dual_material: StandardMaterial3D
 var _dual_points_material: StandardMaterial3D
 var _dual_bits_filled_material: StandardMaterial3D
 var _dual_bits_empty_material: StandardMaterial3D
-var _deformed_floor_mi: MeshInstance3D
-var _deformed_floor_material: StandardMaterial3D
-var _deformed_noise_seed: int = 0
 var _mesh_variant_seed: int = 0
+var _ir_points2: Array[Vector2] = []
+var _ir_quads: Array[PackedInt32Array] = []
+var _ir_boundary: PackedByteArray = PackedByteArray()
+var _ir_face_centers2: Array[Vector2] = []
+var _ir_dual_edges: Array[Vector2i] = []
 
 func _ready() -> void:
 	if make_walls and wall_mmi == null and not _has_variant_wall_nodes():
@@ -176,14 +188,11 @@ func _ready() -> void:
 
 	if use_random_seed or randomize_on_run:
 		_rng.randomize()
-		_deformed_noise_seed = int(_rng.randi())
 		_mesh_variant_seed = int(_rng.randi())
 	else:
 		_rng.seed = seed_value
-		_deformed_noise_seed = seed_value
 		_mesh_variant_seed = seed_value
 
-	_ensure_deformed_floor_node()
 	_init_variant_mmis()
 
 	if bind_to_wire_grid:
@@ -195,7 +204,6 @@ func _ready() -> void:
 	else:
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
-		_update_deformed_floor_visual()
 
 func _sync_and_generate_if_needed() -> void:
 	await get_tree().process_frame
@@ -206,7 +214,6 @@ func _sync_and_generate_if_needed() -> void:
 	else:
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
-		_update_deformed_floor_visual()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if InputMap.has_action(debug_grid_action) and event.is_action_pressed(debug_grid_action):
@@ -499,225 +506,119 @@ func _update_wire_grid_debug() -> void:
 	_update_dual_grid_points()
 	_update_dual_bit_boxes()
 
-func _ensure_deformed_floor_node() -> void:
-	if _deformed_floor_mi != null:
-		return
+func _clear_irregular_visuals() -> void:
+	_ir_points2.clear()
+	_ir_quads.clear()
+	_ir_boundary = PackedByteArray()
+	_ir_face_centers2.clear()
+	_ir_dual_edges.clear()
+	if irregular_floor_mi != null:
+		irregular_floor_mi.visible = false
+		irregular_floor_mi.mesh = null
 
-	var existing: Node = get_node_or_null("Arena/DeformedFloor")
-	if existing is MeshInstance3D:
-		_deformed_floor_mi = existing as MeshInstance3D
-		return
+func _generate_irregular_patch_grid() -> void:
+	var rings: int = max(patch_rings, 1)
+	var res: Dictionary = IrregularQuadGrid.build_hex_patch(
+		rings,
+		cell_size,
+		dissolve_chance,
+		subdivide_quads,
+		relax_iters,
+		relax_alpha,
+		_rng
+	)
+	_ir_points2 = res.get("points", [])
+	_ir_quads = res.get("quads", [])
+	_ir_boundary = res.get("boundary", PackedByteArray())
+	_ir_face_centers2 = res.get("face_centers", [])
+	_ir_dual_edges = res.get("dual_edges", [])
 
-	var legacy_existing: Node = get_node_or_null("Arena/RelaxedFloor")
-	if legacy_existing is MeshInstance3D:
-		_deformed_floor_mi = legacy_existing as MeshInstance3D
-		_deformed_floor_mi.name = "DeformedFloor"
-		return
-
-	var arena_root: Node = get_node_or_null("Arena")
-	if arena_root == null:
-		return
-
-	_deformed_floor_mi = MeshInstance3D.new()
-	_deformed_floor_mi.name = "DeformedFloor"
-	_deformed_floor_mi.visible = false
-	arena_root.add_child(_deformed_floor_mi)
-
-func _set_base_floor_visible(visible: bool) -> void:
-	if floor_mmi != null:
-		floor_mmi.visible = visible
-	if floor_full_mmi != null:
-		floor_full_mmi.visible = visible
-	if floor_edge_mmi != null:
-		floor_edge_mmi.visible = visible
-	if floor_corner_mmi != null:
-		floor_corner_mmi.visible = visible
-	if floor_inverse_corner_mmi != null:
-		floor_inverse_corner_mmi.visible = visible
-	if floor_checker_mmi != null:
-		floor_checker_mmi.visible = visible
-
-func _deformed_hash01(x: int, y: int, axis: int) -> float:
-	var seed_mix: int = _deformed_noise_seed
-	var h: int = x * 73856093
-	h ^= y * 19349663
-	h ^= axis * 83492791
-	h ^= seed_mix * 2654435761
-	h &= 0x7fffffff
-	return float(h) / 2147483647.0
-
-func _build_jittered_corner_lattice() -> Array[Vector3]:
-	var max_offset: float = min(max(deformed_offset_fraction, 0.0), 0.2) * cell_size
-	var point_positions: Array[Vector3] = []
-	point_positions.resize(_points_w() * _points_h())
-
-	for py in range(_points_h()):
-		for px in range(_points_w()):
-			var p: Vector3 = _corner_to_world(px, py)
-			var is_border: bool = px == 0 or py == 0 or px == _points_w() - 1 or py == _points_h() - 1
-			var ox: float = 0.0
-			var oz: float = 0.0
-			if not is_border:
-				ox = (_deformed_hash01(px, py, 0) * 2.0 - 1.0) * max_offset
-				oz = (_deformed_hash01(px, py, 1) * 2.0 - 1.0) * max_offset
-			point_positions[_corner_idx(px, py)] = p + Vector3(ox, floor_thickness, oz)
-
-	return point_positions
-
-func _rotate_uv_steps(uv: Vector2, steps: int) -> Vector2:
-	match (steps & 3):
-		1:
-			return Vector2(uv.y, 1.0 - uv.x)
-		2:
-			return Vector2(1.0 - uv.x, 1.0 - uv.y)
-		3:
-			return Vector2(1.0 - uv.y, uv.x)
-		_:
-			return uv
-
-func _bilerp_quad(p00: Vector3, p10: Vector3, p11: Vector3, p01: Vector3, uv: Vector2) -> Vector3:
-	var a: Vector3 = p00.lerp(p10, uv.x)
-	var b: Vector3 = p01.lerp(p11, uv.x)
-	return a.lerp(b, uv.y)
-
-func _add_deformed_mesh_surface(st: SurfaceTool, mesh: Mesh, quad: Array[Vector3], rotation_steps: int, up: Vector3) -> int:
-	if mesh == null or quad.size() < 4:
-		return 0
-
-	var written: int = 0
-	var p00: Vector3 = quad[0]
-	var p10: Vector3 = quad[1]
-	var p11: Vector3 = quad[2]
-	var p01: Vector3 = quad[3]
-
-	for s in range(mesh.get_surface_count()):
-		var arrays: Array = mesh.surface_get_arrays(s)
-		if arrays.is_empty():
-			continue
-		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		if verts.is_empty():
-			continue
-		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
-		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-		var aabb: AABB = mesh.get_aabb()
-		var sx: float = max(aabb.size.x, 0.0001)
-		var sy: float = max(aabb.size.y, 0.0001)
-		var sz: float = max(aabb.size.z, 0.0001)
-
-		if indices.is_empty():
-			indices.resize(verts.size())
-			for i in range(verts.size()):
-				indices[i] = i
-
-		for index in indices:
-			if index < 0 or index >= verts.size():
+func _build_wire_from_quads(points2: Array[Vector2], quads: Array[PackedInt32Array]) -> ImmediateMesh:
+	var gx: Transform3D = _grid_xform_local()
+	var up: Vector3 = gx.basis.y.normalized()
+	if up.length() < 0.001:
+		up = Vector3.UP
+	var m: ImmediateMesh = ImmediateMesh.new()
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	var seen: Dictionary = {}
+	for q in quads:
+		for e in range(4):
+			var a: int = q[e]
+			var b: int = q[(e + 1) % 4]
+			var key: String = "%d_%d" % [min(a, b), max(a, b)]
+			if seen.has(key):
 				continue
-			var v: Vector3 = verts[index]
-			var uv_from_pos: Vector2
-			if use_canonical_single_meshes and canonical_mesh_pivot_is_tile_center:
-				var sxz: float = max(canonical_mesh_tile_xz_size, 0.0001)
-				uv_from_pos = Vector2(v.x / sxz + 0.5, v.z / sxz + 0.5)
-			else:
-				uv_from_pos = Vector2((v.x - aabb.position.x) / sx, (v.z - aabb.position.z) / sz)
-			uv_from_pos = _rotate_uv_steps(uv_from_pos, rotation_steps)
-			var base_pos: Vector3 = _bilerp_quad(p00, p10, p11, p01, uv_from_pos)
-			var y_t: float = (v.y - aabb.position.y) / sy
-			var y_offset: float = (y_t - 1.0) * floor_thickness if aabb.size.y >= 0.001 else 0.0
-			var out_pos: Vector3 = base_pos + up * y_offset
+			seen[key] = true
+			var pa2: Vector2 = points2[a]
+			var pb2: Vector2 = points2[b]
+			var pa3: Vector3 = gx * Vector3(pa2.x, 0.0, pa2.y) + up * wire_grid_y
+			var pb3: Vector3 = gx * Vector3(pb2.x, 0.0, pb2.y) + up * wire_grid_y
+			m.surface_add_vertex(pa3)
+			m.surface_add_vertex(pb3)
+	m.surface_end()
+	return m
 
-			var out_normal: Vector3 = Vector3.UP
-			if not normals.is_empty() and index < normals.size():
-				out_normal = normals[index]
-				out_normal = (Basis(up, rotation_steps * PI * 0.5) * out_normal).normalized()
+func _build_wire_from_dual(centers2: Array[Vector2], dual_edges: Array[Vector2i]) -> ImmediateMesh:
+	var gx: Transform3D = _grid_xform_local()
+	var up: Vector3 = gx.basis.y.normalized()
+	if up.length() < 0.001:
+		up = Vector3.UP
+	var m: ImmediateMesh = ImmediateMesh.new()
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	for e in dual_edges:
+		var a: int = e.x
+		var b: int = e.y
+		if a < 0 or b < 0 or a >= centers2.size() or b >= centers2.size():
+			continue
+		var ca2: Vector2 = centers2[a]
+		var cb2: Vector2 = centers2[b]
+		var ca3: Vector3 = gx * Vector3(ca2.x, 0.0, ca2.y) + up * wire_grid_y
+		var cb3: Vector3 = gx * Vector3(cb2.x, 0.0, cb2.y) + up * wire_grid_y
+		m.surface_add_vertex(ca3)
+		m.surface_add_vertex(cb3)
+	m.surface_end()
+	return m
 
-			var out_uv: Vector2 = uv_from_pos
-			if not uvs.is_empty() and index < uvs.size():
-				out_uv = uvs[index]
+func _update_irregular_wire_debug() -> void:
+	if wire_grid_main_mi != null:
+		wire_grid_main_mi.visible = show_wire_grid and show_main_grid_overlay
+		if wire_grid_main_mi.visible:
+			wire_grid_main_mi.mesh = _build_wire_from_quads(_ir_points2, _ir_quads)
+	if wire_grid_dual_mi != null:
+		wire_grid_dual_mi.visible = show_wire_grid and show_dual_grid_overlay
+		if wire_grid_dual_mi.visible:
+			wire_grid_dual_mi.mesh = _build_wire_from_dual(_ir_face_centers2, _ir_dual_edges)
 
-			st.set_normal(out_normal)
-			st.set_uv(out_uv)
-			st.add_vertex(out_pos)
-			written += 1
-
-	return written
-
-func _build_deformed_floor_mesh() -> ArrayMesh:
-	var point_positions: Array[Vector3] = _build_jittered_corner_lattice()
+func _build_irregular_floor_mesh_debug() -> void:
+	if irregular_floor_mi == null:
+		return
+	var gx: Transform3D = _grid_xform_local()
+	var up: Vector3 = gx.basis.y.normalized()
+	if up.length() < 0.001:
+		up = Vector3.UP
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var vertex_count: int = 0
-	var grid_xform: Transform3D = _grid_xform_local()
-	var up_dir: Vector3 = grid_xform.basis.y.normalized()
-	if up_dir.length() < 0.001:
-		up_dir = Vector3.UP
-
-	for y in range(_render_h()):
-		for x in range(_render_w()):
-			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_render_tile_idx(x, y)] != 0:
-				continue
-
-			var mask: int = _mask_at_render_tile(x, y)
-			if mask == CANONICAL_EMPTY:
-				continue
-
-			var canonical: Dictionary = _canonicalize_mask(mask)
-			var variant_id: String = str(canonical.get("variant_id", ""))
-			if variant_id == "empty" or variant_id == "unknown":
-				continue
-
-			var mesh: Mesh = _build_floor_variant_mesh(variant_id, x, y)
-			if mesh == null:
-				continue
-			var rotation_steps: int = int(canonical.get("rotation_steps", 0))
-
-			var qx: int = x
-			var qy: int = y
-			if layout_mode == LayoutMode.DUAL_FROM_CELLS:
-				qx += 1
-				qy += 1
-			var quad: Array[Vector3] = [
-				point_positions[_corner_idx(qx, qy)],
-				point_positions[_corner_idx(qx + 1, qy)],
-				point_positions[_corner_idx(qx + 1, qy + 1)],
-				point_positions[_corner_idx(qx, qy + 1)],
-			]
-			vertex_count += _add_deformed_mesh_surface(st, mesh, quad, rotation_steps, up_dir)
-
-	if vertex_count == 0:
-		return ArrayMesh.new()
-	return st.commit() as ArrayMesh
-
-func _update_deformed_floor_visual() -> void:
-	_ensure_deformed_floor_node()
-	if _deformed_floor_mi == null:
-		return
-
-	if not show_deformed_floor_mesh or not _has_render_tiles():
-		_deformed_floor_mi.visible = false
-		_deformed_floor_mi.mesh = null
-		_set_base_floor_visible(true)
-		return
-
-	if layout_mode == LayoutMode.LEGACY_CORNERS and _corners.is_empty():
-		_deformed_floor_mi.visible = false
-		_deformed_floor_mi.mesh = null
-		_set_base_floor_visible(true)
-		return
-	if layout_mode == LayoutMode.DUAL_FROM_CELLS and _cells.is_empty():
-		_deformed_floor_mi.visible = false
-		_deformed_floor_mi.mesh = null
-		_set_base_floor_visible(true)
-		return
-
-	_deformed_floor_mi.mesh = _build_deformed_floor_mesh()
-	if _deformed_floor_material == null:
-		_deformed_floor_material = StandardMaterial3D.new()
-		_deformed_floor_material.albedo_color = Color(0.85, 0.85, 0.85, 1.0)
-		_deformed_floor_material.roughness = 1.0
-	_deformed_floor_mi.material_override = _deformed_floor_material
-	_deformed_floor_mi.visible = true
-	_set_base_floor_visible(false)
+	for q in _ir_quads:
+		if q.size() < 4:
+			continue
+		var p0: Vector2 = _ir_points2[q[0]]
+		var p1: Vector2 = _ir_points2[q[1]]
+		var p2: Vector2 = _ir_points2[q[2]]
+		var p3: Vector2 = _ir_points2[q[3]]
+		var v0: Vector3 = gx * Vector3(p0.x, 0.0, p0.y)
+		var v1: Vector3 = gx * Vector3(p1.x, 0.0, p1.y)
+		var v2: Vector3 = gx * Vector3(p2.x, 0.0, p2.y)
+		var v3: Vector3 = gx * Vector3(p3.x, 0.0, p3.y)
+		st.set_normal(up)
+		st.add_vertex(v0)
+		st.add_vertex(v1)
+		st.add_vertex(v2)
+		st.add_vertex(v0)
+		st.add_vertex(v2)
+		st.add_vertex(v3)
+	var mesh: ArrayMesh = st.commit() as ArrayMesh
+	irregular_floor_mi.mesh = mesh
+	irregular_floor_mi.visible = mesh != null
 
 func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
 	var corners: Array[Vector3] = [
@@ -744,10 +645,32 @@ func _disable_legacy_renderers_for_dual_mode() -> void:
 		floor_mmi.multimesh = null
 	if wall_mmi != null and _has_variant_wall_nodes():
 		wall_mmi.multimesh = null
-	if _deformed_floor_mi != null:
-		_deformed_floor_mi.visible = false
+
+func _disable_voxel_renderers_for_irregular_mode() -> void:
+	if floor_mmi != null:
+		floor_mmi.multimesh = null
+	if wall_mmi != null:
+		wall_mmi.multimesh = null
+	_clear_floor_variant_multimeshes()
+	_clear_wall_variant_multimeshes()
+	_clear_piece_multimeshes()
+	if dual_points_mmi != null:
+		dual_points_mmi.multimesh = null
+	if dual_bits_filled_mmi != null:
+		dual_bits_filled_mmi.multimesh = null
+	if dual_bits_empty_mmi != null:
+		dual_bits_empty_mmi.multimesh = null
 
 func generate() -> void:
+	if grid_geometry == GridGeometry.IRREGULAR_PATCH:
+		_disable_voxel_renderers_for_irregular_mode()
+		_generate_irregular_patch_grid()
+		_update_irregular_wire_debug()
+		_build_irregular_floor_mesh_debug()
+		return
+
+	_clear_irregular_visuals()
+
 	if grid_w <= 0 or grid_h <= 0:
 		push_error("ArenaAutoGen: grid_w and grid_h must be > 0")
 		return
@@ -785,7 +708,6 @@ func generate() -> void:
 
 		_update_bounds_mesh_from_grid()
 		_update_wire_grid_debug()
-		_update_deformed_floor_visual()
 		return
 
 	_corners = PackedByteArray()
@@ -818,7 +740,6 @@ func generate() -> void:
 
 	_update_bounds_mesh_from_grid()
 	_update_wire_grid_debug()
-	_update_deformed_floor_visual()
 
 func _fill_corners_random() -> void:
 	for y in range(_points_h()):

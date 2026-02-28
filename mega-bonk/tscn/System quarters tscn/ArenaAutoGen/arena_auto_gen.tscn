@@ -168,7 +168,8 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 
 [node name="Arena" type="Node3D" parent="."]
 
-[node name="DeformedFloor" type="MeshInstance3D" parent="Arena"]
+[node name="IrregularFloor" type="MeshInstance3D" parent="Arena"]
+visible = false
 
 [node name="FloorTiles" type="MultiMeshInstance3D" parent="Arena"]
 multimesh = SubResource("3")
