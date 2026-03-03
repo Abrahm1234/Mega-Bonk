@@ -860,6 +860,105 @@ func _pick_irregular_bit_source_mesh() -> Mesh:
 		return mesh_edge
 	return null
 
+func _pick_from_array_mesh(arr: Array[Mesh]) -> Mesh:
+	if arr.is_empty():
+		return null
+	var idx: int = _rng.randi_range(0, arr.size() - 1)
+	return arr[idx]
+
+func _make_irregular_fallback_box_mesh(is_wall: bool) -> Mesh:
+	var box := BoxMesh.new()
+	var y: float = wall_height if is_wall else floor_thickness
+	box.size = Vector3(max(cell_size * 0.5, 0.05), max(y, 0.05), max(cell_size * 0.5, 0.05))
+	return box
+
+func _pick_irregular_mesh(is_wall: bool, kind: int) -> Mesh:
+	# Prefer 6-state variant arrays first, regardless of canonical toggle.
+	if is_wall:
+		match kind:
+			IrTileKind.FULL:
+				var m_full: Mesh = _pick_from_array_mesh(wall_mesh_full_variants)
+				if m_full != null:
+					return m_full
+			IrTileKind.EDGE:
+				var m_edge: Mesh = _pick_from_array_mesh(wall_mesh_edge_variants)
+				if m_edge != null:
+					return m_edge
+			IrTileKind.CORNER:
+				var m_corner: Mesh = _pick_from_array_mesh(wall_mesh_corner_variants)
+				if m_corner != null:
+					return m_corner
+			IrTileKind.INVERSE_CORNER:
+				var m_inv: Mesh = _pick_from_array_mesh(wall_mesh_inverse_corner_variants)
+				if m_inv != null:
+					return m_inv
+			IrTileKind.CHECKER:
+				var m_checker: Mesh = _pick_from_array_mesh(wall_mesh_checker_variants)
+				if m_checker != null:
+					return m_checker
+		if use_canonical_single_meshes:
+			match kind:
+				IrTileKind.FULL:
+					if mesh_full != null:
+						return mesh_full
+				IrTileKind.EDGE:
+					if mesh_edge != null:
+						return mesh_edge
+				IrTileKind.CORNER:
+					if mesh_corner != null:
+						return mesh_corner
+				IrTileKind.INVERSE_CORNER:
+					if mesh_inverse_corner != null:
+						return mesh_inverse_corner
+				IrTileKind.CHECKER:
+					if mesh_checker != null:
+						return mesh_checker
+		return _make_irregular_fallback_box_mesh(true)
+
+	match kind:
+		IrTileKind.FULL:
+			var f_full: Mesh = _pick_from_array_mesh(floor_mesh_full_variants)
+			if f_full != null:
+				return f_full
+		IrTileKind.EDGE:
+			var f_edge: Mesh = _pick_from_array_mesh(floor_mesh_edge_variants)
+			if f_edge != null:
+				return f_edge
+		IrTileKind.CORNER:
+			var f_corner: Mesh = _pick_from_array_mesh(floor_mesh_corner_variants)
+			if f_corner != null:
+				return f_corner
+		IrTileKind.INVERSE_CORNER:
+			var f_inv: Mesh = _pick_from_array_mesh(floor_mesh_inverse_corner_variants)
+			if f_inv != null:
+				return f_inv
+		IrTileKind.CHECKER:
+			var f_checker: Mesh = _pick_from_array_mesh(floor_mesh_checker_variants)
+			if f_checker != null:
+				return f_checker
+
+	if use_canonical_single_meshes:
+		match kind:
+			IrTileKind.FULL:
+				if mesh_full != null:
+					return mesh_full
+			IrTileKind.EDGE:
+				if mesh_edge != null:
+					return mesh_edge
+			IrTileKind.CORNER:
+				if mesh_corner != null:
+					return mesh_corner
+			IrTileKind.INVERSE_CORNER:
+				if mesh_inverse_corner != null:
+					return mesh_inverse_corner
+			IrTileKind.CHECKER:
+				if mesh_checker != null:
+					return mesh_checker
+
+	if irregular_bit_source_mesh != null:
+		return irregular_bit_source_mesh
+	return _make_irregular_fallback_box_mesh(false)
+
 func _count_filled(bits: PackedByteArray) -> int:
 	var c: int = 0
 	for b in bits:
@@ -955,25 +1054,7 @@ func _classify_mask(mask: int) -> Dictionary:
 	return {"kind": IrTileKind.FULL, "rot": 0}
 
 func _pick_mesh_for_kind(kind: int) -> Mesh:
-	# Uses your 6-state floor variants arrays.
-	# Falls back to the irregular_bit_source_mesh / mesh_full / etc if arrays are empty.
-	match kind:
-		IrTileKind.FULL:
-			if floor_mesh_full_variants.size() > 0:
-				return floor_mesh_full_variants[_rng.randi_range(0, floor_mesh_full_variants.size() - 1)]
-		IrTileKind.EDGE:
-			if floor_mesh_edge_variants.size() > 0:
-				return floor_mesh_edge_variants[_rng.randi_range(0, floor_mesh_edge_variants.size() - 1)]
-		IrTileKind.CORNER:
-			if floor_mesh_corner_variants.size() > 0:
-				return floor_mesh_corner_variants[_rng.randi_range(0, floor_mesh_corner_variants.size() - 1)]
-		IrTileKind.INVERSE_CORNER:
-			if floor_mesh_inverse_corner_variants.size() > 0:
-				return floor_mesh_inverse_corner_variants[_rng.randi_range(0, floor_mesh_inverse_corner_variants.size() - 1)]
-		IrTileKind.CHECKER:
-			if floor_mesh_checker_variants.size() > 0:
-				return floor_mesh_checker_variants[_rng.randi_range(0, floor_mesh_checker_variants.size() - 1)]
-	return _pick_irregular_bit_source_mesh()
+	return _pick_irregular_mesh(false, kind)
 
 func _rotated_quad(quad_world: Array[Vector3], rot: int) -> Array[Vector3]:
 	rot = rot % 4
@@ -986,29 +1067,7 @@ func _rotated_quad(quad_world: Array[Vector3], rot: int) -> Array[Vector3]:
 
 
 func _pick_wall_mesh_for_kind(kind: int) -> Mesh:
-	match kind:
-		IrTileKind.FULL:
-			if wall_mesh_full_variants.size() > 0:
-				return wall_mesh_full_variants[_rng.randi_range(0, wall_mesh_full_variants.size() - 1)]
-			return mesh_full
-		IrTileKind.EDGE:
-			if wall_mesh_edge_variants.size() > 0:
-				return wall_mesh_edge_variants[_rng.randi_range(0, wall_mesh_edge_variants.size() - 1)]
-			return mesh_edge
-		IrTileKind.CORNER:
-			if wall_mesh_corner_variants.size() > 0:
-				return wall_mesh_corner_variants[_rng.randi_range(0, wall_mesh_corner_variants.size() - 1)]
-			return mesh_corner
-		IrTileKind.INVERSE_CORNER:
-			if wall_mesh_inverse_corner_variants.size() > 0:
-				return wall_mesh_inverse_corner_variants[_rng.randi_range(0, wall_mesh_inverse_corner_variants.size() - 1)]
-			return mesh_inverse_corner
-		IrTileKind.CHECKER:
-			if wall_mesh_checker_variants.size() > 0:
-				return wall_mesh_checker_variants[_rng.randi_range(0, wall_mesh_checker_variants.size() - 1)]
-			return mesh_checker
-		_:
-			return _pick_irregular_bit_source_mesh()
+	return _pick_irregular_mesh(true, kind)
 
 
 func _append_deformed_variant(
@@ -1210,26 +1269,38 @@ func _update_irregular_deformed_bits() -> void:
 		_ir_face_bits = _build_ir_face_bits(_ir_face_neighbors)
 
 	# Floor tiles
+	var floor_filled_mesh: ArrayMesh = _build_irregular_deformed_floor_mesh(true)
 	if irregular_bits_filled_mi != null:
-		irregular_bits_filled_mi.mesh = _build_irregular_deformed_floor_mesh(true)
+		irregular_bits_filled_mi.mesh = floor_filled_mesh
 		irregular_bits_filled_mi.material_override = null
 
+	var floor_empty_mesh: ArrayMesh = null
+	if irregular_build_empty_bits_mesh:
+		floor_empty_mesh = _build_irregular_deformed_floor_mesh(false)
 	if irregular_build_empty_bits_mesh and irregular_bits_empty_mi != null:
-		irregular_bits_empty_mi.mesh = _build_irregular_deformed_floor_mesh(false)
+		irregular_bits_empty_mi.mesh = floor_empty_mesh
 		irregular_bits_empty_mi.material_override = null
 
 	# Wall tiles
+	var wall_mesh: ArrayMesh = null
+	if make_walls:
+		wall_mesh = _build_irregular_deformed_walls_mesh()
 	if make_walls and irregular_walls_mi != null:
-		irregular_walls_mi.mesh = _build_irregular_deformed_walls_mesh()
+		irregular_walls_mi.mesh = wall_mesh
 		irregular_walls_mi.material_override = null
 
 	if debug_irregular_bits_print:
 		var filled_count: int = _count_filled(_ir_face_bits)
+		var floor_surfaces: int = 0 if floor_filled_mesh == null else floor_filled_mesh.get_surface_count()
+		var wall_surfaces: int = 0 if wall_mesh == null else wall_mesh.get_surface_count()
 		print("IR(deformed): faces=", _ir_face_bits.size(),
 			" filled=", filled_count,
 			" floor(full/edge/corner/inv/checker)=", floor_mesh_full_variants.size(), "/", floor_mesh_edge_variants.size(), "/", floor_mesh_corner_variants.size(), "/", floor_mesh_inverse_corner_variants.size(), "/", floor_mesh_checker_variants.size(),
 			" wall(full/edge/corner/inv/checker)=", wall_mesh_full_variants.size(), "/", wall_mesh_edge_variants.size(), "/", wall_mesh_corner_variants.size(), "/", wall_mesh_inverse_corner_variants.size(), "/", wall_mesh_checker_variants.size(),
 			" src=", str(_pick_irregular_bit_source_mesh()),
+			" floor_surfaces=", floor_surfaces,
+			" wall_surfaces=", wall_surfaces,
+			" show_irregular_meshes=", show_irregular_meshes,
 			" inset=", irregular_bit_inset, " base_rot=", irregular_variant_base_rot)
 
 
