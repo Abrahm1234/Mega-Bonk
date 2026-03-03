@@ -104,9 +104,11 @@ enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2 }
 @export_group("Ring + Spokes", "irregular_ring_")
 # All radii are fractions of the patch radius (0..1).
 @export_range(0.0, 1.0, 0.01) var irregular_ring_hub_frac: float = 0.12
-@export_range(0.0, 1.0, 0.01) var irregular_ring_outer_frac: float = 0.85
 @export_range(1, 8, 1) var irregular_ring_count: int = 2
-@export_range(0.0, 1.0, 0.01) var irregular_ring_width_frac: float = 0.06
+@export_range(0.0, 1.0, 0.01) var irregular_ring_inner_frac: float = 0.28
+@export_range(0.0, 1.0, 0.01) var irregular_ring_spacing_frac: float = 0.22
+@export_range(0.0, 1.0, 0.01) var irregular_ring_width_frac: float = 0.07
+@export_range(0.0, 1.0, 0.01) var irregular_ring_outer_frac: float = 0.85 # legacy fallback clamp
 
 @export_range(1, 16, 1) var irregular_spoke_count: int = 6
 @export_range(1.0, 90.0, 0.5) var irregular_spoke_width_deg: float = 18.0
@@ -472,6 +474,18 @@ func _ir_face_is_outer(face_i: int) -> bool:
 			return true
 	return false
 
+func _ir_compute_bounds(face_centers: Array[Vector2]) -> Dictionary:
+	if face_centers.is_empty():
+		return {"center": Vector2.ZERO, "radius": 1.0}
+	var c: Vector2 = Vector2.ZERO
+	for p in face_centers:
+		c += p
+	c /= float(face_centers.size())
+	var max_r: float = 0.001
+	for p in face_centers:
+		max_r = max(max_r, c.distance_to(p))
+	return {"center": c, "radius": max_r}
+
 
 func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	# Build a 0/1 mask per irregular face.
@@ -481,15 +495,9 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 
 	# Cache bounds from face centers (used by ring/spokes + fallback).
 	if _ir_face_centers2.size() == face_count and face_count > 0:
-		var minp: Vector2 = _ir_face_centers2[0]
-		var maxp: Vector2 = _ir_face_centers2[0]
-		for p in _ir_face_centers2:
-			minp.x = min(minp.x, p.x)
-			minp.y = min(minp.y, p.y)
-			maxp.x = max(maxp.x, p.x)
-			maxp.y = max(maxp.y, p.y)
-		_ir_bounds_center2 = (minp + maxp) * 0.5
-		_ir_bounds_radius = max(0.001, _ir_bounds_center2.distance_to(maxp))
+		var bounds: Dictionary = _ir_compute_bounds(_ir_face_centers2)
+		_ir_bounds_center2 = bounds.get("center", Vector2.ZERO)
+		_ir_bounds_radius = max(0.001, float(bounds.get("radius", 1.0)))
 
 	_ir_face_border_dist = _compute_ir_face_border_distances(neighbors)
 
@@ -499,7 +507,10 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 			_fill_ir_bits_ring_spokes(bits)
 		IRLayoutMode.RANDOM:
 			var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-			rng.seed = int(seed_value) if use_random_seed else int(randi())
+			if use_random_seed:
+				rng.randomize()
+			else:
+				rng.seed = seed_value
 			for i in range(face_count):
 				bits[i] = 1 if rng.randf() < fill_percent else 0
 		_:
@@ -511,22 +522,13 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 			if _ir_face_border_dist[i] < border:
 				bits[i] = 0
 
-	# --- 3) Smooth (majority rule) ---
+	# --- 3) Smooth (neighbor ratio CA) ---
 	if smoothing_steps > 0:
 		var do_smooth: bool = true
 		if irregular_layout_mode == IRLayoutMode.RING_SPOKES and not irregular_ring_apply_smoothing:
 			do_smooth = false
 		if do_smooth:
-			for _s in range(smoothing_steps):
-				var next_bits: PackedByteArray = bits.duplicate() as PackedByteArray
-				for i in range(face_count):
-					var nbs: PackedInt32Array = neighbors[i]
-					var filled_n: int = 0
-					for j in nbs:
-						filled_n += int(bits[j] != 0)
-					var thresh: int = int(ceil(nbs.size() * 0.5))
-					next_bits[i] = 1 if filled_n >= thresh else 0
-				bits = next_bits
+			bits = _ir_smooth(bits, neighbors, smoothing_steps, 0.55, 0.35)
 
 	# --- 4) Ensure connected ---
 	var do_conn: bool = ensure_connected
@@ -551,7 +553,10 @@ func _fill_ir_bits_noise(bits: PackedByteArray) -> void:
 	var noise: FastNoiseLite = FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	noise.frequency = irregular_noise_frequency
-	noise.seed = int(seed_value) if use_random_seed else int(randi())
+	if use_random_seed:
+		noise.seed = int(_rng.randi())
+	else:
+		noise.seed = seed_value
 
 	for i in range(face_count):
 		var p: Vector2 = _ir_face_centers2[i]
@@ -571,49 +576,75 @@ func _fill_ir_bits_ring_spokes(bits: PackedByteArray, force_default: bool = fals
 	var center: Vector2 = _ir_bounds_center2
 	var max_r: float = max(0.001, _ir_bounds_radius)
 
-	var hub: float = (0.12 if force_default else irregular_ring_hub_frac)
-	var outer: float = (0.85 if force_default else irregular_ring_outer_frac)
-	hub = clamp(hub, 0.0, 1.0)
-	outer = clamp(outer, hub, 1.0)
+	var hub_frac: float = (0.12 if force_default else clamp(irregular_ring_hub_frac, 0.0, 1.0))
+	var ring_count: int = (2 if force_default else int(max(0, irregular_ring_count)))
+	var ring_inner_frac: float = (0.28 if force_default else clamp(irregular_ring_inner_frac, 0.0, 1.0))
+	var ring_spacing_frac: float = (0.22 if force_default else clamp(irregular_ring_spacing_frac, 0.0, 1.0))
+	var ring_width_frac: float = (0.07 if force_default else clamp(irregular_ring_width_frac, 0.0001, 1.0))
+	# Keep old outer_frac as a compatibility clamp so rings do not exceed prior behavior.
+	var ring_outer_limit: float = (0.85 if force_default else clamp(irregular_ring_outer_frac, 0.0, 1.0))
 
-	var ring_count: int = (1 if force_default else int(max(1, irregular_ring_count)))
-	var ring_hw: float = ((0.06 if force_default else irregular_ring_width_frac) * 0.5)
+	var spoke_count: int = (6 if force_default else int(max(0, irregular_spoke_count)))
+	var spoke_half: float = deg_to_rad(18.0 if force_default else irregular_spoke_width_deg) * 0.5
+	var spoke_rot: float = deg_to_rad(0.0 if force_default else irregular_spoke_rotation_deg)
+	var spoke_inner_frac: float = (0.10 if force_default else clamp(irregular_spoke_inner_frac, 0.0, 1.0))
+	var spoke_outer_frac: float = (0.95 if force_default else clamp(irregular_spoke_outer_frac, 0.0, 1.0))
+	var spoke_step: float = TAU / float(max(1, spoke_count))
 
-	var spoke_count: int = (6 if force_default else int(max(1, irregular_spoke_count)))
-	var spoke_step: float = TAU / float(spoke_count)
-	var spoke_half: float = deg_to_rad((18.0 if force_default else irregular_spoke_width_deg)) * 0.5
-	var spoke_rot: float = deg_to_rad((0.0 if force_default else irregular_spoke_rotation_deg))
-	var spoke_r0: float = (0.10 if force_default else clamp(irregular_spoke_inner_frac, 0.0, 1.0))
-	var spoke_r1: float = (0.95 if force_default else clamp(irregular_spoke_outer_frac, 0.0, 1.0))
+	var hub_r: float = max_r * hub_frac
+	var ring_w: float = max_r * ring_width_frac
+	var spoke_min_r: float = max_r * max(hub_frac, spoke_inner_frac)
+	var spoke_max_r: float = max_r * spoke_outer_frac
 
 	for i in range(face_count):
 		var p: Vector2 = _ir_face_centers2[i]
-		var r: float = center.distance_to(p) / max_r
-		var a: float = atan2(p.y - center.y, p.x - center.x)
-		if a < 0.0:
-			a += TAU
+		var r: float = center.distance_to(p)
+		var a: float = fposmod(atan2(p.y - center.y, p.x - center.x), TAU)
+		var fill: bool = false
 
-		var in_hub: bool = (r <= hub)
+		if r <= hub_r:
+			fill = true
 
-		var on_ring: bool = false
-		for k in range(1, ring_count + 1):
-			var t: float = float(k) / float(ring_count + 1)
-			var rk: float = lerp(hub, outer, t)
-			if abs(r - rk) <= ring_hw:
-				on_ring = true
-				break
-
-		var on_spoke: bool = false
-		if r >= spoke_r0 and r <= spoke_r1:
-			for s in range(spoke_count):
-				var sa: float = fposmod(spoke_rot + float(s) * spoke_step, TAU)
-				var d: float = abs(a - sa)
-				d = min(d, TAU - d)
-				if d <= spoke_half:
-					on_spoke = true
+		if not fill and ring_count > 0:
+			for k in range(ring_count):
+				var ring_center_r: float = max_r * (ring_inner_frac + float(k) * ring_spacing_frac)
+				ring_center_r = min(ring_center_r, max_r * ring_outer_limit)
+				if abs(r - ring_center_r) <= ring_w * 0.5:
+					fill = true
 					break
 
-		bits[i] = 1 if (in_hub or on_ring or on_spoke) else 0
+		if not fill and spoke_count > 0 and r >= spoke_min_r and r <= spoke_max_r:
+			for k in range(spoke_count):
+				var a0: float = spoke_rot + float(k) * spoke_step
+				var da: float = abs(wrapf(a - a0, -PI, PI))
+				if da <= spoke_half:
+					fill = true
+					break
+
+		bits[i] = 1 if fill else 0
+
+func _ir_smooth(bits: PackedByteArray, neighbors: Array[PackedInt32Array], steps: int, birth_ratio: float = 0.55, death_ratio: float = 0.35) -> PackedByteArray:
+	var out: PackedByteArray = bits.duplicate() as PackedByteArray
+	var n: int = out.size()
+	for _s in range(max(0, steps)):
+		var next: PackedByteArray = out.duplicate() as PackedByteArray
+		for i in range(n):
+			var neigh: PackedInt32Array = neighbors[i]
+			var deg: int = neigh.size()
+			if deg == 0:
+				continue
+			var filled_n: int = 0
+			for j in neigh:
+				filled_n += int(out[int(j)] != 0)
+			var ratio: float = float(filled_n) / float(deg)
+			if out[i] != 0:
+				if ratio < death_ratio:
+					next[i] = 0
+			else:
+				if ratio > birth_ratio:
+					next[i] = 1
+		out = next
+	return out
 
 func _compute_ir_face_border_distances(neighbors: Array[PackedInt32Array]) -> PackedInt32Array:
 	var face_count: int = neighbors.size()
