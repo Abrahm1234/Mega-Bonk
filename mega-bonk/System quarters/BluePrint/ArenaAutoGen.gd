@@ -66,6 +66,7 @@ enum GridGeometry { RECT_VOXEL, IRREGULAR_PATCH }
 @export var irregular_variant_base_rot: int = 0 # 0..3, rotates all irregular variants
 @export var irregular_build_empty_bits_mesh: bool = false
 @export var debug_irregular_bits_print: bool = false
+@export var show_irregular_meshes: bool = true
 @export var main_grid_color: Color = Color(1.0, 0.55, 0.0, 1.0)
 @export var dual_grid_color: Color = Color(0.2, 0.3, 1.0, 1.0)
 @export var dual_point_color: Color = Color(0.2, 0.3, 1.0, 1.0)
@@ -743,6 +744,13 @@ func _pick_irregular_bit_source_mesh() -> Mesh:
 		return mesh_edge
 	return null
 
+func _count_filled(bits: PackedByteArray) -> int:
+	var c: int = 0
+	for b in bits:
+		if b != 0:
+			c += 1
+	return c
+
 func _build_face_edge_neighbors(quads: Array[PackedInt32Array]) -> Array[PackedInt32Array]:
 	# neighbors[face][edge] = neighbor face index or -1
 	var neighbors: Array[PackedInt32Array] = []
@@ -1072,16 +1080,13 @@ func _update_irregular_deformed_bits() -> void:
 	_ensure_irregular_bits_nodes()
 	_ensure_irregular_walls_node()
 
-	var visible: bool = show_dual_bit_boxes
+	var show_debug_bits: bool = show_dual_bit_boxes
 	if irregular_bits_filled_mi != null:
-		irregular_bits_filled_mi.visible = visible
+		irregular_bits_filled_mi.visible = show_irregular_meshes
 	if irregular_bits_empty_mi != null:
-		irregular_bits_empty_mi.visible = visible and irregular_build_empty_bits_mesh
+		irregular_bits_empty_mi.visible = show_debug_bits and irregular_build_empty_bits_mesh
 	if irregular_walls_mi != null:
-		irregular_walls_mi.visible = visible and make_walls
-
-	if not visible:
-		return
+		irregular_walls_mi.visible = show_irregular_meshes and make_walls
 
 	# Rebuild bits if missing
 	if _ir_face_bits.size() != _ir_face_centers2.size():
@@ -1103,13 +1108,12 @@ func _update_irregular_deformed_bits() -> void:
 		irregular_walls_mi.material_override = null
 
 	if debug_irregular_bits_print:
-		var filled_count: int = 0
-		for b in _ir_face_bits:
-			filled_count += int(b != 0)
+		var filled_count: int = _count_filled(_ir_face_bits)
 		print("IR(deformed): faces=", _ir_face_bits.size(),
 			" filled=", filled_count,
 			" floor(full/edge/corner/inv/checker)=", floor_mesh_full_variants.size(), "/", floor_mesh_edge_variants.size(), "/", floor_mesh_corner_variants.size(), "/", floor_mesh_inverse_corner_variants.size(), "/", floor_mesh_checker_variants.size(),
 			" wall(full/edge/corner/inv/checker)=", wall_mesh_full_variants.size(), "/", wall_mesh_edge_variants.size(), "/", wall_mesh_corner_variants.size(), "/", wall_mesh_inverse_corner_variants.size(), "/", wall_mesh_checker_variants.size(),
+			" src=", str(_pick_irregular_bit_source_mesh()),
 			" inset=", irregular_bit_inset, " base_rot=", irregular_variant_base_rot)
 
 
