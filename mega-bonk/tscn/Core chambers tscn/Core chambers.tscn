@@ -1,7 +1,6 @@
 [gd_scene load_steps=33 format=4 uid="uid://dctij0wf1tt5f"]
 
 [ext_resource type="Script" uid="uid://du8pbjc7ls2ye" path="res://Core chambers/GD Script/DungeonGenerator.gd" id="1_bpuvj"]
-[ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_obxys"]
 [ext_resource type="Shader" uid="uid://p04f7ehhxj2r" path="res://System quarters/Buried chambers/arena_terrain Shaders/Gun effect aura shader.tres" id="4_qyrph"]
 [ext_resource type="Texture2D" uid="uid://bg3deawccdrs6" path="res://Mesh/Ships/Bastion Wedge (Military AI core ship)/Shine_texture_pbr_20250901.png" id="4_xu8jb"]
 [ext_resource type="Texture2D" uid="uid://bw66lvdr2qjop" path="res://Mesh/Ships/Helioprism Crown-Dais/Ship/Helioprism Crown-Dais_texture_pbr_20250901.png" id="5_6x8xm"]
@@ -12,6 +11,7 @@
 [ext_resource type="ArrayMesh" uid="uid://br8aisfioheve" path="res://Mesh/Ships/Helioprism Crown-Dais/Domes/DomeBottom.res" id="9_nuiq7"]
 [ext_resource type="ArrayMesh" uid="uid://bx0df23dr5hys" path="res://Mesh/Ships/Helioprism Crown-Dais/Domes/DomeTop.res" id="9_xu8jb"]
 [ext_resource type="ArrayMesh" uid="uid://yjcwx8eifltk" path="res://Mesh/Ships/Helioprism Crown-Dais/Domes/MiniDome.res" id="11_ki1w8"]
+[ext_resource type="PackedScene" uid="uid://g52tmymnuu7d" path="res://tscn/System quarters tscn/ArenaAutoGen/arena_auto_gen.tscn" id="13_xu8jb"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_gktml"]
 render_priority = 0
@@ -148,19 +148,16 @@ blend_shape_mode = 0
 shadow_mesh = SubResource("ArrayMesh_68fqu")
 
 [node name="Core chambers" type="Node3D"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -6.578125, 0)
+transform = Transform3D(1, 0, 0, 0, 0.998682, -0.051325027, 0, 0.051325027, 0.998682, 0, -6.578125, 0)
 script = ExtResource("1_bpuvj")
 width = 60
 cell_size = 110.0
-num_points = 20
 additional_pathway_chance = 0.5
 debug_mode = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.9062783, 0.4226815, 0, -0.4226815, 0.9062783, 0, 290.2451, 232.61783)
 far = 900000.0
-script = ExtResource("2_obxys")
-move_speed = 2066.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="Camera3D"]
 
@@ -171,7 +168,7 @@ visibility_range_end = 999999.0
 mesh = ExtResource("6_gl75i")
 
 [node name="Helioprism Crown-Dais" type="MeshInstance3D" parent="."]
-transform = Transform3D(15000, 0, 0, 0, 15000, 0, 0, 0, 15000, 4348.731, 0, -21795.707)
+transform = Transform3D(15000, 0, 0, 0, 14981.174, 751.3117, 0, -751.3117, 14981.174, 4348.731, 0.00011920929, -21795.71)
 material_overlay = SubResource("ShaderMaterial_jhfpd")
 mesh = ExtResource("5_vieuv")
 
@@ -206,3 +203,5 @@ transform = Transform3D(14000, 0, 0, 0, 14000, 0, 0, 0, 14000, -3156.5015, 1730.
 material_override = SubResource("StandardMaterial3D_gp4ie")
 material_overlay = SubResource("ShaderMaterial_ld8s3")
 mesh = SubResource("ArrayMesh_lxn6v")
+
+[node name="ArenaAutoGen" parent="." instance=ExtResource("13_xu8jb")]

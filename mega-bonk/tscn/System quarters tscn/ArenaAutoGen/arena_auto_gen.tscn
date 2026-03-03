@@ -1,105 +1,12 @@
-[gd_scene load_steps=34 format=3 uid="uid://g52tmymnuu7d"]
+[gd_scene load_steps=11 format=3 uid="uid://g52tmymnuu7d"]
 
 [ext_resource type="Script" uid="uid://bknmb6i4wlja5" path="res://System quarters/BluePrint/ArenaAutoGen.gd" id="1"]
+[ext_resource type="ArrayMesh" uid="uid://btqibybqd4gm8" path="res://Mesh/Tiles/Debug_Cubes/Mesh/Full 1111 Wall1.res" id="2_jring"]
 [ext_resource type="Script" uid="uid://cnk4bgx2p7ln6" path="res://Movement logic/free_camera/free_camera.gd" id="2_shxrv"]
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_waorf"]
-albedo_color = Color(1, 0, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_shxrv"]
-material = SubResource("StandardMaterial3D_waorf")
-size = Vector3(2, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8s8gk"]
-albedo_color = Color(0.8833332, 0, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_xq2nr"]
-material = SubResource("StandardMaterial3D_8s8gk")
-size = Vector3(2, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_qi63m"]
-albedo_color = Color(0.2833333, 0, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_dgfft"]
-material = SubResource("StandardMaterial3D_qi63m")
-size = Vector3(2, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jring"]
-albedo_color = Color(0, 0.23333359, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_1lv5y"]
-material = SubResource("StandardMaterial3D_jring")
-size = Vector3(2, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_eknpi"]
-albedo_color = Color(0, 0.3333335, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_5sqxa"]
-material = SubResource("StandardMaterial3D_eknpi")
-size = Vector3(2, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_xn8hv"]
-albedo_color = Color(0, 0.6666665, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_gpxhs"]
-material = SubResource("StandardMaterial3D_xn8hv")
-size = Vector3(6, 0.25, 6)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ldd65"]
-albedo_color = Color(0, 0.85000014, 1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_w0x21"]
-material = SubResource("StandardMaterial3D_ldd65")
-size = Vector3(4, 0.25, 6)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_lmcei"]
-albedo_color = Color(0, 1, 0.75, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_6j17f"]
-material = SubResource("StandardMaterial3D_lmcei")
-size = Vector3(4, 0.25, 4)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_t306q"]
-albedo_color = Color(0, 1, 0.1833334, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_yd0dd"]
-material = SubResource("StandardMaterial3D_t306q")
-size = Vector3(10, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_apu30"]
-albedo_color = Color(0.31666672, 1, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_byuhk"]
-material = SubResource("StandardMaterial3D_apu30")
-size = Vector3(8, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_en14n"]
-albedo_color = Color(0.8166667, 1, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_l2m21"]
-material = SubResource("StandardMaterial3D_en14n")
-size = Vector3(6, 0.25, 2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ibwl0"]
-albedo_color = Color(1, 0.7, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_ion1r"]
-material = SubResource("StandardMaterial3D_ibwl0")
-size = Vector3(6, 0.25, 4)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rmpwl"]
-albedo_color = Color(1, 0.40000004, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_cui61"]
-material = SubResource("StandardMaterial3D_rmpwl")
-size = Vector3(4, 0.25, 4)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rsbvf"]
-albedo_color = Color(0.3, 0, 0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_6l3bh"]
-material = SubResource("StandardMaterial3D_rsbvf")
-size = Vector3(4, 0.25, 4)
+[ext_resource type="ArrayMesh" uid="uid://bitx78paggu8" path="res://Mesh/Tiles/Debug_Cubes/Mesh/Adjacent 0011 Wall.res" id="3_1lv5y"]
+[ext_resource type="ArrayMesh" uid="uid://wi21a121kkre" path="res://Mesh/Tiles/Debug_Cubes/Mesh/Three 0111 Wall1.res" id="6_eknpi"]
+[ext_resource type="ArrayMesh" uid="uid://daapntjwrpwsb" path="res://Mesh/Tiles/Debug_Cubes/Mesh/Diagonal 0101.res" id="6_xn8hv"]
+[ext_resource type="ArrayMesh" uid="uid://b00x672j103rs" path="res://Mesh/Tiles/Debug_Cubes/Mesh/Single 0001.res" id="7_gpxhs"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rpn3m"]
 albedo_color = Color(1, 0, 0, 1)
@@ -114,32 +21,34 @@ mesh = SubResource("1")
 
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
-origin_anchor_path = NodePath("GridAnchor")
-bind_to_wire_grid = true
-wire_grid_origin_path = NodePath("GridAnchor")
-wall_height = 5.0
-wall_thickness = 0.75
+layout_mode = 1
+grid_geometry = 1
+debug_irregular_bits_print = true
+dissolve_chance = 1.0
+subdivide_quads = false
+relax_iters = 100
+relax_alpha = 1.0
+irregular_ring_count = 7
+use_random_seed = false
+seed_value = 12338
 use_pattern_stamping = false
 use_canonical_single_meshes = true
-mesh_full = SubResource("BoxMesh_shxrv")
-mesh_edge = SubResource("BoxMesh_xq2nr")
-mesh_corner = SubResource("BoxMesh_dgfft")
-mesh_inverse_corner = SubResource("BoxMesh_1lv5y")
-mesh_checker = SubResource("BoxMesh_5sqxa")
-mesh_full_variants = Array[Mesh]([SubResource("BoxMesh_shxrv")])
-mesh_edge_variants = Array[Mesh]([SubResource("BoxMesh_xq2nr")])
-mesh_corner_variants = Array[Mesh]([SubResource("BoxMesh_dgfft")])
-mesh_inverse_corner_variants = Array[Mesh]([SubResource("BoxMesh_1lv5y")])
-mesh_checker_variants = Array[Mesh]([SubResource("BoxMesh_5sqxa")])
-piece_mesh_3x3_full = SubResource("BoxMesh_gpxhs")
-piece_mesh_2x3_full = SubResource("BoxMesh_w0x21")
-piece_mesh_2x2_full = SubResource("BoxMesh_6j17f")
-piece_mesh_5x1_edge = SubResource("BoxMesh_yd0dd")
-piece_mesh_4x1_edge = SubResource("BoxMesh_byuhk")
-piece_mesh_3x1_edge = SubResource("BoxMesh_l2m21")
-piece_mesh_3x2_bay = SubResource("BoxMesh_ion1r")
-piece_mesh_2x2_bay = SubResource("BoxMesh_cui61")
-piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
+canonical_mesh_tile_xz_size = 4.0
+mesh_full_variants = Array[Mesh]([ExtResource("2_jring")])
+mesh_edge_variants = Array[Mesh]([ExtResource("3_1lv5y")])
+mesh_corner_variants = Array[Mesh]([ExtResource("7_gpxhs")])
+mesh_inverse_corner_variants = Array[Mesh]([ExtResource("6_eknpi")])
+mesh_checker_variants = Array[Mesh]([ExtResource("6_xn8hv")])
+floor_mesh_full_variants = Array[Mesh]([ExtResource("2_jring")])
+floor_mesh_inverse_corner_variants = Array[Mesh]([ExtResource("6_eknpi")])
+floor_mesh_edge_variants = Array[Mesh]([ExtResource("3_1lv5y")])
+floor_mesh_checker_variants = Array[Mesh]([ExtResource("6_xn8hv")])
+floor_mesh_corner_variants = Array[Mesh]([ExtResource("7_gpxhs")])
+wall_mesh_full_variants = Array[Mesh]([ExtResource("2_jring")])
+wall_mesh_inverse_corner_variants = Array[Mesh]([ExtResource("6_eknpi")])
+wall_mesh_edge_variants = Array[Mesh]([ExtResource("3_1lv5y")])
+wall_mesh_checker_variants = Array[Mesh]([ExtResource("6_xn8hv")])
+wall_mesh_corner_variants = Array[Mesh]([ExtResource("7_gpxhs")])
 
 [node name="GridAnchor" type="Node3D" parent="."]
 
@@ -155,12 +64,28 @@ piece_mesh_corner_cluster = SubResource("BoxMesh_6l3bh")
 
 [node name="Arena" type="Node3D" parent="."]
 
-[node name="DeformedFloor" type="MeshInstance3D" parent="Arena"]
+[node name="IrregularFloor" type="MeshInstance3D" parent="Arena"]
+visible = false
 
 [node name="FloorTiles" type="MultiMeshInstance3D" parent="Arena"]
 multimesh = SubResource("3")
 
 [node name="WallTiles" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_full" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_inverse_corner" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_edge" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_checker" type="MultiMeshInstance3D" parent="Arena"]
+multimesh = SubResource("3")
+
+[node name="Wall_corner" type="MultiMeshInstance3D" parent="Arena"]
 multimesh = SubResource("3")
 
 [node name="Floor_full" type="MultiMeshInstance3D" parent="Arena"]
@@ -206,6 +131,7 @@ multimesh = SubResource("3")
 multimesh = SubResource("3")
 
 [node name="Camera3D" type="Camera3D" parent="."]
+far = 400000.0
 script = ExtResource("2_shxrv")
 move_speed = 8.0
 
