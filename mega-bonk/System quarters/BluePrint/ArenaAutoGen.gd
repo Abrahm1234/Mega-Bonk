@@ -1111,6 +1111,19 @@ func _ir_face_edge_mask(face_i: int) -> int:
 			mask |= (1 << ei)
 	return mask
 
+func _ir_face_floor_neighbor_mask(face_i: int) -> int:
+	# 4-bit mask: bit e=1 when the adjacent face across edge e is filled floor.
+	if face_i < 0 or face_i >= _ir_face_edge_neighbors.size():
+		return 0
+	var mask: int = 0
+	for e in range(4):
+		var nb: int = int(_ir_face_edge_neighbors[face_i][e])
+		if nb == -1:
+			continue
+		if nb >= 0 and nb < _ir_face_bits.size() and _ir_face_bits[nb] != 0:
+			mask |= (1 << e)
+	return mask
+
 func _first_set_bit(mask: int) -> int:
 	for i in range(4):
 		if ((mask >> i) & 1) != 0:
@@ -1287,24 +1300,15 @@ func _build_irregular_deformed_walls_mesh() -> ArrayMesh:
 		up = Vector3.UP
 
 	var base_y: float = irregular_bit_y_offset
-
 	var sts: Dictionary = {}
 
 	for fi in range(_ir_quads.size()):
-		# Walls live on EMPTY faces touching filled region (outer boundary shell).
+		# Walls are emitted into EMPTY faces that border at least one filled floor face.
 		if _ir_face_bits[fi] != 0:
 			continue
-		var mask: int = _ir_face_edge_mask(fi)
-		if mask == 0:
-			continue # interior tile, no walls
 
-		var info: Dictionary = _classify_mask(mask)
-		var kind: int = int(info.get("kind", IrTileKind.EDGE))
-		var rot: int = int(info.get("rot", 0))
-		rot = (rot + (irregular_variant_base_rot % 4)) % 4
-
-		var src: Mesh = _pick_wall_mesh_for_kind(kind)
-		if src == null:
+		var floor_nb_mask: int = _ir_face_floor_neighbor_mask(fi)
+		if floor_nb_mask == 0:
 			continue
 
 		var q: PackedInt32Array = _ir_quads[fi]
@@ -1332,9 +1336,17 @@ func _build_irregular_deformed_walls_mesh() -> ArrayMesh:
 			p3 = c.lerp(p3, s)
 
 		var quad_world: Array[Vector3] = [p0, p1, p2, p3]
-		var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+		var src: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
+		if src == null:
+			continue
 
-		_append_deformed_variant(sts, src, quad_rot, up, wall_height)
+		# Emit one EDGE segment for each edge that touches floor.
+		for e in range(4):
+			if (floor_nb_mask & (1 << e)) == 0:
+				continue
+			var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
+			var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+			_append_deformed_variant(sts, src, quad_rot, up, wall_height)
 
 	return _commit_multisurface(sts)
 
