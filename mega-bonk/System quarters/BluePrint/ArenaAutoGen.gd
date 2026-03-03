@@ -98,7 +98,7 @@ enum GridGeometry { RECT_VOXEL, IRREGULAR_PATCH }
 
 @export_category("Irregular Layout")
 # How the irregular patch is filled before smoothing/ensure_connected.
-enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2 }
+enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2, HEX_FLOWER = 3 }
 @export var irregular_layout_mode: IRLayoutMode = IRLayoutMode.NOISE
 
 @export_group("Ring + Spokes", "irregular_ring_")
@@ -124,6 +124,17 @@ enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2 }
 @export_range(0.0, 0.25, 0.01) var irregular_allow_ring_margin_frac: float = 0.02
 @export_range(0.0, 45.0, 0.5) var irregular_allow_spoke_margin_deg: float = 10.0
 @export_range(0.0, 0.25, 0.01) var irregular_allow_room_margin_frac: float = 0.03
+
+@export_group("Hex Flower", "irregular_flower_")
+@export var irregular_flower_enable_ring: bool = true
+@export var irregular_flower_enable_chords: bool = false
+@export_range(0.0, 1.0, 0.01) var irregular_flower_chord_chance: float = 0.35
+@export_range(0.1, 8.0, 0.1) var irregular_flower_corridor_width_cells: float = 2.0
+@export_range(0.0, 1.0, 0.01) var irregular_flower_hub_room_radius_frac: float = 0.20
+@export_range(0.0, 1.0, 0.01) var irregular_flower_petal_room_radius_frac: float = 0.22
+@export_range(0.0, 1.0, 0.01) var irregular_flower_petal_center_radius_frac: float = 0.55
+@export var irregular_flower_apply_smoothing: bool = false
+@export var irregular_flower_ensure_connected: bool = true
 
 
 @export var make_walls: bool = true
@@ -510,6 +521,8 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	match irregular_layout_mode:
 		IRLayoutMode.RING_SPOKES:
 			_fill_ir_bits_ring_spokes(bits)
+		IRLayoutMode.HEX_FLOWER:
+			_fill_ir_bits_hex_flower(bits)
 		IRLayoutMode.RANDOM:
 			var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 			if use_random_seed:
@@ -531,6 +544,8 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	if smoothing_steps > 0:
 		var do_smooth: bool = true
 		if irregular_layout_mode == IRLayoutMode.RING_SPOKES and not irregular_ring_apply_smoothing:
+			do_smooth = false
+		if irregular_layout_mode == IRLayoutMode.HEX_FLOWER and not irregular_flower_apply_smoothing:
 			do_smooth = false
 		if do_smooth:
 			bits = _ir_smooth(bits, neighbors, smoothing_steps, 0.55, 0.35)
@@ -571,6 +586,8 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	var do_conn: bool = ensure_connected
 	if irregular_layout_mode == IRLayoutMode.RING_SPOKES and not irregular_ring_ensure_connected:
 		do_conn = false
+	if irregular_layout_mode == IRLayoutMode.HEX_FLOWER and not irregular_flower_ensure_connected:
+		do_conn = false
 	if do_conn:
 		bits = _keep_largest_connected_faces(bits, neighbors)
 
@@ -579,8 +596,10 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	for v in bits:
 		filled_init += int(v != 0)
 	if filled_init == 0 and face_count > 0:
-		# Default: hub + 1 ring + spokes
-		_fill_ir_bits_ring_spokes(bits, true)
+		if irregular_layout_mode == IRLayoutMode.HEX_FLOWER:
+			_fill_ir_bits_hex_flower(bits, true)
+		else:
+			_fill_ir_bits_ring_spokes(bits, true)
 
 	return bits
 
@@ -660,6 +679,80 @@ func _is_open_ring_spokes(
 				return true
 
 	return false
+
+func _distance_to_segment_2d(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab: Vector2 = b - a
+	var denom: float = ab.length_squared()
+	if denom <= 1e-8:
+		return p.distance_to(a)
+	var t: float = clamp((p - a).dot(ab) / denom, 0.0, 1.0)
+	var q: Vector2 = a + ab * t
+	return p.distance_to(q)
+
+func _fill_ir_bits_hex_flower(bits: PackedByteArray, force_default: bool = false) -> void:
+	var face_count: int = bits.size()
+	for i in range(face_count):
+		bits[i] = 0
+	if face_count == 0:
+		return
+
+	var center: Vector2 = _ir_bounds_center2
+	var max_r: float = max(0.001, _ir_bounds_radius)
+	var hub_room_frac: float = (0.20 if force_default else clamp(irregular_flower_hub_room_radius_frac, 0.0, 1.0))
+	var petal_room_frac: float = (0.22 if force_default else clamp(irregular_flower_petal_room_radius_frac, 0.0, 1.0))
+	var petal_center_frac: float = (0.55 if force_default else clamp(irregular_flower_petal_center_radius_frac, 0.0, 1.0))
+	var corridor_cells: float = (2.0 if force_default else max(0.1, irregular_flower_corridor_width_cells))
+	var corridor_half_w: float = max(0.02, corridor_cells * cell_size * 0.25)
+	var use_ring: bool = true if force_default else irregular_flower_enable_ring
+	var use_chords: bool = false if force_default else irregular_flower_enable_chords
+	var chord_chance: float = 0.35 if force_default else clamp(irregular_flower_chord_chance, 0.0, 1.0)
+
+	var petal_centers: Array[Vector2] = []
+	var chord_enabled: PackedByteArray = PackedByteArray([0, 0, 0, 0, 0, 0])
+	for i in range(6):
+		var a: float = TAU * (float(i) / 6.0)
+		petal_centers.append(center + Vector2(cos(a), sin(a)) * (petal_center_frac * max_r))
+		if use_chords:
+			chord_enabled[i] = 1 if _rng.randf() <= chord_chance else 0
+
+	for fi in range(face_count):
+		var p: Vector2 = _ir_face_centers2[fi]
+		var open: bool = false
+
+		if p.distance_to(center) <= hub_room_frac * max_r:
+			open = true
+
+		if not open:
+			for pc in petal_centers:
+				if p.distance_to(pc) <= petal_room_frac * max_r:
+					open = true
+					break
+
+		if not open:
+			for pc in petal_centers:
+				if _distance_to_segment_2d(p, center, pc) <= corridor_half_w:
+					open = true
+					break
+
+		if not open and use_ring:
+			for i in range(6):
+				var a: Vector2 = petal_centers[i]
+				var b: Vector2 = petal_centers[(i + 1) % 6]
+				if _distance_to_segment_2d(p, a, b) <= corridor_half_w:
+					open = true
+					break
+
+		if not open and use_chords:
+			for i in range(6):
+				if chord_enabled[i] == 0:
+					continue
+				var a: Vector2 = petal_centers[i]
+				var b: Vector2 = petal_centers[(i + 2) % 6]
+				if _distance_to_segment_2d(p, a, b) <= corridor_half_w:
+					open = true
+					break
+
+		bits[fi] = 1 if open else 0
 
 func _fill_ir_bits_ring_spokes(bits: PackedByteArray, force_default: bool = false) -> void:
 	var face_count: int = bits.size()
@@ -1198,7 +1291,8 @@ func _build_irregular_deformed_walls_mesh() -> ArrayMesh:
 	var sts: Dictionary = {}
 
 	for fi in range(_ir_quads.size()):
-		if _ir_face_bits[fi] == 0:
+		# Walls live on EMPTY faces touching filled region (outer boundary shell).
+		if _ir_face_bits[fi] != 0:
 			continue
 		var mask: int = _ir_face_edge_mask(fi)
 		if mask == 0:
