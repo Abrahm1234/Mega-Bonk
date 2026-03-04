@@ -136,6 +136,16 @@ enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2, HEX_FLOWER = 3 }
 @export var irregular_flower_apply_smoothing: bool = false
 @export var irregular_flower_ensure_connected: bool = true
 
+@export_group("Irregular: No-Gap Tiling", "irregular_floor_")
+@export var irregular_floor_underlay_full: bool = true
+@export var irregular_floor_use_6state_overlay: bool = false
+@export_range(0.0, 1.0, 0.01) var irregular_floor_overlay_height: float = 0.05
+@export_range(0.0, 0.1, 0.001) var irregular_floor_overlay_y_epsilon: float = 0.01
+
+@export_group("Irregular: Boundary Walls", "irregular_wall_")
+@export var irregular_walls_boundary_edges_only: bool = true
+@export_range(0.0, 2.0, 0.01) var irregular_wall_seam_overlap: float = 0.5
+
 
 @export var make_walls: bool = true
 @export var wall_height: float = 3.0
@@ -1250,10 +1260,6 @@ func _build_irregular_deformed_floor_mesh(want_filled: bool) -> ArrayMesh:
 		var rot: int = int(info.get("rot", 0))
 		rot = (rot + (irregular_variant_base_rot % 4)) % 4
 
-		var src: Mesh = _pick_mesh_for_kind(kind)
-		if src == null:
-			continue
-
 		var q: PackedInt32Array = _ir_quads[fi]
 		if q.size() < 4:
 			continue
@@ -1279,9 +1285,31 @@ func _build_irregular_deformed_floor_mesh(want_filled: bool) -> ArrayMesh:
 			p3 = c.lerp(p3, s)
 
 		var quad_world: Array[Vector3] = [p0, p1, p2, p3]
-		var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
 
-		_append_deformed_variant(sts, src, quad_rot, up, floor_thickness)
+		# 1) Watertight underlay (FULL tile) on every filled face.
+		if irregular_floor_underlay_full:
+			var src_base: Mesh = _pick_mesh_for_kind(IrTileKind.FULL)
+			if src_base != null:
+				_append_deformed_variant(sts, src_base, quad_world, up, floor_thickness)
+
+		# 2) Optional 6-state visual overlay, slightly raised.
+		if irregular_floor_use_6state_overlay:
+			var src_overlay: Mesh = _pick_mesh_for_kind(kind)
+			if src_overlay != null:
+				var raised: Array[Vector3] = [
+					quad_world[0] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[1] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[2] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[3] + up * irregular_floor_overlay_y_epsilon,
+				]
+				var quad_rot_overlay: Array[Vector3] = _rotated_quad(raised, rot)
+				_append_deformed_variant(sts, src_overlay, quad_rot_overlay, up, max(irregular_floor_overlay_height, 0.001))
+		elif not irregular_floor_underlay_full:
+			# Legacy behavior if underlay is disabled.
+			var src_legacy: Mesh = _pick_mesh_for_kind(kind)
+			if src_legacy != null:
+				var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+				_append_deformed_variant(sts, src_legacy, quad_rot, up, floor_thickness)
 
 	return _commit_multisurface(sts)
 
@@ -1302,51 +1330,95 @@ func _build_irregular_deformed_walls_mesh() -> ArrayMesh:
 	var base_y: float = irregular_bit_y_offset
 	var sts: Dictionary = {}
 
-	for fi in range(_ir_quads.size()):
-		# Walls are emitted into EMPTY faces that border at least one filled floor face.
-		if _ir_face_bits[fi] != 0:
-			continue
-
-		var floor_nb_mask: int = _ir_face_floor_neighbor_mask(fi)
-		if floor_nb_mask == 0:
-			continue
-
-		var q: PackedInt32Array = _ir_quads[fi]
-		if q.size() < 4:
-			continue
-
-		var p0_2: Vector2 = _ir_points2[int(q[0])]
-		var p1_2: Vector2 = _ir_points2[int(q[1])]
-		var p2_2: Vector2 = _ir_points2[int(q[2])]
-		var p3_2: Vector2 = _ir_points2[int(q[3])]
-
-		var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
-		var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
-		var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
-		var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
-
-		# Optional inset for walls, reuse irregular_bit_inset.
-		var inset: float = clamp(irregular_bit_inset, 0.0, 0.95)
-		if inset > 0.0:
-			var c: Vector3 = (p0 + p1 + p2 + p3) * 0.25
-			var s: float = 1.0 - inset
-			p0 = c.lerp(p0, s)
-			p1 = c.lerp(p1, s)
-			p2 = c.lerp(p2, s)
-			p3 = c.lerp(p3, s)
-
-		var quad_world: Array[Vector3] = [p0, p1, p2, p3]
-		var src: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
-		if src == null:
-			continue
-
-		# Emit one EDGE segment for each edge that touches floor.
-		for e in range(4):
-			if (floor_nb_mask & (1 << e)) == 0:
+	if irregular_walls_boundary_edges_only:
+		for fi in range(_ir_quads.size()):
+			if _ir_face_bits[fi] == 0:
 				continue
-			var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
-			var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
-			_append_deformed_variant(sts, src, quad_rot, up, wall_height)
+
+			var q: PackedInt32Array = _ir_quads[fi]
+			if q.size() < 4:
+				continue
+
+			var p0_2: Vector2 = _ir_points2[int(q[0])]
+			var p1_2: Vector2 = _ir_points2[int(q[1])]
+			var p2_2: Vector2 = _ir_points2[int(q[2])]
+			var p3_2: Vector2 = _ir_points2[int(q[3])]
+
+			var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
+			var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
+			var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
+			var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
+			var quad_world: Array[Vector3] = [p0, p1, p2, p3]
+
+			# Optional inset for walls, reuse irregular_bit_inset.
+			var inset: float = clamp(irregular_bit_inset, 0.0, 0.95)
+			if inset > 0.0:
+				var c: Vector3 = (p0 + p1 + p2 + p3) * 0.25
+				var s: float = 1.0 - inset
+				for i in range(4):
+					quad_world[i] = c.lerp(quad_world[i], s)
+
+			var src_edge: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
+			if src_edge == null:
+				continue
+
+			for e in range(4):
+				var nb: int = int(_ir_face_edge_neighbors[fi][e])
+				if nb >= 0 and nb < _ir_face_bits.size() and _ir_face_bits[nb] != 0:
+					continue
+
+				var a: Vector3 = quad_world[e]
+				var b: Vector3 = quad_world[(e + 1) % 4]
+				var edge_dir: Vector3 = (b - a).normalized()
+				if edge_dir.length() < 0.0001:
+					continue
+				var mid: Vector3 = (a + b) * 0.5
+				var cface: Vector3 = (quad_world[0] + quad_world[1] + quad_world[2] + quad_world[3]) * 0.25
+				var inward: Vector3 = cface - mid
+				inward -= up * inward.dot(up)
+				if inward.length() < 0.0001:
+					continue
+				inward = inward.normalized()
+
+				var overlap: float = max(0.0, irregular_wall_seam_overlap) * max(wall_thickness, 0.01)
+				var thick: float = max(wall_thickness, 0.01)
+				var a_ext: Vector3 = a - edge_dir * overlap
+				var b_ext: Vector3 = b + edge_dir * overlap
+				var off: Vector3 = inward * thick
+
+				var strip_quad: Array[Vector3] = [a_ext, b_ext, b_ext + off, a_ext + off]
+				var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
+				var strip_rot: Array[Vector3] = _rotated_quad(strip_quad, rot)
+				_append_deformed_variant(sts, src_edge, strip_rot, up, wall_height)
+	else:
+		# Legacy fallback: wall tiles on empty boundary faces.
+		for fi in range(_ir_quads.size()):
+			if _ir_face_bits[fi] != 0:
+				continue
+			var floor_nb_mask: int = _ir_face_floor_neighbor_mask(fi)
+			if floor_nb_mask == 0:
+				continue
+			var q: PackedInt32Array = _ir_quads[fi]
+			if q.size() < 4:
+				continue
+			var p0_2: Vector2 = _ir_points2[int(q[0])]
+			var p1_2: Vector2 = _ir_points2[int(q[1])]
+			var p2_2: Vector2 = _ir_points2[int(q[2])]
+			var p3_2: Vector2 = _ir_points2[int(q[3])]
+			var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
+			var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
+			var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
+			var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
+			var quad_world: Array[Vector3] = [p0, p1, p2, p3]
+			var src: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
+			if src == null:
+				continue
+			for e in range(4):
+				if (floor_nb_mask & (1 << e)) == 0:
+					continue
+				var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
+				var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+				_append_deformed_variant(sts, src, quad_rot, up, wall_height)
 
 	return _commit_multisurface(sts)
 
