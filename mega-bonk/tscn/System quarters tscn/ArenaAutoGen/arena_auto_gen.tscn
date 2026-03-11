@@ -22,13 +22,12 @@ mesh = SubResource("1")
 [node name="ArenaAutoGen" type="Node3D"]
 script = ExtResource("1")
 layout_mode = 1
-grid_geometry = 1
 debug_irregular_bits_print = true
 dissolve_chance = 1.0
 subdivide_quads = false
 relax_iters = 100
 relax_alpha = 1.0
-irregular_ring_count = 7
+irregular_spoke_count = 3
 use_random_seed = false
 seed_value = 12338
 use_pattern_stamping = false

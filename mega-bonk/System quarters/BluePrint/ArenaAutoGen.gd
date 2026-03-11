@@ -66,6 +66,7 @@ enum GridGeometry { RECT_VOXEL, IRREGULAR_PATCH }
 @export var irregular_variant_base_rot: int = 0 # 0..3, rotates all irregular variants
 @export var irregular_build_empty_bits_mesh: bool = false
 @export var debug_irregular_bits_print: bool = false
+@export var show_irregular_meshes: bool = true
 @export var main_grid_color: Color = Color(1.0, 0.55, 0.0, 1.0)
 @export var dual_grid_color: Color = Color(0.2, 0.3, 1.0, 1.0)
 @export var dual_point_color: Color = Color(0.2, 0.3, 1.0, 1.0)
@@ -97,25 +98,53 @@ enum GridGeometry { RECT_VOXEL, IRREGULAR_PATCH }
 
 @export_category("Irregular Layout")
 # How the irregular patch is filled before smoothing/ensure_connected.
-enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2 }
+enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2, HEX_FLOWER = 3 }
 @export var irregular_layout_mode: IRLayoutMode = IRLayoutMode.NOISE
 
 @export_group("Ring + Spokes", "irregular_ring_")
 # All radii are fractions of the patch radius (0..1).
 @export_range(0.0, 1.0, 0.01) var irregular_ring_hub_frac: float = 0.12
-@export_range(0.0, 1.0, 0.01) var irregular_ring_outer_frac: float = 0.85
 @export_range(1, 8, 1) var irregular_ring_count: int = 2
-@export_range(0.0, 1.0, 0.01) var irregular_ring_width_frac: float = 0.06
+@export_range(0.0, 1.0, 0.01) var irregular_ring_inner_frac: float = 0.28
+@export_range(0.0, 1.0, 0.01) var irregular_ring_spacing_frac: float = 0.22
+@export_range(0.0, 1.0, 0.01) var irregular_ring_width_frac: float = 0.07
+@export_range(0.0, 1.0, 0.01) var irregular_ring_outer_frac: float = 0.85 # legacy fallback clamp
 
 @export_range(1, 16, 1) var irregular_spoke_count: int = 6
 @export_range(1.0, 90.0, 0.5) var irregular_spoke_width_deg: float = 18.0
 @export_range(-180.0, 180.0, 0.5) var irregular_spoke_rotation_deg: float = 0.0
 @export_range(0.0, 1.0, 0.01) var irregular_spoke_inner_frac: float = 0.10
 @export_range(0.0, 1.0, 0.01) var irregular_spoke_outer_frac: float = 0.95
+@export_range(0.0, 1.0, 0.01) var irregular_outer_room_center_frac: float = 0.82
+@export_range(0.0, 1.0, 0.01) var irregular_outer_room_radius_frac: float = 0.12
 
 @export_group("Post", "irregular_ring_")
 @export var irregular_ring_apply_smoothing: bool = true
 @export var irregular_ring_ensure_connected: bool = true
+@export_range(0.0, 0.25, 0.01) var irregular_allow_ring_margin_frac: float = 0.02
+@export_range(0.0, 45.0, 0.5) var irregular_allow_spoke_margin_deg: float = 10.0
+@export_range(0.0, 0.25, 0.01) var irregular_allow_room_margin_frac: float = 0.03
+
+@export_group("Hex Flower", "irregular_flower_")
+@export var irregular_flower_enable_ring: bool = true
+@export var irregular_flower_enable_chords: bool = false
+@export_range(0.0, 1.0, 0.01) var irregular_flower_chord_chance: float = 0.35
+@export_range(0.1, 8.0, 0.1) var irregular_flower_corridor_width_cells: float = 2.0
+@export_range(0.0, 1.0, 0.01) var irregular_flower_hub_room_radius_frac: float = 0.20
+@export_range(0.0, 1.0, 0.01) var irregular_flower_petal_room_radius_frac: float = 0.22
+@export_range(0.0, 1.0, 0.01) var irregular_flower_petal_center_radius_frac: float = 0.55
+@export var irregular_flower_apply_smoothing: bool = false
+@export var irregular_flower_ensure_connected: bool = true
+
+@export_group("Irregular: No-Gap Tiling", "irregular_floor_")
+@export var irregular_floor_underlay_full: bool = true
+@export var irregular_floor_use_6state_overlay: bool = false
+@export_range(0.0, 1.0, 0.01) var irregular_floor_overlay_height: float = 0.05
+@export_range(0.0, 0.1, 0.001) var irregular_floor_overlay_y_epsilon: float = 0.01
+
+@export_group("Irregular: Boundary Walls", "irregular_wall_")
+@export var irregular_walls_boundary_edges_only: bool = true
+@export_range(0.0, 2.0, 0.01) var irregular_wall_seam_overlap: float = 0.5
 
 
 @export var make_walls: bool = true
@@ -471,6 +500,18 @@ func _ir_face_is_outer(face_i: int) -> bool:
 			return true
 	return false
 
+func _ir_compute_bounds(face_centers: Array[Vector2]) -> Dictionary:
+	if face_centers.is_empty():
+		return {"center": Vector2.ZERO, "radius": 1.0}
+	var c: Vector2 = Vector2.ZERO
+	for p in face_centers:
+		c += p
+	c /= float(face_centers.size())
+	var max_r: float = 0.001
+	for p in face_centers:
+		max_r = max(max_r, c.distance_to(p))
+	return {"center": c, "radius": max_r}
+
 
 func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	# Build a 0/1 mask per irregular face.
@@ -480,15 +521,9 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 
 	# Cache bounds from face centers (used by ring/spokes + fallback).
 	if _ir_face_centers2.size() == face_count and face_count > 0:
-		var minp: Vector2 = _ir_face_centers2[0]
-		var maxp: Vector2 = _ir_face_centers2[0]
-		for p in _ir_face_centers2:
-			minp.x = min(minp.x, p.x)
-			minp.y = min(minp.y, p.y)
-			maxp.x = max(maxp.x, p.x)
-			maxp.y = max(maxp.y, p.y)
-		_ir_bounds_center2 = (minp + maxp) * 0.5
-		_ir_bounds_radius = max(0.001, _ir_bounds_center2.distance_to(maxp))
+		var bounds: Dictionary = _ir_compute_bounds(_ir_face_centers2)
+		_ir_bounds_center2 = bounds.get("center", Vector2.ZERO)
+		_ir_bounds_radius = max(0.001, float(bounds.get("radius", 1.0)))
 
 	_ir_face_border_dist = _compute_ir_face_border_distances(neighbors)
 
@@ -496,9 +531,14 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	match irregular_layout_mode:
 		IRLayoutMode.RING_SPOKES:
 			_fill_ir_bits_ring_spokes(bits)
+		IRLayoutMode.HEX_FLOWER:
+			_fill_ir_bits_hex_flower(bits)
 		IRLayoutMode.RANDOM:
 			var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-			rng.seed = int(seed_value) if use_random_seed else int(randi())
+			if use_random_seed:
+				rng.randomize()
+			else:
+				rng.seed = seed_value
 			for i in range(face_count):
 				bits[i] = 1 if rng.randf() < fill_percent else 0
 		_:
@@ -510,26 +550,53 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 			if _ir_face_border_dist[i] < border:
 				bits[i] = 0
 
-	# --- 3) Smooth (majority rule) ---
+	# --- 3) Smooth (neighbor ratio CA) ---
 	if smoothing_steps > 0:
 		var do_smooth: bool = true
 		if irregular_layout_mode == IRLayoutMode.RING_SPOKES and not irregular_ring_apply_smoothing:
 			do_smooth = false
+		if irregular_layout_mode == IRLayoutMode.HEX_FLOWER and not irregular_flower_apply_smoothing:
+			do_smooth = false
 		if do_smooth:
-			for _s in range(smoothing_steps):
-				var next_bits: PackedByteArray = bits.duplicate() as PackedByteArray
+			bits = _ir_smooth(bits, neighbors, smoothing_steps, 0.55, 0.35)
+			if irregular_layout_mode == IRLayoutMode.RING_SPOKES:
+				var center: Vector2 = _ir_bounds_center2
+				var max_r: float = max(0.001, _ir_bounds_radius)
+				var ring_count: int = int(max(0, irregular_ring_count))
+				var ring_outer_limit: float = clamp(irregular_ring_outer_frac, 0.0, 1.0)
+				var ring_fracs: PackedFloat32Array = PackedFloat32Array()
+				ring_fracs.resize(ring_count)
+				for k in range(ring_count):
+					ring_fracs[k] = min(clamp(irregular_ring_inner_frac, 0.0, 1.0) + float(k) * clamp(irregular_ring_spacing_frac, 0.0, 1.0), ring_outer_limit)
+				var allow_half_width: float = (clamp(irregular_ring_width_frac, 0.0, 1.0) * 0.5) + irregular_allow_ring_margin_frac
+				var allow_spoke_w: float = irregular_spoke_width_deg + irregular_allow_spoke_margin_deg
+				var allow_room_r: float = clamp(irregular_outer_room_radius_frac + irregular_allow_room_margin_frac, 0.0, 1.0)
 				for i in range(face_count):
-					var nbs: PackedInt32Array = neighbors[i]
-					var filled_n: int = 0
-					for j in nbs:
-						filled_n += int(bits[j] != 0)
-					var thresh: int = int(ceil(nbs.size() * 0.5))
-					next_bits[i] = 1 if filled_n >= thresh else 0
-				bits = next_bits
+					if bits[i] == 0:
+						continue
+					var allowed: bool = _is_open_ring_spokes(
+						_ir_face_centers2[i],
+						center,
+						max_r,
+						clamp(irregular_ring_hub_frac, 0.0, 1.0),
+						ring_fracs,
+						allow_half_width,
+						max(1, irregular_spoke_count),
+						allow_spoke_w,
+						irregular_spoke_rotation_deg,
+						max(clamp(irregular_ring_hub_frac, 0.0, 1.0), clamp(irregular_spoke_inner_frac, 0.0, 1.0)),
+						clamp(irregular_spoke_outer_frac, 0.0, 1.0),
+						clamp(irregular_outer_room_center_frac, 0.0, 1.0),
+						allow_room_r
+					)
+					if not allowed:
+						bits[i] = 0
 
 	# --- 4) Ensure connected ---
 	var do_conn: bool = ensure_connected
 	if irregular_layout_mode == IRLayoutMode.RING_SPOKES and not irregular_ring_ensure_connected:
+		do_conn = false
+	if irregular_layout_mode == IRLayoutMode.HEX_FLOWER and not irregular_flower_ensure_connected:
 		do_conn = false
 	if do_conn:
 		bits = _keep_largest_connected_faces(bits, neighbors)
@@ -539,8 +606,10 @@ func _build_ir_face_bits(neighbors: Array[PackedInt32Array]) -> PackedByteArray:
 	for v in bits:
 		filled_init += int(v != 0)
 	if filled_init == 0 and face_count > 0:
-		# Default: hub + 1 ring + spokes
-		_fill_ir_bits_ring_spokes(bits, true)
+		if irregular_layout_mode == IRLayoutMode.HEX_FLOWER:
+			_fill_ir_bits_hex_flower(bits, true)
+		else:
+			_fill_ir_bits_ring_spokes(bits, true)
 
 	return bits
 
@@ -550,7 +619,10 @@ func _fill_ir_bits_noise(bits: PackedByteArray) -> void:
 	var noise: FastNoiseLite = FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	noise.frequency = irregular_noise_frequency
-	noise.seed = int(seed_value) if use_random_seed else int(randi())
+	if use_random_seed:
+		noise.seed = int(_rng.randi())
+	else:
+		noise.seed = seed_value
 
 	for i in range(face_count):
 		var p: Vector2 = _ir_face_centers2[i]
@@ -562,6 +634,136 @@ func _fill_ir_bits_noise(bits: PackedByteArray) -> void:
 		var s01: float = (v * 0.5 + 0.5) + irregular_noise_bias
 		bits[i] = 1 if s01 < fill_percent else 0
 
+static func _angle_delta(a: float, b: float) -> float:
+	var d: float = fposmod(a - b + PI, TAU) - PI
+	return abs(d)
+
+func _is_open_ring_spokes(
+	p: Vector2,
+	center: Vector2,
+	max_r: float,
+	hub_frac: float,
+	ring_fracs: PackedFloat32Array,
+	ring_half_width_frac: float,
+	spoke_count: int,
+	spoke_width_deg: float,
+	spoke_rot_deg: float,
+	spoke_r0_frac: float,
+	spoke_r1_frac: float,
+	outer_room_center_frac: float,
+	outer_room_radius_frac: float
+) -> bool:
+	var v: Vector2 = p - center
+	var r: float = v.length()
+	if max_r <= 0.0001:
+		return false
+	var rn: float = r / max_r
+	var a: float = atan2(v.y, v.x)
+
+	if rn <= clamp(hub_frac, 0.0, 1.0):
+		return true
+
+	var ring_half: float = max(0.0, ring_half_width_frac)
+	for i in range(ring_fracs.size()):
+		var rr: float = clamp(ring_fracs[i], 0.0, 1.0)
+		if abs(rn - rr) <= ring_half:
+			return true
+
+	var spoke_w: float = deg_to_rad(max(0.0, spoke_width_deg)) * 0.5
+	var rot: float = deg_to_rad(spoke_rot_deg)
+	var r0: float = clamp(spoke_r0_frac, 0.0, 1.0)
+	var r1: float = clamp(spoke_r1_frac, 0.0, 1.0)
+	if rn >= r0 and rn <= r1:
+		for s in range(max(1, spoke_count)):
+			var sa: float = rot + TAU * (float(s) / float(spoke_count))
+			if _angle_delta(a, sa) <= spoke_w:
+				return true
+
+	var room_c: float = clamp(outer_room_center_frac, 0.0, 1.0)
+	var room_r: float = clamp(outer_room_radius_frac, 0.0, 1.0)
+	if room_r > 0.0:
+		for s in range(max(1, spoke_count)):
+			var sa2: float = rot + TAU * (float(s) / float(spoke_count))
+			var rc: Vector2 = center + Vector2(cos(sa2), sin(sa2)) * (room_c * max_r)
+			if p.distance_to(rc) <= (room_r * max_r):
+				return true
+
+	return false
+
+func _distance_to_segment_2d(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab: Vector2 = b - a
+	var denom: float = ab.length_squared()
+	if denom <= 1e-8:
+		return p.distance_to(a)
+	var t: float = clamp((p - a).dot(ab) / denom, 0.0, 1.0)
+	var q: Vector2 = a + ab * t
+	return p.distance_to(q)
+
+func _fill_ir_bits_hex_flower(bits: PackedByteArray, force_default: bool = false) -> void:
+	var face_count: int = bits.size()
+	for i in range(face_count):
+		bits[i] = 0
+	if face_count == 0:
+		return
+
+	var center: Vector2 = _ir_bounds_center2
+	var max_r: float = max(0.001, _ir_bounds_radius)
+	var hub_room_frac: float = (0.20 if force_default else clamp(irregular_flower_hub_room_radius_frac, 0.0, 1.0))
+	var petal_room_frac: float = (0.22 if force_default else clamp(irregular_flower_petal_room_radius_frac, 0.0, 1.0))
+	var petal_center_frac: float = (0.55 if force_default else clamp(irregular_flower_petal_center_radius_frac, 0.0, 1.0))
+	var corridor_cells: float = (2.0 if force_default else max(0.1, irregular_flower_corridor_width_cells))
+	var corridor_half_w: float = max(0.02, corridor_cells * cell_size * 0.25)
+	var use_ring: bool = true if force_default else irregular_flower_enable_ring
+	var use_chords: bool = false if force_default else irregular_flower_enable_chords
+	var chord_chance: float = 0.35 if force_default else clamp(irregular_flower_chord_chance, 0.0, 1.0)
+
+	var petal_centers: Array[Vector2] = []
+	var chord_enabled: PackedByteArray = PackedByteArray([0, 0, 0, 0, 0, 0])
+	for i in range(6):
+		var a: float = TAU * (float(i) / 6.0)
+		petal_centers.append(center + Vector2(cos(a), sin(a)) * (petal_center_frac * max_r))
+		if use_chords:
+			chord_enabled[i] = 1 if _rng.randf() <= chord_chance else 0
+
+	for fi in range(face_count):
+		var p: Vector2 = _ir_face_centers2[fi]
+		var open: bool = false
+
+		if p.distance_to(center) <= hub_room_frac * max_r:
+			open = true
+
+		if not open:
+			for pc in petal_centers:
+				if p.distance_to(pc) <= petal_room_frac * max_r:
+					open = true
+					break
+
+		if not open:
+			for pc in petal_centers:
+				if _distance_to_segment_2d(p, center, pc) <= corridor_half_w:
+					open = true
+					break
+
+		if not open and use_ring:
+			for i in range(6):
+				var a: Vector2 = petal_centers[i]
+				var b: Vector2 = petal_centers[(i + 1) % 6]
+				if _distance_to_segment_2d(p, a, b) <= corridor_half_w:
+					open = true
+					break
+
+		if not open and use_chords:
+			for i in range(6):
+				if chord_enabled[i] == 0:
+					continue
+				var a: Vector2 = petal_centers[i]
+				var b: Vector2 = petal_centers[(i + 2) % 6]
+				if _distance_to_segment_2d(p, a, b) <= corridor_half_w:
+					open = true
+					break
+
+		bits[fi] = 1 if open else 0
+
 func _fill_ir_bits_ring_spokes(bits: PackedByteArray, force_default: bool = false) -> void:
 	var face_count: int = bits.size()
 	for i in range(face_count):
@@ -570,49 +772,67 @@ func _fill_ir_bits_ring_spokes(bits: PackedByteArray, force_default: bool = fals
 	var center: Vector2 = _ir_bounds_center2
 	var max_r: float = max(0.001, _ir_bounds_radius)
 
-	var hub: float = (0.12 if force_default else irregular_ring_hub_frac)
-	var outer: float = (0.85 if force_default else irregular_ring_outer_frac)
-	hub = clamp(hub, 0.0, 1.0)
-	outer = clamp(outer, hub, 1.0)
-
-	var ring_count: int = (1 if force_default else int(max(1, irregular_ring_count)))
-	var ring_hw: float = ((0.06 if force_default else irregular_ring_width_frac) * 0.5)
+	var hub_frac: float = (0.12 if force_default else clamp(irregular_ring_hub_frac, 0.0, 1.0))
+	var ring_count: int = (3 if force_default else int(max(0, irregular_ring_count)))
+	var ring_inner_frac: float = (0.22 if force_default else clamp(irregular_ring_inner_frac, 0.0, 1.0))
+	var ring_spacing_frac: float = (0.23 if force_default else clamp(irregular_ring_spacing_frac, 0.0, 1.0))
+	var ring_half_width_frac: float = (0.03 if force_default else clamp(irregular_ring_width_frac, 0.0, 1.0) * 0.5)
+	var ring_outer_limit: float = (0.85 if force_default else clamp(irregular_ring_outer_frac, 0.0, 1.0))
 
 	var spoke_count: int = (6 if force_default else int(max(1, irregular_spoke_count)))
-	var spoke_step: float = TAU / float(spoke_count)
-	var spoke_half: float = deg_to_rad((18.0 if force_default else irregular_spoke_width_deg)) * 0.5
-	var spoke_rot: float = deg_to_rad((0.0 if force_default else irregular_spoke_rotation_deg))
-	var spoke_r0: float = (0.10 if force_default else clamp(irregular_spoke_inner_frac, 0.0, 1.0))
-	var spoke_r1: float = (0.95 if force_default else clamp(irregular_spoke_outer_frac, 0.0, 1.0))
+	var spoke_width_deg: float = (18.0 if force_default else irregular_spoke_width_deg)
+	var spoke_rot_deg: float = (0.0 if force_default else irregular_spoke_rotation_deg)
+	var spoke_r0_frac: float = max(hub_frac, (0.10 if force_default else clamp(irregular_spoke_inner_frac, 0.0, 1.0)))
+	var spoke_r1_frac: float = (0.95 if force_default else clamp(irregular_spoke_outer_frac, 0.0, 1.0))
+
+	var room_center_frac: float = (0.82 if force_default else clamp(irregular_outer_room_center_frac, 0.0, 1.0))
+	var room_radius_frac: float = (0.12 if force_default else clamp(irregular_outer_room_radius_frac, 0.0, 1.0))
+
+	var ring_fracs: PackedFloat32Array = PackedFloat32Array()
+	ring_fracs.resize(ring_count)
+	for k in range(ring_count):
+		var rr: float = ring_inner_frac + float(k) * ring_spacing_frac
+		ring_fracs[k] = min(rr, ring_outer_limit)
 
 	for i in range(face_count):
-		var p: Vector2 = _ir_face_centers2[i]
-		var r: float = center.distance_to(p) / max_r
-		var a: float = atan2(p.y - center.y, p.x - center.x)
-		if a < 0.0:
-			a += TAU
+		bits[i] = 1 if _is_open_ring_spokes(
+			_ir_face_centers2[i],
+			center,
+			max_r,
+			hub_frac,
+			ring_fracs,
+			ring_half_width_frac,
+			spoke_count,
+			spoke_width_deg,
+			spoke_rot_deg,
+			spoke_r0_frac,
+			spoke_r1_frac,
+			room_center_frac,
+			room_radius_frac
+		) else 0
 
-		var in_hub: bool = (r <= hub)
-
-		var on_ring: bool = false
-		for k in range(1, ring_count + 1):
-			var t: float = float(k) / float(ring_count + 1)
-			var rk: float = lerp(hub, outer, t)
-			if abs(r - rk) <= ring_hw:
-				on_ring = true
-				break
-
-		var on_spoke: bool = false
-		if r >= spoke_r0 and r <= spoke_r1:
-			for s in range(spoke_count):
-				var sa: float = fposmod(spoke_rot + float(s) * spoke_step, TAU)
-				var d: float = abs(a - sa)
-				d = min(d, TAU - d)
-				if d <= spoke_half:
-					on_spoke = true
-					break
-
-		bits[i] = 1 if (in_hub or on_ring or on_spoke) else 0
+func _ir_smooth(bits: PackedByteArray, neighbors: Array[PackedInt32Array], steps: int, birth_ratio: float = 0.55, death_ratio: float = 0.35) -> PackedByteArray:
+	var out: PackedByteArray = bits.duplicate() as PackedByteArray
+	var n: int = out.size()
+	for _s in range(max(0, steps)):
+		var next: PackedByteArray = out.duplicate() as PackedByteArray
+		for i in range(n):
+			var neigh: PackedInt32Array = neighbors[i]
+			var deg: int = neigh.size()
+			if deg == 0:
+				continue
+			var filled_n: int = 0
+			for j in neigh:
+				filled_n += int(out[int(j)] != 0)
+			var ratio: float = float(filled_n) / float(deg)
+			if out[i] != 0:
+				if ratio < death_ratio:
+					next[i] = 0
+			else:
+				if ratio > birth_ratio:
+					next[i] = 1
+		out = next
+	return out
 
 func _compute_ir_face_border_distances(neighbors: Array[PackedInt32Array]) -> PackedInt32Array:
 	var face_count: int = neighbors.size()
@@ -743,6 +963,112 @@ func _pick_irregular_bit_source_mesh() -> Mesh:
 		return mesh_edge
 	return null
 
+func _pick_from_array_mesh(arr: Array[Mesh]) -> Mesh:
+	if arr.is_empty():
+		return null
+	var idx: int = _rng.randi_range(0, arr.size() - 1)
+	return arr[idx]
+
+func _make_irregular_fallback_box_mesh(is_wall: bool) -> Mesh:
+	var box := BoxMesh.new()
+	var y: float = wall_height if is_wall else floor_thickness
+	box.size = Vector3(max(cell_size * 0.5, 0.05), max(y, 0.05), max(cell_size * 0.5, 0.05))
+	return box
+
+func _pick_irregular_mesh(is_wall: bool, kind: int) -> Mesh:
+	# Prefer 6-state variant arrays first, regardless of canonical toggle.
+	if is_wall:
+		match kind:
+			IrTileKind.FULL:
+				var m_full: Mesh = _pick_from_array_mesh(wall_mesh_full_variants)
+				if m_full != null:
+					return m_full
+			IrTileKind.EDGE:
+				var m_edge: Mesh = _pick_from_array_mesh(wall_mesh_edge_variants)
+				if m_edge != null:
+					return m_edge
+			IrTileKind.CORNER:
+				var m_corner: Mesh = _pick_from_array_mesh(wall_mesh_corner_variants)
+				if m_corner != null:
+					return m_corner
+			IrTileKind.INVERSE_CORNER:
+				var m_inv: Mesh = _pick_from_array_mesh(wall_mesh_inverse_corner_variants)
+				if m_inv != null:
+					return m_inv
+			IrTileKind.CHECKER:
+				var m_checker: Mesh = _pick_from_array_mesh(wall_mesh_checker_variants)
+				if m_checker != null:
+					return m_checker
+		if use_canonical_single_meshes:
+			match kind:
+				IrTileKind.FULL:
+					if mesh_full != null:
+						return mesh_full
+				IrTileKind.EDGE:
+					if mesh_edge != null:
+						return mesh_edge
+				IrTileKind.CORNER:
+					if mesh_corner != null:
+						return mesh_corner
+				IrTileKind.INVERSE_CORNER:
+					if mesh_inverse_corner != null:
+						return mesh_inverse_corner
+				IrTileKind.CHECKER:
+					if mesh_checker != null:
+						return mesh_checker
+		return _make_irregular_fallback_box_mesh(true)
+
+	match kind:
+		IrTileKind.FULL:
+			var f_full: Mesh = _pick_from_array_mesh(floor_mesh_full_variants)
+			if f_full != null:
+				return f_full
+		IrTileKind.EDGE:
+			var f_edge: Mesh = _pick_from_array_mesh(floor_mesh_edge_variants)
+			if f_edge != null:
+				return f_edge
+		IrTileKind.CORNER:
+			var f_corner: Mesh = _pick_from_array_mesh(floor_mesh_corner_variants)
+			if f_corner != null:
+				return f_corner
+		IrTileKind.INVERSE_CORNER:
+			var f_inv: Mesh = _pick_from_array_mesh(floor_mesh_inverse_corner_variants)
+			if f_inv != null:
+				return f_inv
+		IrTileKind.CHECKER:
+			var f_checker: Mesh = _pick_from_array_mesh(floor_mesh_checker_variants)
+			if f_checker != null:
+				return f_checker
+
+	if use_canonical_single_meshes:
+		match kind:
+			IrTileKind.FULL:
+				if mesh_full != null:
+					return mesh_full
+			IrTileKind.EDGE:
+				if mesh_edge != null:
+					return mesh_edge
+			IrTileKind.CORNER:
+				if mesh_corner != null:
+					return mesh_corner
+			IrTileKind.INVERSE_CORNER:
+				if mesh_inverse_corner != null:
+					return mesh_inverse_corner
+			IrTileKind.CHECKER:
+				if mesh_checker != null:
+					return mesh_checker
+
+	if irregular_bit_source_mesh != null:
+		return irregular_bit_source_mesh
+	return _make_irregular_fallback_box_mesh(false)
+
+func _count_filled(bits: PackedByteArray) -> int:
+	var c: int = 0
+	for b in bits:
+		if b != 0:
+			c += 1
+	return c
+
 func _build_face_edge_neighbors(quads: Array[PackedInt32Array]) -> Array[PackedInt32Array]:
 	# neighbors[face][edge] = neighbor face index or -1
 	var neighbors: Array[PackedInt32Array] = []
@@ -795,6 +1121,19 @@ func _ir_face_edge_mask(face_i: int) -> int:
 			mask |= (1 << ei)
 	return mask
 
+func _ir_face_floor_neighbor_mask(face_i: int) -> int:
+	# 4-bit mask: bit e=1 when the adjacent face across edge e is filled floor.
+	if face_i < 0 or face_i >= _ir_face_edge_neighbors.size():
+		return 0
+	var mask: int = 0
+	for e in range(4):
+		var nb: int = int(_ir_face_edge_neighbors[face_i][e])
+		if nb == -1:
+			continue
+		if nb >= 0 and nb < _ir_face_bits.size() and _ir_face_bits[nb] != 0:
+			mask |= (1 << e)
+	return mask
+
 func _first_set_bit(mask: int) -> int:
 	for i in range(4):
 		if ((mask >> i) & 1) != 0:
@@ -831,25 +1170,7 @@ func _classify_mask(mask: int) -> Dictionary:
 	return {"kind": IrTileKind.FULL, "rot": 0}
 
 func _pick_mesh_for_kind(kind: int) -> Mesh:
-	# Uses your 6-state floor variants arrays.
-	# Falls back to the irregular_bit_source_mesh / mesh_full / etc if arrays are empty.
-	match kind:
-		IrTileKind.FULL:
-			if floor_mesh_full_variants.size() > 0:
-				return floor_mesh_full_variants[_rng.randi_range(0, floor_mesh_full_variants.size() - 1)]
-		IrTileKind.EDGE:
-			if floor_mesh_edge_variants.size() > 0:
-				return floor_mesh_edge_variants[_rng.randi_range(0, floor_mesh_edge_variants.size() - 1)]
-		IrTileKind.CORNER:
-			if floor_mesh_corner_variants.size() > 0:
-				return floor_mesh_corner_variants[_rng.randi_range(0, floor_mesh_corner_variants.size() - 1)]
-		IrTileKind.INVERSE_CORNER:
-			if floor_mesh_inverse_corner_variants.size() > 0:
-				return floor_mesh_inverse_corner_variants[_rng.randi_range(0, floor_mesh_inverse_corner_variants.size() - 1)]
-		IrTileKind.CHECKER:
-			if floor_mesh_checker_variants.size() > 0:
-				return floor_mesh_checker_variants[_rng.randi_range(0, floor_mesh_checker_variants.size() - 1)]
-	return _pick_irregular_bit_source_mesh()
+	return _pick_irregular_mesh(false, kind)
 
 func _rotated_quad(quad_world: Array[Vector3], rot: int) -> Array[Vector3]:
 	rot = rot % 4
@@ -862,29 +1183,7 @@ func _rotated_quad(quad_world: Array[Vector3], rot: int) -> Array[Vector3]:
 
 
 func _pick_wall_mesh_for_kind(kind: int) -> Mesh:
-	match kind:
-		IrTileKind.FULL:
-			if wall_mesh_full_variants.size() > 0:
-				return wall_mesh_full_variants[_rng.randi_range(0, wall_mesh_full_variants.size() - 1)]
-			return mesh_full
-		IrTileKind.EDGE:
-			if wall_mesh_edge_variants.size() > 0:
-				return wall_mesh_edge_variants[_rng.randi_range(0, wall_mesh_edge_variants.size() - 1)]
-			return mesh_edge
-		IrTileKind.CORNER:
-			if wall_mesh_corner_variants.size() > 0:
-				return wall_mesh_corner_variants[_rng.randi_range(0, wall_mesh_corner_variants.size() - 1)]
-			return mesh_corner
-		IrTileKind.INVERSE_CORNER:
-			if wall_mesh_inverse_corner_variants.size() > 0:
-				return wall_mesh_inverse_corner_variants[_rng.randi_range(0, wall_mesh_inverse_corner_variants.size() - 1)]
-			return mesh_inverse_corner
-		IrTileKind.CHECKER:
-			if wall_mesh_checker_variants.size() > 0:
-				return wall_mesh_checker_variants[_rng.randi_range(0, wall_mesh_checker_variants.size() - 1)]
-			return mesh_checker
-		_:
-			return _pick_irregular_bit_source_mesh()
+	return _pick_irregular_mesh(true, kind)
 
 
 func _append_deformed_variant(
@@ -961,10 +1260,6 @@ func _build_irregular_deformed_floor_mesh(want_filled: bool) -> ArrayMesh:
 		var rot: int = int(info.get("rot", 0))
 		rot = (rot + (irregular_variant_base_rot % 4)) % 4
 
-		var src: Mesh = _pick_mesh_for_kind(kind)
-		if src == null:
-			continue
-
 		var q: PackedInt32Array = _ir_quads[fi]
 		if q.size() < 4:
 			continue
@@ -990,9 +1285,31 @@ func _build_irregular_deformed_floor_mesh(want_filled: bool) -> ArrayMesh:
 			p3 = c.lerp(p3, s)
 
 		var quad_world: Array[Vector3] = [p0, p1, p2, p3]
-		var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
 
-		_append_deformed_variant(sts, src, quad_rot, up, floor_thickness)
+		# 1) Watertight underlay (FULL tile) on every filled face.
+		if irregular_floor_underlay_full:
+			var src_base: Mesh = _pick_mesh_for_kind(IrTileKind.FULL)
+			if src_base != null:
+				_append_deformed_variant(sts, src_base, quad_world, up, floor_thickness)
+
+		# 2) Optional 6-state visual overlay, slightly raised.
+		if irregular_floor_use_6state_overlay:
+			var src_overlay: Mesh = _pick_mesh_for_kind(kind)
+			if src_overlay != null:
+				var raised: Array[Vector3] = [
+					quad_world[0] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[1] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[2] + up * irregular_floor_overlay_y_epsilon,
+					quad_world[3] + up * irregular_floor_overlay_y_epsilon,
+				]
+				var quad_rot_overlay: Array[Vector3] = _rotated_quad(raised, rot)
+				_append_deformed_variant(sts, src_overlay, quad_rot_overlay, up, max(irregular_floor_overlay_height, 0.001))
+		elif not irregular_floor_underlay_full:
+			# Legacy behavior if underlay is disabled.
+			var src_legacy: Mesh = _pick_mesh_for_kind(kind)
+			if src_legacy != null:
+				var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+				_append_deformed_variant(sts, src_legacy, quad_rot, up, floor_thickness)
 
 	return _commit_multisurface(sts)
 
@@ -1011,53 +1328,97 @@ func _build_irregular_deformed_walls_mesh() -> ArrayMesh:
 		up = Vector3.UP
 
 	var base_y: float = irregular_bit_y_offset
-
 	var sts: Dictionary = {}
 
-	for fi in range(_ir_quads.size()):
-		if _ir_face_bits[fi] == 0:
-			continue
-		var mask: int = _ir_face_edge_mask(fi)
-		if mask == 0:
-			continue # interior tile, no walls
+	if irregular_walls_boundary_edges_only:
+		for fi in range(_ir_quads.size()):
+			if _ir_face_bits[fi] == 0:
+				continue
 
-		var info: Dictionary = _classify_mask(mask)
-		var kind: int = int(info.get("kind", IrTileKind.EDGE))
-		var rot: int = int(info.get("rot", 0))
-		rot = (rot + (irregular_variant_base_rot % 4)) % 4
+			var q: PackedInt32Array = _ir_quads[fi]
+			if q.size() < 4:
+				continue
 
-		var src: Mesh = _pick_wall_mesh_for_kind(kind)
-		if src == null:
-			continue
+			var p0_2: Vector2 = _ir_points2[int(q[0])]
+			var p1_2: Vector2 = _ir_points2[int(q[1])]
+			var p2_2: Vector2 = _ir_points2[int(q[2])]
+			var p3_2: Vector2 = _ir_points2[int(q[3])]
 
-		var q: PackedInt32Array = _ir_quads[fi]
-		if q.size() < 4:
-			continue
+			var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
+			var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
+			var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
+			var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
+			var quad_world: Array[Vector3] = [p0, p1, p2, p3]
 
-		var p0_2: Vector2 = _ir_points2[int(q[0])]
-		var p1_2: Vector2 = _ir_points2[int(q[1])]
-		var p2_2: Vector2 = _ir_points2[int(q[2])]
-		var p3_2: Vector2 = _ir_points2[int(q[3])]
+			# Optional inset for walls, reuse irregular_bit_inset.
+			var inset: float = clamp(irregular_bit_inset, 0.0, 0.95)
+			if inset > 0.0:
+				var c: Vector3 = (p0 + p1 + p2 + p3) * 0.25
+				var s: float = 1.0 - inset
+				for i in range(4):
+					quad_world[i] = c.lerp(quad_world[i], s)
 
-		var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
-		var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
-		var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
-		var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
+			var src_edge: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
+			if src_edge == null:
+				continue
 
-		# Optional inset for walls, reuse irregular_bit_inset.
-		var inset: float = clamp(irregular_bit_inset, 0.0, 0.95)
-		if inset > 0.0:
-			var c: Vector3 = (p0 + p1 + p2 + p3) * 0.25
-			var s: float = 1.0 - inset
-			p0 = c.lerp(p0, s)
-			p1 = c.lerp(p1, s)
-			p2 = c.lerp(p2, s)
-			p3 = c.lerp(p3, s)
+			for e in range(4):
+				var nb: int = int(_ir_face_edge_neighbors[fi][e])
+				if nb >= 0 and nb < _ir_face_bits.size() and _ir_face_bits[nb] != 0:
+					continue
 
-		var quad_world: Array[Vector3] = [p0, p1, p2, p3]
-		var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+				var a: Vector3 = quad_world[e]
+				var b: Vector3 = quad_world[(e + 1) % 4]
+				var edge_dir: Vector3 = (b - a).normalized()
+				if edge_dir.length() < 0.0001:
+					continue
+				var mid: Vector3 = (a + b) * 0.5
+				var cface: Vector3 = (quad_world[0] + quad_world[1] + quad_world[2] + quad_world[3]) * 0.25
+				var inward: Vector3 = cface - mid
+				inward -= up * inward.dot(up)
+				if inward.length() < 0.0001:
+					continue
+				inward = inward.normalized()
 
-		_append_deformed_variant(sts, src, quad_rot, up, wall_height)
+				var overlap: float = max(0.0, irregular_wall_seam_overlap) * max(wall_thickness, 0.01)
+				var thick: float = max(wall_thickness, 0.01)
+				var a_ext: Vector3 = a - edge_dir * overlap
+				var b_ext: Vector3 = b + edge_dir * overlap
+				var off: Vector3 = inward * thick
+
+				var strip_quad: Array[Vector3] = [a_ext, b_ext, b_ext + off, a_ext + off]
+				var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
+				var strip_rot: Array[Vector3] = _rotated_quad(strip_quad, rot)
+				_append_deformed_variant(sts, src_edge, strip_rot, up, wall_height)
+	else:
+		# Legacy fallback: wall tiles on empty boundary faces.
+		for fi in range(_ir_quads.size()):
+			if _ir_face_bits[fi] != 0:
+				continue
+			var floor_nb_mask: int = _ir_face_floor_neighbor_mask(fi)
+			if floor_nb_mask == 0:
+				continue
+			var q: PackedInt32Array = _ir_quads[fi]
+			if q.size() < 4:
+				continue
+			var p0_2: Vector2 = _ir_points2[int(q[0])]
+			var p1_2: Vector2 = _ir_points2[int(q[1])]
+			var p2_2: Vector2 = _ir_points2[int(q[2])]
+			var p3_2: Vector2 = _ir_points2[int(q[3])]
+			var p0: Vector3 = gx * Vector3(p0_2.x, 0.0, p0_2.y) + up * base_y
+			var p1: Vector3 = gx * Vector3(p1_2.x, 0.0, p1_2.y) + up * base_y
+			var p2: Vector3 = gx * Vector3(p2_2.x, 0.0, p2_2.y) + up * base_y
+			var p3: Vector3 = gx * Vector3(p3_2.x, 0.0, p3_2.y) + up * base_y
+			var quad_world: Array[Vector3] = [p0, p1, p2, p3]
+			var src: Mesh = _pick_wall_mesh_for_kind(IrTileKind.EDGE)
+			if src == null:
+				continue
+			for e in range(4):
+				if (floor_nb_mask & (1 << e)) == 0:
+					continue
+				var rot: int = (e + (irregular_variant_base_rot % 4)) % 4
+				var quad_rot: Array[Vector3] = _rotated_quad(quad_world, rot)
+				_append_deformed_variant(sts, src, quad_rot, up, wall_height)
 
 	return _commit_multisurface(sts)
 
@@ -1072,16 +1433,13 @@ func _update_irregular_deformed_bits() -> void:
 	_ensure_irregular_bits_nodes()
 	_ensure_irregular_walls_node()
 
-	var visible: bool = show_dual_bit_boxes
+	var show_debug_bits: bool = show_dual_bit_boxes
 	if irregular_bits_filled_mi != null:
-		irregular_bits_filled_mi.visible = visible
+		irregular_bits_filled_mi.visible = show_irregular_meshes
 	if irregular_bits_empty_mi != null:
-		irregular_bits_empty_mi.visible = visible and irregular_build_empty_bits_mesh
+		irregular_bits_empty_mi.visible = show_debug_bits and irregular_build_empty_bits_mesh
 	if irregular_walls_mi != null:
-		irregular_walls_mi.visible = visible and make_walls
-
-	if not visible:
-		return
+		irregular_walls_mi.visible = show_irregular_meshes and make_walls
 
 	# Rebuild bits if missing
 	if _ir_face_bits.size() != _ir_face_centers2.size():
@@ -1089,27 +1447,38 @@ func _update_irregular_deformed_bits() -> void:
 		_ir_face_bits = _build_ir_face_bits(_ir_face_neighbors)
 
 	# Floor tiles
+	var floor_filled_mesh: ArrayMesh = _build_irregular_deformed_floor_mesh(true)
 	if irregular_bits_filled_mi != null:
-		irregular_bits_filled_mi.mesh = _build_irregular_deformed_floor_mesh(true)
+		irregular_bits_filled_mi.mesh = floor_filled_mesh
 		irregular_bits_filled_mi.material_override = null
 
+	var floor_empty_mesh: ArrayMesh = null
+	if irregular_build_empty_bits_mesh:
+		floor_empty_mesh = _build_irregular_deformed_floor_mesh(false)
 	if irregular_build_empty_bits_mesh and irregular_bits_empty_mi != null:
-		irregular_bits_empty_mi.mesh = _build_irregular_deformed_floor_mesh(false)
+		irregular_bits_empty_mi.mesh = floor_empty_mesh
 		irregular_bits_empty_mi.material_override = null
 
 	# Wall tiles
+	var wall_mesh: ArrayMesh = null
+	if make_walls:
+		wall_mesh = _build_irregular_deformed_walls_mesh()
 	if make_walls and irregular_walls_mi != null:
-		irregular_walls_mi.mesh = _build_irregular_deformed_walls_mesh()
+		irregular_walls_mi.mesh = wall_mesh
 		irregular_walls_mi.material_override = null
 
 	if debug_irregular_bits_print:
-		var filled_count: int = 0
-		for b in _ir_face_bits:
-			filled_count += int(b != 0)
+		var filled_count: int = _count_filled(_ir_face_bits)
+		var floor_surfaces: int = 0 if floor_filled_mesh == null else floor_filled_mesh.get_surface_count()
+		var wall_surfaces: int = 0 if wall_mesh == null else wall_mesh.get_surface_count()
 		print("IR(deformed): faces=", _ir_face_bits.size(),
 			" filled=", filled_count,
 			" floor(full/edge/corner/inv/checker)=", floor_mesh_full_variants.size(), "/", floor_mesh_edge_variants.size(), "/", floor_mesh_corner_variants.size(), "/", floor_mesh_inverse_corner_variants.size(), "/", floor_mesh_checker_variants.size(),
 			" wall(full/edge/corner/inv/checker)=", wall_mesh_full_variants.size(), "/", wall_mesh_edge_variants.size(), "/", wall_mesh_corner_variants.size(), "/", wall_mesh_inverse_corner_variants.size(), "/", wall_mesh_checker_variants.size(),
+			" src=", str(_pick_irregular_bit_source_mesh()),
+			" floor_surfaces=", floor_surfaces,
+			" wall_surfaces=", wall_surfaces,
+			" show_irregular_meshes=", show_irregular_meshes,
 			" inset=", irregular_bit_inset, " base_rot=", irregular_variant_base_rot)
 
 
