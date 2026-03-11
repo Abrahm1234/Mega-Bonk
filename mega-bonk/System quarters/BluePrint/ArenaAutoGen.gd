@@ -3,6 +3,8 @@ class_name ArenaAutoGen
 
 const IrregularQuadGrid = preload("res://System quarters/BluePrint/IrregularQuadGrid.gd")
 const IrregularMeshDeformer = preload("res://System quarters/BluePrint/IrregularMeshDeformer.gd")
+const CityWFCSolver = preload("res://System quarters/BluePrint/CityWFCSolver.gd")
+const CityPrototypeLibrary = preload("res://System quarters/BluePrint/CityPrototypeLibrary.gd")
 
 const DIRS4: Array[Vector2i] = [
 	Vector2i(1, 0),
@@ -189,6 +191,12 @@ enum IRLayoutMode { NOISE = 0, RING_SPOKES = 1, RANDOM = 2, HEX_FLOWER = 3 }
 @export var wall_mesh_checker_variants: Array[Mesh] = []
 @export var wall_mesh_corner_variants: Array[Mesh] = []
 
+@export_category("City WFC")
+@export var use_city_wfc: bool = true
+@export var city_wfc_max_restarts: int = 40
+@export var city_boundary_roads: bool = true
+@export var city_empty_as_park: bool = true
+
 @export var piece_mesh_3x3_full: Mesh
 @export var piece_mesh_2x3_full: Mesh
 @export var piece_mesh_2x2_full: Mesh
@@ -257,6 +265,10 @@ var _ir_bounds_radius: float = 1.0
 var _ir_face_neighbors: Array[PackedInt32Array] = []  # adjacency per face (dual graph)
 var _ir_face_edge_neighbors: Array[PackedInt32Array] = []  # neighbors per face edge (4 edges)
 var _ir_bits_material: Material = null
+var _city_ids: PackedStringArray = PackedStringArray()
+var _city_base_ids: PackedStringArray = PackedStringArray()
+var _city_rotations: PackedInt32Array = PackedInt32Array()
+
 
 
 
@@ -1888,6 +1900,13 @@ func generate() -> void:
 		_occupied = PackedByteArray()
 		_occupied.resize(_render_w() * _render_h())
 
+		if use_city_wfc:
+			_run_city_wfc()
+		else:
+			_city_ids = PackedStringArray()
+			_city_base_ids = PackedStringArray()
+			_city_rotations = PackedInt32Array()
+
 		_disable_legacy_renderers_for_dual_mode()
 		_build_floor_multimeshes()
 		if make_walls:
@@ -2245,6 +2264,61 @@ func _pattern_anchor_to_world(x: int, y: int, size: Vector2i) -> Vector3:
 	center.y = floor_thickness * 0.5
 	return center
 
+func _run_city_wfc() -> void:
+	var w: int = grid_w
+	var h: int = grid_h
+
+	var prototypes: Array[Dictionary] = CityPrototypeLibrary.make_ground_prototypes()
+	var fixed: Dictionary = {}
+
+	var road_ids: Array[String] = ["road_straight", "road_corner", "road_t", "crossroad"]
+	var buildable_ids: Array[String] = ["lot_fill", "sidewalk"]
+	var open_ids: Array[String] = ["park"]
+
+	var road_indices: Array = CityPrototypeLibrary.find_indices_by_base_ids(prototypes, road_ids)
+	var buildable_indices: Array = CityPrototypeLibrary.find_indices_by_base_ids(prototypes, buildable_ids)
+	var open_indices: Array = CityPrototypeLibrary.find_indices_by_base_ids(prototypes, open_ids)
+
+	for y in range(h):
+		for x in range(w):
+			var pos: Vector2i = Vector2i(x, y)
+			var boundary: bool = x == 0 or y == 0 or x == w - 1 or y == h - 1
+			var land: bool = _cell_get(x, y) != 0
+
+			if not land:
+				if city_empty_as_park:
+					fixed[pos] = open_indices.duplicate()
+				continue
+
+			if city_boundary_roads and boundary:
+				var allowed: Array = []
+				allowed.append_array(road_indices)
+				allowed.append_array(open_indices)
+				fixed[pos] = allowed
+				continue
+
+			var allowed_inner: Array = []
+			allowed_inner.append_array(road_indices)
+			allowed_inner.append_array(buildable_indices)
+			allowed_inner.append_array(open_indices)
+			fixed[pos] = allowed_inner
+
+	var solver: CityWFCSolver = CityWFCSolver.new()
+	var result: Dictionary = solver.solve(w, h, prototypes, fixed, seed_value, city_wfc_max_restarts)
+
+	if not bool(result.get("success", false)):
+		push_warning("City WFC failed after %d restarts" % city_wfc_max_restarts)
+		_city_ids = PackedStringArray()
+		_city_base_ids = PackedStringArray()
+		_city_rotations = PackedInt32Array()
+		return
+
+	_city_ids = result.get("ids", PackedStringArray())
+	_city_base_ids = result.get("base_ids", PackedStringArray())
+	_city_rotations = result.get("rotations", PackedInt32Array())
+
+	print("City WFC solved on attempt: ", int(result.get("attempt", -1)))
+
 func _build_floor_multimeshes() -> void:
 	if _has_variant_floor_nodes():
 		if layout_mode == LayoutMode.DUAL_FROM_CELLS:
@@ -2273,6 +2347,32 @@ func _mask_from_fine_2x2(fine: PackedByteArray, x: int, y: int, fine_w: int, fin
 		mask |= BIT_BL
 	return mask
 
+func _city_idx(x: int, y: int) -> int:
+	return y * grid_w + x
+
+func _city_base_at(x: int, y: int) -> String:
+	if _city_base_ids.is_empty():
+		return ""
+	return _city_base_ids[_city_idx(x, y)]
+
+func _city_rot_at(x: int, y: int) -> int:
+	if _city_rotations.is_empty():
+		return 0
+	return int(_city_rotations[_city_idx(x, y)])
+
+func _city_variant_from_base(base_id: String) -> String:
+	match base_id:
+		"road_straight", "road_corner", "road_t", "crossroad":
+			return "full"
+		"sidewalk":
+			return "edge"
+		"lot_fill":
+			return "corner"
+		"park":
+			return "checker"
+		_:
+			return ""
+
 func _build_floor_dual_variant_multimeshes() -> void:
 	if floor_full_mmi == null or floor_edge_mmi == null or floor_corner_mmi == null or floor_inverse_corner_mmi == null or floor_checker_mmi == null:
 		return
@@ -2290,14 +2390,24 @@ func _build_floor_dual_variant_multimeshes() -> void:
 	var desired: Vector3 = Vector3(cell_size, floor_thickness, cell_size)
 	var counts: Dictionary = {"corner": 0, "edge": 0, "checker": 0, "inverse_corner": 0, "full": 0, "empty": 0}
 
+	var has_city_wfc: bool = use_city_wfc and _city_base_ids.size() == grid_w * grid_h and _city_rotations.size() == grid_w * grid_h
+
 	for y in range(grid_h):
 		for x in range(grid_w):
 			if pieces_replace_base_floor and not _occupied.is_empty() and _occupied[_cell_idx(x, y)] != 0:
 				continue
 
-			var mask: int = _mask_from_fine_2x2(fine_floor, x, y, fine_w, fine_h)
-			var canonical: Dictionary = _canonicalize_mask(mask)
-			var variant_id: String = str(canonical.get("variant_id", ""))
+			var variant_id: String = ""
+			var yaw: float = 0.0
+			if has_city_wfc:
+				variant_id = _city_variant_from_base(_city_base_at(x, y))
+				yaw = -float(_city_rot_at(x, y)) * PI * 0.5
+			else:
+				var mask: int = _mask_from_fine_2x2(fine_floor, x, y, fine_w, fine_h)
+				var canonical: Dictionary = _canonicalize_mask(mask)
+				variant_id = str(canonical.get("variant_id", ""))
+				yaw = -float(canonical.get("rotation_steps", 0)) * PI * 0.5
+
 			if variant_id == "" or variant_id == "empty":
 				counts["empty"] = int(counts.get("empty", 0)) + 1
 				continue
@@ -2311,7 +2421,6 @@ func _build_floor_dual_variant_multimeshes() -> void:
 
 			var pos: Vector3 = _render_tile_to_world_center(x, y)
 			pos.y = floor_thickness * 0.5
-			var yaw: float = -float(canonical.get("rotation_steps", 0)) * PI * 0.5
 			var transforms: Array = (mesh_transform_buckets[variant_id] as Dictionary).get(mesh, []) as Array
 			if use_canonical_single_meshes:
 				transforms.append(_fit_canonical_tile_transform(mesh, desired, yaw, pos))
