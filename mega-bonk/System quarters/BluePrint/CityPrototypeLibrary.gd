@@ -4,6 +4,14 @@ class_name CityPrototypeLibrary
 static func make_ground_prototypes() -> Array[Dictionary]:
 	var base: Array[Dictionary] = [
 		{
+			"id": "void",
+			"base_id": "void",
+			"weight": 1.0,
+			"rotations": 1,
+			"tags": ["void"],
+			"sockets": {"N": "*", "E": "*", "S": "*", "W": "*"},
+		},
+		{
 			"id": "road_straight",
 			"base_id": "road_straight",
 			"weight": 4.0,
